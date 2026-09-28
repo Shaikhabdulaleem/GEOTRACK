@@ -1,0 +1,73 @@
+# JavaScript / Vite
+**/node_modules/
+**/dist/
+**/.vite/
+**/.cache/
+.pnpm-store/
+
+# Environment files: examples remain versioned
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+!**/.env.*.example
+
+# Vercel / Supabase local state
+**/.vercel/
+**/supabase/.temp/
+**/supabase/.branches/
+
+# Android / Gradle generated state
+**/.gradle/
+**/.kotlin/
+**/build/
+**/captures/
+**/.externalNativeBuild/
+**/.cxx/
+**/local.properties
+*.apk
+*.aab
+**/mapping.txt
+
+# Android signing material and private configuration
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+**/keystore.properties
+**/key.properties
+**/upload-keystore.*
+**/google-services.json
+**/service-account*.json
+**/firebase-adminsdk*.json
+
+# IDE and operating-system files
+**/.idea/
+**/.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs, temporary files, and generated inventory snapshots
+*.log
+*-debug.log*
+logs/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.tmp-*
+tree.txt
+android-tree.txt
+
+# Local agent/runtime state
+**/.plugins/
+**/.opencode-skills/
+**/.claude-replay.*
+**/.figma/design-context/

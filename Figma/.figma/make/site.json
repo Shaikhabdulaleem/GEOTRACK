@@ -1,0 +1,10 @@
+{
+  "description": "Streamline workforce management with a geo-fencing attendance system that enhances employee tracking, shift scheduling, and productivity insights for labor teams.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

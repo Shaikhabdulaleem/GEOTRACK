@@ -1,0 +1,12 @@
+# Copy this file to local.properties and point sdk.dir to the local Android SDK.
+# Do not commit local.properties.
+sdk.dir=C\\:\\Android\\Sdk
+
+# Client-visible BuildConfig values. Keep real values only in the ignored
+# local.properties file or environment variables. Never use service_role here.
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+FIREBASE_PROJECT_ID=
+FIREBASE_APPLICATION_ID=
+FIREBASE_API_KEY=
+FIREBASE_SENDER_ID=
