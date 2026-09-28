@@ -3,11 +3,9 @@
 ## Supabase checklist
 
 - [ ] Use separate Supabase projects for development, staging, and production.
-- [ ] Apply `supabase/migrations/20260928000000_rls_hardening.sql` to staging,
-      run the smoke check, then promote the same migration to production.
-- [ ] Confirm the base schema and enum types exist before applying the RLS
-      migration; this repository intentionally does not include the original
-      base-schema migration.
+- [x] Apply the ordered repository-root `supabase/migrations/` history to the
+      production project. The base schema, RLS, Android RPCs, and advisor
+      remediations are recorded remotely.
 - [ ] Enable email/password authentication and configure the production SMTP
       provider, sender, rate limits, and password policy.
 - [ ] Set **Site URL** to the exact `VITE_APP_URL` origin.
@@ -60,6 +58,6 @@
 ## Release gate
 
 Run `pnpm check` before promotion. It performs TypeScript checking, production
-linting, configuration tests, and a production Vite build. A live Supabase smoke
-test remains environment-dependent and must be run after staging credentials and
-the migration are available.
+linting, configuration tests, and a production Vite build. The structural
+database audit has passed; complete the role/account smoke test after the first
+administrator is created through Supabase Auth.

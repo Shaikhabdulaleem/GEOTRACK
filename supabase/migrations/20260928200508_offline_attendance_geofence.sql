@@ -78,9 +78,9 @@ begin
     return coalesce(response, jsonb_build_object('status', 'SYNC_FAILED', 'error', 'No server response'));
   exception when others then
     update public.offline_attendance_events
-       set sync_status = 'SYNC_FAILED', last_error = sqlerrm, updated_at = clock_timestamp()
+       set sync_status = 'SYNC_FAILED', last_error = sqlstate || ': attendance sync failed', updated_at = clock_timestamp()
      where local_event_id = p_local_event_id;
-    return jsonb_build_object('status', 'SYNC_FAILED', 'error', sqlerrm);
+    return jsonb_build_object('status', 'SYNC_FAILED', 'error', 'Attendance sync failed');
   end;
 end;
 $$;

@@ -29,7 +29,7 @@ test('Vercel serves the SPA shell for client-side routes and sets security heade
 })
 
 test('RLS hardening is present and does not grant anonymous access', async () => {
-  const sql = await read('rls_policies.sql')
+  const sql = await read('../supabase/migrations/20260928200408_rls_hardening.sql')
   assert.match(sql, /enable row level security/i)
   assert.match(sql, /revoke all on table/i)
   assert.match(sql, /to authenticated/i)

@@ -22,6 +22,9 @@ create table if not exists public.offline_attendance_events (
 );
 
 alter table public.offline_attendance_events enable row level security;
+revoke all on table public.offline_attendance_events from anon, authenticated;
+grant select on table public.offline_attendance_events to authenticated;
+grant all on table public.offline_attendance_events to service_role;
 drop policy if exists offline_attendance_owner_select on public.offline_attendance_events;
 create policy offline_attendance_owner_select on public.offline_attendance_events
   for select to authenticated using (private.is_employee_owner(employee_id));
@@ -98,9 +101,9 @@ begin
     return coalesce(response, jsonb_build_object('status', 'SYNC_FAILED', 'error', 'No server response'));
   exception when others then
     update public.offline_attendance_events
-       set sync_status = 'SYNC_FAILED', last_error = sqlerrm, updated_at = clock_timestamp()
+       set sync_status = 'SYNC_FAILED', last_error = sqlstate || ': attendance sync failed', updated_at = clock_timestamp()
      where local_event_id = p_local_event_id;
-    return jsonb_build_object('status', 'SYNC_FAILED', 'error', sqlerrm);
+    return jsonb_build_object('status', 'SYNC_FAILED', 'error', 'Attendance sync failed');
   end;
 end;
 $$;

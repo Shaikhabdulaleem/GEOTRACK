@@ -1,0 +1,54 @@
+-- Run this once in the Supabase SQL Editor after creating the Auth user.
+-- Replace all four angle-bracket placeholders before running it.
+-- This creates only the production organization and its first admin membership.
+
+begin;
+
+do $$
+declare
+  v_user_id_text text := '<1b484410-aa14-4305-bd11-5d015f010485>';
+  v_org_name text := '<Shaikhabdulaleem's Org>';
+  v_org_slug text := '<gaixauomldxecknkkejl>';
+  v_timezone text := '<ap-south-1>';
+  v_user_id uuid;
+  v_organization_id uuid;
+begin
+  if v_user_id_text like '<%>'
+     or v_org_name like '<%>'
+     or v_org_slug like '<%>'
+     or v_timezone like '<%>' then
+    raise exception 'Replace every placeholder before running this script';
+  end if;
+
+  v_user_id := v_user_id_text::uuid;
+
+  if not exists (select 1 from auth.users where id = v_user_id) then
+    raise exception 'Auth user % does not exist', v_user_id;
+  end if;
+
+  if v_org_slug !~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' then
+    raise exception 'Organization slug must be lowercase kebab-case';
+  end if;
+
+  if exists (
+    select 1
+      from public.organization_memberships
+     where role_code = 'administrator'
+       and status = 'active'
+  ) then
+    raise exception 'An active administrator already exists; use the app admin workflow for additional users';
+  end if;
+
+  insert into public.organizations (name, slug, timezone, created_by)
+  values (v_org_name, v_org_slug, v_timezone, v_user_id)
+  returning id into v_organization_id;
+
+  insert into public.organization_memberships (
+    organization_id, user_id, role_code, status
+  ) values (
+    v_organization_id, v_user_id, 'administrator', 'active'
+  );
+end;
+$$;
+
+commit;

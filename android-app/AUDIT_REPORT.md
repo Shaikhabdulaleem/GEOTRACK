@@ -11,7 +11,7 @@ Date: 2026-09-28
 
 ## Critical/high findings fixed
 
-1. **Critical — attendance always rejected by geofence validation.** Android sent `p_geofence_id = null` while the server RPC requires an explicit assigned geofence. The client now resolves an active assignment, persists it in the Room outbox, and the new `202609280006_offline_attendance_geofence.sql` RPC overload carries it through offline sync.
+1. **Critical — attendance always rejected by geofence validation.** Android sent `p_geofence_id = null` while the server RPC requires an explicit assigned geofence. The client now resolves an active assignment, persists it in the Room outbox, and the deployed `20260928200508_offline_attendance_geofence.sql` RPC overload carries it through offline sync.
 2. **High — session expiry left protected screens reachable.** Navigation now globally routes expired/unauthorized sessions to Login/Unauthorized and clears cached employee, schedule, attendance, geofence, notification, and pending-outbox data.
 3. **High — background workers silently no-op after process death.** WorkManager workers now restore the persisted Supabase session and organization context before using repositories; offline sync explicitly marks events failed when the session is expired.
 4. **High — geofence monitoring was never registered.** Cached geofence polygons are now converted to conservative circular triggers for Android monitoring; server polygon validation remains authoritative. Sign-out removes registered triggers.
@@ -42,7 +42,7 @@ Date: 2026-09-28
 ## Remaining release blockers / follow-up
 
 - Add instrumented tests with seeded Supabase fixtures for every row in the requested matrix, including permission denial, process death, offline replay, and session expiry.
-- Apply and smoke-test migrations `202609280001`–`202609280006` in a staging Supabase project; verify PostgREST overload resolution for `sync_offline_attendance_event`.
+- Run authenticated Android smoke tests for the deployed repository-root migrations and verify PostgREST overload resolution for `sync_offline_attendance_event` with a real employee fixture.
 - Run a resolved-transitive dependency scanner (OSV/OWASP Dependency-Check) in CI and generate an SBOM. The exact direct-coordinate OSV query was clean, but transitive artifacts were not exhaustively scanned.
 - Add the Android 12+ `dataExtractionRules`, a real application icon, and migrate `kotlinOptions`/Room kapt to modern compiler/KSP APIs.
 - Implement Android manager approval and roster workflows, and complete admin mutations; these are product gaps, not hidden client authorization bypasses.

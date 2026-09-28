@@ -43,28 +43,29 @@ app/build/outputs/apk/debug/app-debug.apk
 If client-safe Supabase values are not configured, the foundation still builds and displays a configuration state at runtime.
 
 The employee Overtime screen reads server-generated `overtime_records` and uses
-the `202609280002_employee_overtime_explanation.sql` RPC for explanation-only
+the repository-root `supabase/migrations/20260928200448_employee_overtime_explanation.sql`
+RPC for explanation-only
 requests. Apply the migration before enabling the explanation action; calculated
 and approved minutes remain database-owned.
 
 Phone usage uses Android `UsageStatsManager` foreground events only after the
 employee explicitly enables Usage Access in Android Settings. If access is not
 enabled, the app records a permission-not-granted state and never invents usage
-data. Apply `202609280003_phone_usage_shift_metrics.sql` before enabling phone
+data. Apply `20260928200454_phone_usage_shift_metrics.sql` before enabling phone
 usage synchronization; it adds shift duration, overlap percentage, sync time,
 and the owner-checked summary RPC.
 
 Manager Home loads only the employees permitted by the signed-in manager's
 direct assignment or `manager_scopes`. Apply
-`202609280004_manager_scope_rls.sql` before enabling manager access; it adds
-server-side RLS policies for employees, attendance, shifts, weekly offs,
+the repository-root migration history before enabling manager access; the
+canonical server-side RLS scopes employees, attendance, shifts, weekly offs,
 overtime, productivity, phone usage, and recipient notifications.
 
 Offline attendance uses the Room outbox and displays `Synced`, `Pending Sync`,
 or `Sync Failed`. Offline events retain a local event ID, employee ID, device
 timestamp, original event time, GPS, mock-location flag, assigned geofence ID,
-and pending geofence validation. `202609280005_offline_attendance_outbox.sql`
-plus `202609280006_offline_attendance_geofence.sql` add the authenticated,
+and pending geofence validation. `20260928200503_offline_attendance_outbox.sql`
+plus `20260928200508_offline_attendance_geofence.sql` add the authenticated,
 idempotent server RPC overload; the server validates the event and geofence
 before an authoritative attendance record is accepted. Apply both migrations
 before enabling offline attendance synchronization.
