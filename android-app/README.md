@@ -6,7 +6,7 @@ The project uses Kotlin, Jetpack Compose, Material 3, MVVM, Clean Architecture, 
 
 ## Configuration
 
-The APK never contains a Supabase service-role key. Configure only the client-safe URL and publishable/anon key through Gradle properties or environment variables:
+The APK never contains a Supabase service-role key. Configure only the client-safe URL and publishable/anon key through ignored `local.properties`, Gradle properties, or environment variables (in that precedence order: Gradle property, environment, local file):
 
 ```powershell
 $env:SUPABASE_URL = "https://your-project.supabase.co"
@@ -80,5 +80,7 @@ then reads the authorized notification row before displaying it.
 
 Deploy the function with these server-only secrets (never put them in the APK or
 the web bundle): `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and
-`FIREBASE_PRIVATE_KEY`. The function also uses the standard Supabase
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` secrets.
+`FIREBASE_PRIVATE_KEY`. The function also uses Supabase's automatically
+available `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEYS`, and
+`SUPABASE_SECRET_KEYS` environment variables. Legacy `SUPABASE_ANON_KEY` and
+`SUPABASE_SERVICE_ROLE_KEY` remain supported as fallbacks.

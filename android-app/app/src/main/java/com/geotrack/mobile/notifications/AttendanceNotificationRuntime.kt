@@ -66,10 +66,16 @@ class AndroidAttendanceNotificationCoordinator @Inject constructor(@ApplicationC
 }
 
 object FirebaseConfig {
-    fun isConfigured(context: Context) = BuildConfig.FIREBASE_PROJECT_ID.isNotBlank() && FirebaseApp.getApps(context).isNotEmpty()
+    private fun hasClientSettings() =
+        BuildConfig.FIREBASE_PROJECT_ID.isNotBlank() &&
+            BuildConfig.FIREBASE_APPLICATION_ID.isNotBlank() &&
+            BuildConfig.FIREBASE_API_KEY.isNotBlank() &&
+            BuildConfig.FIREBASE_SENDER_ID.isNotBlank()
+
+    fun isConfigured(context: Context) = hasClientSettings() && FirebaseApp.getApps(context).isNotEmpty()
     @Synchronized
     fun ensure(context: Context) {
-        if (BuildConfig.FIREBASE_PROJECT_ID.isBlank() || FirebaseApp.getApps(context).isNotEmpty()) return
+        if (!hasClientSettings() || FirebaseApp.getApps(context).isNotEmpty()) return
         runCatching {
             FirebaseApp.initializeApp(
                 context,

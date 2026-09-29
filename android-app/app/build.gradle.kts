@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,16 +9,21 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
-val configuredSupabaseUrl = providers.gradleProperty("SUPABASE_URL")
-    .orElse(providers.environmentVariable("SUPABASE_URL"))
-    .orElse("")
-val configuredSupabaseAnonKey = providers.gradleProperty("SUPABASE_ANON_KEY")
-    .orElse(providers.environmentVariable("SUPABASE_ANON_KEY"))
-    .orElse("")
-val configuredFirebaseProjectId = providers.gradleProperty("FIREBASE_PROJECT_ID").orElse(providers.environmentVariable("FIREBASE_PROJECT_ID")).orElse("")
-val configuredFirebaseApplicationId = providers.gradleProperty("FIREBASE_APPLICATION_ID").orElse(providers.environmentVariable("FIREBASE_APPLICATION_ID")).orElse("")
-val configuredFirebaseApiKey = providers.gradleProperty("FIREBASE_API_KEY").orElse(providers.environmentVariable("FIREBASE_API_KEY")).orElse("")
-val configuredFirebaseSenderId = providers.gradleProperty("FIREBASE_SENDER_ID").orElse(providers.environmentVariable("FIREBASE_SENDER_ID")).orElse("")
+val localConfig = providers.fileContents(rootProject.layout.projectDirectory.file("local.properties"))
+    .asText.orElse("").map { content ->
+        Properties().apply { load(content.reader()) }
+    }
+
+fun clientConfig(name: String) = providers.gradleProperty(name)
+    .orElse(providers.environmentVariable(name))
+    .orElse(localConfig.map { it.getProperty(name).orEmpty() })
+
+val configuredSupabaseUrl = clientConfig("SUPABASE_URL")
+val configuredSupabaseAnonKey = clientConfig("SUPABASE_ANON_KEY")
+val configuredFirebaseProjectId = clientConfig("FIREBASE_PROJECT_ID")
+val configuredFirebaseApplicationId = clientConfig("FIREBASE_APPLICATION_ID")
+val configuredFirebaseApiKey = clientConfig("FIREBASE_API_KEY")
+val configuredFirebaseSenderId = clientConfig("FIREBASE_SENDER_ID")
 
 fun String.asBuildConfigString(): String = "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
