@@ -1,10 +1,19 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.2';
 import { importPKCS8, SignJWT } from 'npm:jose@6.1.0';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+const allowedOrigins = new Set([
+  'https://geotrack-fieldtrack-ksa.vercel.app',
+  'http://localhost:5173',
+]);
+
+function corsHeaders(request: Request): Record<string, string> {
+  const origin = request.headers.get('origin');
+  return {
+    ...(origin && allowedOrigins.has(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}),
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  };
+}
 
 type NotificationRow = {
   id: string;
@@ -12,10 +21,10 @@ type NotificationRow = {
   recipient_user_id: string;
 };
 
-const json = (body: unknown, status = 200) =>
+const json = (request: Request, body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { ...corsHeaders(request), 'Content-Type': 'application/json' },
   });
 
 async function firebaseAccessToken(projectId: string): Promise<string> {
@@ -48,18 +57,18 @@ async function firebaseAccessToken(projectId: string): Promise<string> {
 }
 
 Deno.serve(async (request) => {
-  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
+  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders(request) });
+  if (request.method !== 'POST') return json(request, { error: 'Method not allowed' }, 405);
 
   const authorization = request.headers.get('authorization');
-  if (!authorization?.startsWith('Bearer ')) return json({ error: 'Authentication required' }, 401);
+  if (!authorization?.startsWith('Bearer ')) return json(request, { error: 'Authentication required' }, 401);
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
   const projectId = Deno.env.get('FIREBASE_PROJECT_ID');
   if (!supabaseUrl || !serviceRoleKey || !anonKey || !projectId) {
-    return json({ error: 'Push service is not configured' }, 503);
+    return json(request, { error: 'Push service is not configured' }, 503);
   }
 
   const userClient = createClient(supabaseUrl, anonKey, {
@@ -67,10 +76,10 @@ Deno.serve(async (request) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const { data: userData, error: userError } = await userClient.auth.getUser();
-  if (userError || !userData.user) return json({ error: 'Invalid session' }, 401);
+  if (userError || !userData.user) return json(request, { error: 'Invalid session' }, 401);
 
   const body = await request.json().catch(() => null) as { notification_id?: string } | null;
-  if (!body?.notification_id) return json({ error: 'notification_id is required' }, 400);
+  if (!body?.notification_id) return json(request, { error: 'notification_id is required' }, 400);
 
   const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
   const { data: notification, error: notificationError } = await admin
@@ -78,8 +87,8 @@ Deno.serve(async (request) => {
     .select('id, organization_id, recipient_user_id')
     .eq('id', body.notification_id)
     .maybeSingle<NotificationRow>();
-  if (notificationError) return json({ error: notificationError.message }, 500);
-  if (!notification) return json({ error: 'Notification not found' }, 404);
+  if (notificationError) return json(request, { error: notificationError.message }, 500);
+  if (!notification) return json(request, { error: 'Notification not found' }, 404);
 
   // A sender must be the recipient or an active manager/admin in the same org.
   if (notification.recipient_user_id !== userData.user.id) {
@@ -91,7 +100,7 @@ Deno.serve(async (request) => {
       .eq('status', 'active')
       .in('role_code', ['manager', 'administrator'])
       .maybeSingle();
-    if (!membership) return json({ error: 'Not allowed to dispatch this notification' }, 403);
+    if (!membership) return json(request, { error: 'Not allowed to dispatch this notification' }, 403);
   }
 
   const { data: tokens, error: tokenError } = await admin
@@ -99,8 +108,8 @@ Deno.serve(async (request) => {
     .select('id, token')
     .eq('user_id', notification.recipient_user_id)
     .is('revoked_at', null);
-  if (tokenError) return json({ error: tokenError.message }, 500);
-  if (!tokens?.length) return json({ sent: 0 });
+  if (tokenError) return json(request, { error: tokenError.message }, 500);
+  if (!tokens?.length) return json(request, { sent: 0 });
 
   const accessToken = await firebaseAccessToken(projectId);
   let sent = 0;
@@ -123,5 +132,5 @@ Deno.serve(async (request) => {
       await admin.from('mobile_push_tokens').update({ revoked_at: new Date().toISOString() }).eq('id', tokenRow.id);
     }
   }
-  return json({ sent });
+  return json(request, { sent });
 });
