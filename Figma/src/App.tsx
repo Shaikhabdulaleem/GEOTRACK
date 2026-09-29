@@ -94,6 +94,7 @@ function ApplicationShell() {
 export default function App() {
   return (
     <Routes>
+      <Route path="/login" element={<Navigate to="/sign-in" replace />} />
       <Route path="/sign-in" element={<SignIn />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route
