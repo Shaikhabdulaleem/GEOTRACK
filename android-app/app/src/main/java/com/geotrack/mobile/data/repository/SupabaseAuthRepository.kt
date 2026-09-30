@@ -11,6 +11,10 @@ import io.github.jan.supabase.auth.SignOutScope
 import io.github.jan.supabase.auth.status.RefreshFailureCause
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.exceptions.RestException
+import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.rpc
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -110,8 +114,22 @@ class SupabaseAuthRepository @Inject constructor(
 
         return try {
             val client = requireNotNull(clientHolder.client)
+            
+            // Try to resolve the Employee ID or Iqama into a valid email
+            val resolvedEmail = try {
+                client.postgrest.rpc(
+                    "resolve_login_email",
+                    buildJsonObject { put("p_identifier", email.trim()) }
+                ).data.trim('"')
+            } catch (e: Exception) {
+                // Fallback to exactly what the user typed (if it's already an email)
+                email.trim()
+            }
+            
+            val targetEmail = if (resolvedEmail.isNotBlank() && resolvedEmail != "null") resolvedEmail else email.trim()
+
             client.auth.signInWith(Email) {
-                this.email = email.trim()
+                this.email = targetEmail
                 this.password = password
             }
             val sbSession = client.auth.currentSessionOrNull()
