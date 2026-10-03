@@ -1,7 +1,7 @@
 import { getSupabaseClient } from '../lib/supabase';
 import { executeQuery } from './database.service';
 import { AppError } from '../lib/errors';
-import type { BranchRow, DepartmentRow, EmployeeProfileRow, EmploymentStatus, ShiftAssignmentRow, ShiftRow, TablesInsert, TablesUpdate, UserRow } from '../types/database';
+import type { BranchRow, DepartmentRow, EmployeeProfileRow, EmploymentStatus, RecurringScheduleRow, RecurringScheduleRuleRow, ShiftAssignmentRow, ShiftRow, TablesInsert, TablesUpdate, UserRow } from '../types/database';
 
 export interface EmployeeListQuery {
   organizationId: string;
@@ -19,6 +19,7 @@ export interface EmployeeListQuery {
 export interface EmployeeListResult { rows: EmployeeProfileRow[]; count: number; }
 export interface EmployeeLookups { branches: BranchRow[]; departments: DepartmentRow[]; shifts: ShiftRow[]; managers: UserRow[]; }
 export interface ShiftAssignmentInput { organization_id: string; employee_id: string; shift_id: string; work_date?: string; }
+export interface EmployeeRecurringSchedule { schedule: RecurringScheduleRow; rules: RecurringScheduleRuleRow[]; }
 export interface EmployeeCreateInput {
   organization_id: string;
   employee_code: string;
@@ -101,12 +102,21 @@ export const employeeService = {
     const [branches, departments, shifts, memberships] = await Promise.all([
       executeQuery(client.from('branches').select('*').eq('organization_id', organizationId).eq('status', 'active').order('name'), 'Unable to load sites.'),
       executeQuery(client.from('departments').select('*').eq('organization_id', organizationId).eq('status', 'active').order('name'), 'Unable to load departments.'),
-      executeQuery(client.from('shifts').select('*').eq('organization_id', organizationId).eq('status', 'active').order('name'), 'Unable to load shifts.'),
+      executeQuery(client.from('shifts').select('*').eq('organization_id', organizationId).eq('status', 'active').is('effective_to', null).order('name'), 'Unable to load shifts.'),
       executeQuery(client.from('organization_memberships').select('user_id').eq('organization_id', organizationId).eq('status', 'active').in('role_code', ['manager', 'administrator']), 'Unable to load managers.'),
     ]);
     const managerIds = memberships.map(item => item.user_id);
     const managers = managerIds.length ? await executeQuery(client.from('users').select('*').in('id', managerIds).eq('is_active', true).order('display_name'), 'Unable to load managers.') : [];
     return { branches, departments, shifts, managers };
+  },
+
+  async getRecurringSchedule(employeeId: string): Promise<EmployeeRecurringSchedule | null> {
+    const client = getSupabaseClient();
+    const { data, error } = await client.from('recurring_schedules').select('*').eq('employee_id', employeeId).eq('status', 'active').order('effective_from', { ascending: false }).limit(1).maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const rules = await executeQuery(client.from('recurring_schedule_rules').select('*').eq('schedule_id', data.id).order('weekday'), 'Unable to load weekly schedule.');
+    return { schedule: data, rules };
   },
 };
 

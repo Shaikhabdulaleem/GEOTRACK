@@ -126,6 +126,8 @@ private fun HighlightsCard(uiState: ScheduleUiState) {
                     TodayScheduleState.OFF_DAY -> "You are OFF today"
                     TodayScheduleState.LEAVE -> "You are on LEAVE today"
                     TodayScheduleState.HOLIDAY -> "Today is a HOLIDAY"
+                    TodayScheduleState.CANCELLED -> "Today's shift is cancelled"
+                    TodayScheduleState.UNASSIGNED -> "No shift assigned today"
                 }
                 Text(
                     text = todayText,
@@ -234,6 +236,8 @@ private fun DailyScheduleRow(daily: DailySchedule) {
                     TodayScheduleState.OFF_DAY -> "OFF"
                     TodayScheduleState.LEAVE -> "LEAVE"
                     TodayScheduleState.HOLIDAY -> "HOLIDAY"
+                    TodayScheduleState.CANCELLED -> "CANCELLED"
+                    TodayScheduleState.UNASSIGNED -> "UNASSIGNED"
                 }
                 
                 val stateColor = when (daily.state) {
@@ -241,6 +245,8 @@ private fun DailyScheduleRow(daily: DailySchedule) {
                     TodayScheduleState.OFF_DAY -> MaterialTheme.colorScheme.error
                     TodayScheduleState.LEAVE -> MaterialTheme.colorScheme.tertiary
                     TodayScheduleState.HOLIDAY -> MaterialTheme.colorScheme.secondary
+                    TodayScheduleState.CANCELLED -> MaterialTheme.colorScheme.error
+                    TodayScheduleState.UNASSIGNED -> MaterialTheme.colorScheme.onSurfaceVariant
                 }
                 
                 Text(

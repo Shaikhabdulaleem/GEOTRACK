@@ -1,6 +1,7 @@
 import { getSupabaseClient } from '../lib/supabase';
 
 import type { NotificationRow } from '../types/database';
+import { shiftService } from './shift.service';
 
 export interface EmployeeDashboardMetrics {
   weeklyWorkedMinutes: number;
@@ -56,14 +57,9 @@ export const employeeDashboardService = {
     });
 
     // Fetch upcoming schedule
-    const { data: upcoming } = await client
-      .from('shift_assignments')
-      .select('work_date, shift:shifts(name, start_time, end_time)')
-      .eq('organization_id', organizationId)
-      .eq('employee_id', employeeId)
-      .gt('work_date', todayStr)
-      .order('work_date', { ascending: true })
-      .limit(7);
+    const scheduleEnd = new Date(today); scheduleEnd.setDate(scheduleEnd.getDate() + 30);
+    const resolved = await shiftService.resolveSchedule(employeeId, todayStr, scheduleEnd.toISOString().slice(0, 10));
+    const upcoming = resolved.filter(row => row.work_date > todayStr && row.state === 'working').slice(0, 7).map(row => ({ work_date: row.work_date, shift: row.shift_name && row.start_time && row.end_time ? { name: row.shift_name, start_time: row.start_time, end_time: row.end_time } : null }));
 
     // Fetch productivity today
     const { data: prod } = await client
@@ -86,8 +82,8 @@ export const employeeDashboardService = {
     return {
       weeklyWorkedMinutes: weeklyMins,
       monthlyWorkedMinutes: monthlyMins,
-      upcomingShifts: upcoming || [],
-      weeklyOffDays: [], // Can compute from schedule bounds
+      upcomingShifts: upcoming,
+      weeklyOffDays: resolved.filter(row => row.state === 'off').map(row => row.work_date),
       productivityPercent: prod ? prod.productivity_percent : null,
       notifications: notifs || []
     };

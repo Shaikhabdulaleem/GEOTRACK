@@ -4,13 +4,12 @@ import com.geotrack.mobile.core.common.AppError
 import com.geotrack.mobile.core.common.AppResult
 import com.geotrack.mobile.data.remote.dto.AttendanceRecordDto
 import com.geotrack.mobile.data.remote.dto.OvertimeRecordDto
-import com.geotrack.mobile.data.remote.dto.ShiftAssignmentWithShiftDto
+import com.geotrack.mobile.data.remote.dto.ResolvedScheduleDto
 import com.geotrack.mobile.data.remote.supabase.SupabaseClientHolder
 import com.geotrack.mobile.domain.model.OvertimeApprovalStatus
 import com.geotrack.mobile.domain.model.OvertimeEntry
 import com.geotrack.mobile.domain.repository.OvertimeRepository
 import io.github.jan.supabase.postgrest.postgrest
-import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Duration
@@ -48,21 +47,15 @@ class SupabaseOvertimeRepository @Inject constructor(
                 }
             }.decodeList<AttendanceRecordDto>()
             val attendanceById = attendance.associateBy { it.id }
-            val assignments = client.postgrest["shift_assignments"]
-                .select(columns = Columns.raw("*, shift:shifts(*)")) {
-                    filter {
-                        eq("organization_id", organizationId)
-                        eq("employee_id", employeeId)
-                        gte("work_date", startDate.toString())
-                        lte("work_date", endDate.toString())
-                    }
-                }.decodeList<ShiftAssignmentWithShiftDto>()
-            val assignmentsByDate = assignments.associateBy { it.workDate }
+            val schedulesByDate = client.postgrest.rpc(
+                "resolve_employee_schedule",
+                buildJsonObject { put("p_employee_id", employeeId); put("p_start_date", startDate.toString()); put("p_end_date", endDate.toString()) },
+            ).decodeList<ResolvedScheduleDto>().associateBy { it.workDate }
 
             AppResult.Success(overtime.mapNotNull { record ->
                 val att = attendanceById[record.attendanceRecordId] ?: return@mapNotNull null
                 val date = LocalDate.parse(att.attendanceDate)
-                val shift = assignmentsByDate[date.toString()]?.shift
+                val shift = schedulesByDate[date.toString()]
                 OvertimeEntry(
                     id = record.id,
                     date = date,
@@ -99,11 +92,11 @@ class SupabaseOvertimeRepository @Inject constructor(
         }
     }
 
-    private fun com.geotrack.mobile.data.remote.dto.ShiftDto.scheduledMinutes(): Int {
-        val start = LocalTime.parse(startTime.take(8))
-        val end = LocalTime.parse(endTime.take(8))
+    private fun ResolvedScheduleDto.scheduledMinutes(): Int {
+        val start = startTime?.let { LocalTime.parse(it.take(8)) } ?: return 0
+        val end = endTime?.let { LocalTime.parse(it.take(8)) } ?: return 0
         var minutes = Duration.between(start, end).toMinutes().toInt()
         if (minutes <= 0 || crossesMidnight) minutes += 24 * 60
-        return (minutes - breakMinutes).coerceAtLeast(0)
+        return (minutes - (breakMinutes ?: 0)).coerceAtLeast(0)
     }
 }

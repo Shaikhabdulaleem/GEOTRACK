@@ -1,4 +1,5 @@
 import { getSupabaseClient } from '../lib/supabase';
+import { shiftService } from './shift.service';
 
 export interface DashboardFilters {
   date: string;
@@ -110,30 +111,10 @@ export const dashboardService = {
     let dayShiftCount = 0;
     let nightShiftCount = 0;
     
-    const assignments: Array<{
-      employee_id: string;
-      shift_id: string | null;
-      shift: { crosses_midnight: boolean; start_time: string } | { crosses_midnight: boolean; start_time: string }[] | null;
-    }> = [];
-
-    for (let i = 0; i < validEmpIds.length; i += batchSize) {
-      const batchIds = validEmpIds.slice(i, i + batchSize);
-      const { data: batchAssignments, error: assignmentError } = await client
-        .from('shift_assignments')
-        .select('employee_id, shift_id, shift:shifts(crosses_midnight, start_time)')
-        .eq('organization_id', organizationId)
-        .eq('work_date', filters.date)
-        .in('employee_id', batchIds);
-
-      if (assignmentError) throw assignmentError;
-      if (batchAssignments) assignments.push(...batchAssignments);
-    }
-      
-    assignments.forEach(a => {
-      if (filters.shiftId && a.shift_id !== filters.shiftId) return;
-      
-      const isNight = Array.isArray(a.shift) ? a.shift[0]?.crosses_midnight : a.shift?.crosses_midnight;
-      if (isNight) nightShiftCount++;
+    const schedules = await Promise.all(validEmpIds.map(employeeId => shiftService.resolveSchedule(employeeId, filters.date, filters.date)));
+    schedules.flat().forEach(row => {
+      if (row.state !== 'working' || (filters.shiftId && row.shift_id !== filters.shiftId)) return;
+      if (row.crosses_midnight) nightShiftCount++;
       else dayShiftCount++;
     });
     

@@ -34,6 +34,7 @@ import {
 import { employeeService } from '../services/employee.service';
 import type { ShiftRow, ShiftAssignmentRow, EmployeeProfileRow } from '../types/database';
 import { scheduleData } from '../data/mockData';
+import { ShiftEditorModal as ShiftModal } from '../components/ShiftEditorModal';
 
 // ─────────────────────────────────────────────
 // Constants / colour map
@@ -103,6 +104,11 @@ const MOCK_SHIFTS: ShiftRow[] = [
     break_minutes: 60,
     color: '#2563eb',
     status: 'active',
+    template_key: 'S1',
+    version_number: 1,
+    effective_from: '2020-01-01',
+    effective_to: null,
+    created_by: null,
     created_at: '',
     updated_at: '',
   },
@@ -117,6 +123,11 @@ const MOCK_SHIFTS: ShiftRow[] = [
     break_minutes: 60,
     color: '#8b5cf6',
     status: 'active',
+    template_key: 'S2',
+    version_number: 1,
+    effective_from: '2020-01-01',
+    effective_to: null,
+    created_by: null,
     created_at: '',
     updated_at: '',
   },
@@ -203,188 +214,6 @@ function ShiftTemplateCard({
         >
           <Trash2 size={13} />
         </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── New / Edit Shift Modal ──────────────────
-interface ShiftModalProps {
-  initial?: ShiftRow | null;
-  organizationId: string;
-  onSaved: (shift: ShiftRow) => void;
-  onClose: () => void;
-}
-
-function ShiftModal({ initial, organizationId, onSaved, onClose }: ShiftModalProps) {
-  const [name, setName] = useState(initial?.name ?? '');
-  const [code, setCode] = useState(initial?.code ?? '');
-  const [start, setStart] = useState(initial?.start_time ?? '09:00');
-  const [end, setEnd] = useState(initial?.end_time ?? '17:00');
-  const [breakMins, setBreakMins] = useState(String(initial?.break_minutes ?? 60));
-  const [color, setColor] = useState(initial?.color ?? '#2563eb');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
-
-  const crossesMidnight = detectCrossesMidnight(start, end);
-  const duration = shiftDurationMinutes(start, end) - Number(breakMins || 0);
-
-  const handleSave = async () => {
-    if (!name.trim()) { setError('Shift name is required.'); return; }
-    if (!code.trim()) { setError('Shift code is required.'); return; }
-    setSaving(true);
-    setError('');
-    try {
-      let result: ShiftRow;
-      if (initial) {
-        result = await shiftService.updateShift(initial.id, {
-          name, code, start_time: start, end_time: end,
-          break_minutes: Number(breakMins) || 0, color,
-        });
-      } else {
-        result = await shiftService.createShift({
-          organization_id: organizationId,
-          name, code, start_time: start, end_time: end,
-          break_minutes: Number(breakMins) || 0, color,
-        });
-      }
-      setSaved(true);
-      setTimeout(() => { onSaved(result); onClose(); }, 1000);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to save shift.');
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(6,13,26,0.85)' }}>
-      <div className="rounded-2xl w-96" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
-        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #1e3a5a' }}>
-          <div className="font-semibold text-sm text-white">{initial ? 'Edit Shift Template' : 'New Shift Template'}</div>
-        <button onClick={onClose} aria-label="Close shift form" style={{ color: '#4b6a8a' }}><X size={15} /></button>
-        </div>
-
-        {saved ? (
-          <div className="flex flex-col items-center py-10 gap-2">
-            <CheckCircle size={28} style={{ color: '#10b981' }} />
-            <div className="text-white font-semibold text-sm">Shift {initial ? 'Updated' : 'Created'}!</div>
-          </div>
-        ) : (
-          <div className="p-5 space-y-4">
-            {error && <ErrorBanner message={error} />}
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>Shift Name *</label>
-                <input
-                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                  placeholder="e.g. Day Shift"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>Code *</label>
-                <input
-                  className="w-full px-3 py-2 rounded-lg text-sm outline-none uppercase"
-                  style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                  placeholder="e.g. DAY"
-                  value={code}
-                  onChange={e => setCode(e.target.value.toUpperCase())}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>Start Time</label>
-                <input
-                  type="time"
-                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                  value={start}
-                  onChange={e => setStart(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>End Time</label>
-                <input
-                  type="time"
-                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                  value={end}
-                  onChange={e => setEnd(e.target.value)}
-                />
-              </div>
-            </div>
-
-            {/* Night-shift crossing indicator */}
-            {crossesMidnight && (
-              <div
-                className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
-                style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.3)', color: '#c4b5fd' }}
-              >
-                <Moon size={13} />
-                Night shift detected — this shift crosses midnight ({formatTime12(start)} → +1 day {formatTime12(end)}).
-                Stored as a single {Math.floor(shiftDurationMinutes(start, end) / 60)}h shift.
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>Break (minutes)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={240}
-                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                  value={breakMins}
-                  onChange={e => setBreakMins(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>Colour</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent"
-                    value={color}
-                    onChange={e => setColor(e.target.value)}
-                  />
-                  <span className="text-xs font-mono" style={{ color: '#4b6a8a' }}>{color}</span>
-                </div>
-              </div>
-            </div>
-
-            {duration > 0 && (
-              <div className="text-xs" style={{ color: '#4b6a8a' }}>
-                Net worked: <span className="text-white font-semibold">{Math.floor(duration / 60)}h {duration % 60 > 0 ? `${duration % 60}m` : ''}</span>
-              </div>
-            )}
-
-            <div className="flex gap-2 pt-1">
-              <button
-                onClick={onClose}
-                className="flex-1 py-2 rounded-lg text-sm"
-                style={{ background: '#122338', color: '#4b6a8a', border: '1px solid #1e3a5a' }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void handleSave()}
-                disabled={saving}
-                className="flex-1 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2"
-                style={{ background: '#2563eb', color: '#fff', opacity: saving ? 0.7 : 1 }}
-              >
-                {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
-                {saving ? 'Saving…' : 'Save Shift'}
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -1143,7 +972,9 @@ export default function ShiftScheduler() {
           onSaved={saved => {
             setShifts(prev => {
               const idx = prev.findIndex(s => s.id === saved.id);
-              return idx >= 0 ? prev.map((s, i) => i === idx ? saved : s) : [...prev, saved];
+              return idx >= 0
+                ? prev.map((s, i) => i === idx ? saved : s)
+                : [...prev.filter(s => s.template_key !== saved.template_key), saved];
             });
           }}
           onClose={() => { setShowShiftModal(false); setEditingShift(null); }}

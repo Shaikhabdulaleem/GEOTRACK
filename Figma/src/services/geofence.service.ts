@@ -32,6 +32,7 @@ export interface GeofenceCreateInput {
   organization_id: string;
   branch_id: string;
   name: string;
+  color?: string;
   checkin_mode?: CheckinMode;
   required_accuracy_meters?: number;
   auto_checkout_timeout_minutes?: number;
@@ -42,6 +43,8 @@ export interface GeofenceCreateInput {
 
 export interface GeofenceUpdateInput {
   name?: string;
+  branch_id?: string;
+  color?: string;
   checkin_mode?: CheckinMode;
   required_accuracy_meters?: number;
   auto_checkout_timeout_minutes?: number;
@@ -172,6 +175,7 @@ export const geofenceService = {
           organization_id: input.organization_id,
           branch_id: input.branch_id,
           name: input.name,
+          color: input.color ?? '#2563eb',
           status: 'active',
           checkin_mode: input.checkin_mode ?? 'confirmation',
           required_accuracy_meters: input.required_accuracy_meters ?? 50,
@@ -213,6 +217,8 @@ export const geofenceService = {
     // Update the geofence metadata
     const fenceUpdate: TablesUpdate<'geofences'> = {};
     if (input.name !== undefined) fenceUpdate.name = input.name;
+    if (input.branch_id !== undefined) fenceUpdate.branch_id = input.branch_id;
+    if (input.color !== undefined) fenceUpdate.color = input.color;
     if (input.checkin_mode !== undefined) fenceUpdate.checkin_mode = input.checkin_mode;
     if (input.required_accuracy_meters !== undefined)
       fenceUpdate.required_accuracy_meters = input.required_accuracy_meters;

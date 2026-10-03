@@ -1,4 +1,5 @@
 import { getSupabaseClient } from '../lib/supabase';
+import { shiftService } from './shift.service';
 
 export interface ReportFilters {
   fromDate: string;
@@ -254,21 +255,16 @@ export const reportService = {
       }
       
       case 'shift_report': {
-        const { data } = await client
-          .from('shift_assignments')
-          .select('employee_id, work_date, shift:shifts(name, start_time, end_time)')
-          .eq('organization_id', organizationId)
-          .gte('work_date', filters.fromDate)
-          .lte('work_date', filters.toDate)
-          .in('employee_id', empIds);
-          
-        reportData = ((data as any[]) || []).map(r => {
+        const data = (await Promise.all(empIds.map(async employeeId =>
+          (await shiftService.resolveSchedule(employeeId, filters.fromDate, filters.toDate)).map(row => ({ ...row, employee_id: employeeId }))
+        ))).flat();
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
-          const sName = Array.isArray(r.shift) ? r.shift[0]?.name : r.shift?.name;
           return {
             ...base,
-            'Shift Name': sName || 'Custom',
+            'Shift Name': r.shift_name || r.state,
+            'Schedule Source': r.source,
           };
         });
         break;

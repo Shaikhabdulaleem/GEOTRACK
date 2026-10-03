@@ -135,6 +135,8 @@ export interface BranchRow {
   timezone: string;
   address: string | null;
   location_point: GeoJsonPoint | null;
+  latitude: number | null;
+  longitude: number | null;
   status: RecordStatus;
   created_by: string | null;
   created_at: string;
@@ -198,8 +200,51 @@ export interface ShiftRow {
   break_minutes: number;
   color: string | null;
   status: RecordStatus;
+  template_key: string;
+  version_number: number;
+  effective_from: string;
+  effective_to: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface RecurringScheduleRow {
+  id: string;
+  organization_id: string;
+  employee_id: string;
+  effective_from: string;
+  effective_to: string | null;
+  status: RecordStatus;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RecurringScheduleRuleRow {
+  id: string;
+  organization_id: string;
+  schedule_id: string;
+  weekday: number;
+  shift_id: string | null;
+  is_off: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResolvedScheduleRow {
+  work_date: string;
+  state: 'working' | 'off' | 'leave' | 'cancelled' | 'holiday' | 'unassigned';
+  source: 'leave' | 'dated_override' | 'holiday' | 'recurring' | 'legacy_weekly_off' | 'unassigned';
+  shift_assignment_id: string | null;
+  recurring_schedule_id: string | null;
+  shift_id: string | null;
+  shift_name: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  break_minutes: number | null;
+  crosses_midnight: boolean;
+  reason: string | null;
 }
 
 export interface ShiftAssignmentRow {
@@ -247,6 +292,8 @@ export interface GeofenceRow {
   checkin_mode: CheckinMode;
   required_accuracy_meters: number;
   auto_checkout_timeout_minutes: number;
+  latitude: number | null;
+  longitude: number | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -480,6 +527,8 @@ export interface Database {
           },
         ]
       >;
+      recurring_schedules: TableDefinition<RecurringScheduleRow, 'organization_id' | 'employee_id' | 'effective_from'>;
+      recurring_schedule_rules: TableDefinition<RecurringScheduleRuleRow, 'organization_id' | 'schedule_id' | 'weekday' | 'is_off'>;
       weekly_offs: TableDefinition<WeeklyOffRow, 'organization_id' | 'employee_id' | 'weekday' | 'effective_from'>;
       holidays: TableDefinition<HolidayRow, 'organization_id' | 'holiday_date' | 'name'>;
       geofences: TableDefinition<GeofenceRow, 'organization_id' | 'branch_id' | 'name'>;
@@ -509,6 +558,42 @@ export interface Database {
     };
     Views: Record<string, never>;
     Functions: {
+      resolve_employee_schedule: {
+        Args: { p_employee_id: string; p_start_date: string; p_end_date: string };
+        Returns: ResolvedScheduleRow[];
+      };
+      set_recurring_schedule: {
+        Args: { p_employee_id: string; p_effective_from: string; p_effective_to: string | null; p_rules: Json };
+        Returns: RecurringScheduleRow;
+      };
+      save_shift_template: {
+        Args: {
+          p_shift_id: string | null;
+          p_organization_id: string;
+          p_code: string;
+          p_name: string;
+          p_start_time: string;
+          p_end_time: string;
+          p_break_minutes: number;
+          p_color: string | null;
+          p_effective_from: string;
+        };
+        Returns: ShiftRow;
+      };
+      create_site: {
+        Args: {
+          p_organization_id: string;
+          p_name: string;
+          p_code: string;
+          p_timezone: string;
+          p_address: string;
+          p_latitude: number | null;
+          p_longitude: number | null;
+          p_create_geofence: boolean;
+          p_geofence_radius_meters: number;
+        };
+        Returns: BranchRow;
+      };
       process_attendance_event: {
         Args: {
           p_employee_id: string;

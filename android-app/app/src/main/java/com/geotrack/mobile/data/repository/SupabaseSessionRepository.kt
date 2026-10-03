@@ -7,8 +7,7 @@ import com.geotrack.mobile.data.remote.dto.BranchDto
 import com.geotrack.mobile.data.remote.dto.DepartmentDto
 import com.geotrack.mobile.data.remote.dto.OrganizationMembershipDto
 import com.geotrack.mobile.data.remote.dto.OrganizationDto
-import com.geotrack.mobile.data.remote.dto.ShiftAssignmentDto
-import com.geotrack.mobile.data.remote.dto.ShiftDto
+import com.geotrack.mobile.data.remote.dto.ResolvedScheduleDto
 import com.geotrack.mobile.data.remote.dto.UserProfileDto
 import com.geotrack.mobile.data.remote.supabase.SupabaseClientHolder
 import com.geotrack.mobile.domain.model.AppRole
@@ -22,9 +21,12 @@ import com.geotrack.mobile.domain.model.OrganizationMembership
 import com.geotrack.mobile.domain.model.UserProfile
 import com.geotrack.mobile.domain.repository.SessionRepository
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.exceptions.RestException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -135,44 +137,20 @@ class SupabaseSessionRepository @Inject constructor(
                 val today = runCatching {
                     java.time.LocalDate.now(java.time.ZoneId.of(organization.timezone)).toString()
                 }.getOrElse { java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString() }
-                val assignment = client
-                    .from("shift_assignments")
-                    .select {
-                        filter {
-                            eq("organization_id", membershipDto.organizationId)
-                            eq("employee_id", employee.id)
-                            eq("status", "scheduled")
-                            gte("work_date", today)
-                        }
-                        order("work_date", io.github.jan.supabase.postgrest.query.Order.ASCENDING)
-                        limit(1)
-                    }
-                    .decodeList<ShiftAssignmentDto>()
-                    .firstOrNull()
+                val resolved = client.postgrest.rpc(
+                    "resolve_employee_schedule",
+                    buildJsonObject { put("p_employee_id", employee.id); put("p_start_date", today); put("p_end_date", java.time.LocalDate.parse(today).plusDays(30).toString()) },
+                ).decodeList<ResolvedScheduleDto>().firstOrNull { it.state == "working" && it.shiftId != null }
 
-                val shift = assignment?.shiftId?.let { shiftId ->
-                    client
-                        .from("shifts")
-                        .select {
-                            filter {
-                                eq("id", shiftId)
-                                eq("organization_id", membershipDto.organizationId)
-                            }
-                            limit(1)
-                        }
-                        .decodeList<ShiftDto>()
-                        .firstOrNull()
-                }
-
-                if (assignment != null && shift != null) {
+                if (resolved != null) {
                     AssignedShiftInfo(
-                        id = shift.id,
-                        assignmentId = assignment.id,
-                        workDate = assignment.workDate,
-                        name = shift.name,
-                        startTime = shift.startTime,
-                        endTime = shift.endTime,
-                        crossesMidnight = shift.crossesMidnight,
+                        id = resolved.shiftId!!,
+                        assignmentId = resolved.shiftAssignmentId ?: resolved.recurringScheduleId.orEmpty(),
+                        workDate = resolved.workDate,
+                        name = resolved.shiftName.orEmpty(),
+                        startTime = resolved.startTime.orEmpty(),
+                        endTime = resolved.endTime.orEmpty(),
+                        crossesMidnight = resolved.crossesMidnight,
                     )
                 } else {
                     null

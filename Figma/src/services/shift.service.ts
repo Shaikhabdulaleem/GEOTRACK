@@ -10,6 +10,7 @@ import type {
   TablesInsert,
   TablesUpdate,
   RecordStatus,
+  ResolvedScheduleRow,
 } from '../types/database';
 import { logger } from '../lib/logger';
 
@@ -141,6 +142,7 @@ export const shiftService = {
         .select('*')
         .eq('organization_id', organizationId)
         .eq('status', 'active')
+        .is('effective_to', null)
         .order('name'),
       'Unable to load shift templates.',
     );
@@ -155,34 +157,31 @@ export const shiftService = {
     end_time: string;
     break_minutes?: number;
     color?: string;
+    effective_from?: string;
   }): Promise<ShiftRow> {
     validateShiftTimes(input.start_time, input.end_time, input.break_minutes ?? 0);
     if (!input.code.trim() || !input.name.trim()) {
       throw new AppError('VALIDATION_ERROR', 'Shift code and name are required.');
     }
-    const crosses_midnight = detectCrossesMidnight(input.start_time, input.end_time);
     return executeQuery(
       getSupabaseClient()
-        .from('shifts')
-        .insert({
-          organization_id: input.organization_id,
-          code: input.code.trim().toUpperCase(),
-          name: input.name.trim(),
-          start_time: input.start_time,
-          end_time: input.end_time,
-          crosses_midnight,
-          break_minutes: input.break_minutes ?? 0,
-          color: input.color ?? null,
-          status: 'active',
-        } as TablesInsert<'shifts'>)
-        .select('*')
-        .single(),
+        .rpc('save_shift_template', {
+          p_shift_id: null,
+          p_organization_id: input.organization_id,
+          p_code: input.code.trim().toUpperCase(),
+          p_name: input.name.trim(),
+          p_start_time: input.start_time,
+          p_end_time: input.end_time,
+          p_break_minutes: input.break_minutes ?? 0,
+          p_color: input.color ?? null,
+          p_effective_from: input.effective_from ?? new Date().toISOString().slice(0, 10),
+        }),
       'Unable to create the shift template.',
     );
   },
 
   /** Update an existing shift template. crosses_midnight is recalculated. */
-  async updateShift(shiftId: string, input: TablesUpdate<'shifts'>): Promise<ShiftRow> {
+  async updateShift(shiftId: string, input: TablesUpdate<'shifts'> & { effective_from?: string }): Promise<ShiftRow> {
     const updates: TablesUpdate<'shifts'> = { ...input };
     if (input.start_time !== undefined || input.end_time !== undefined || input.break_minutes !== undefined) {
       // Re-derive crosses_midnight whenever times change
@@ -195,9 +194,52 @@ export const shiftService = {
       validateShiftTimes(start, end, input.break_minutes ?? existing.break_minutes);
       updates.crosses_midnight = detectCrossesMidnight(start, end);
     }
+    const existing = (await executeQuery(
+      getSupabaseClient().from('shifts').select('*').eq('id', shiftId).single(),
+      'Unable to load shift.',
+    )) as ShiftRow | null;
+    if (!existing) throw new AppError('NOT_FOUND', 'Shift template not found.');
     return executeQuery(
-      getSupabaseClient().from('shifts').update(updates).eq('id', shiftId).select('*').single(),
+      getSupabaseClient().rpc('save_shift_template', {
+        p_shift_id: shiftId,
+        p_organization_id: existing.organization_id,
+        p_code: input.code ?? existing.code,
+        p_name: input.name ?? existing.name,
+        p_start_time: input.start_time ?? existing.start_time,
+        p_end_time: input.end_time ?? existing.end_time,
+        p_break_minutes: input.break_minutes ?? existing.break_minutes,
+        p_color: input.color === undefined ? existing.color : input.color,
+        p_effective_from: input.effective_from ?? new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+      }),
       'Unable to update the shift template.',
+    );
+  },
+
+  async setRecurringSchedule(input: {
+    employee_id: string;
+    effective_from: string;
+    effective_to: string | null;
+    days: Array<{ weekday: number; shift_id: string | null; is_off: boolean }>;
+  }) {
+    return executeQuery(
+      getSupabaseClient().rpc('set_recurring_schedule', {
+        p_employee_id: input.employee_id,
+        p_effective_from: input.effective_from,
+        p_effective_to: input.effective_to,
+        p_rules: input.days,
+      }),
+      'Unable to save the recurring schedule.',
+    );
+  },
+
+  async resolveSchedule(employeeId: string, startDate: string, endDate: string): Promise<ResolvedScheduleRow[]> {
+    return executeQuery(
+      getSupabaseClient().rpc('resolve_employee_schedule', {
+        p_employee_id: employeeId,
+        p_start_date: startDate,
+        p_end_date: endDate,
+      }),
+      'Unable to resolve the schedule.',
     );
   },
 

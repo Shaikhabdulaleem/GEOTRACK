@@ -57,6 +57,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly Permission[]>> 
     'geofences:read:scope',
     'leave:manage:scope',
     'overtime:manage:scope',
+    'organization:manage',
   ],
   administrator: [
     'profile:read:self',

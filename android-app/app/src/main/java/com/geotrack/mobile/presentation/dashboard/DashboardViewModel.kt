@@ -150,7 +150,7 @@ class DashboardViewModel @Inject constructor(
                         val checkInTime = data.checkInAt?.let { ts ->
                             try {
                                 val t = java.time.ZonedDateTime.parse(ts)
-                                t.format(DateTimeFormatter.ofPattern("hh:mm a"))
+                                t.withZoneSameInstant(zone).format(DateTimeFormatter.ofPattern("hh:mm a"))
                             } catch(e:Exception) { ts }
                         }
                         
@@ -239,7 +239,12 @@ class DashboardViewModel @Inject constructor(
                 val syncStat = attendanceRepository.latestLocalSyncStatus(profile.id)
                 val action = if (isCheckIn) "checked in" else "checked out"
                 val suffix = if (syncStat == "PENDING_SYNC") " (Pending Sync)" else ""
-                _internalState.update { it.copy(successMessage = "Successfully $action$suffix.") }
+                _internalState.update {
+                    it.copy(
+                        isCheckingIn = false,
+                        successMessage = "Successfully $action$suffix."
+                    )
+                }
                 loadData() // reload fresh stats
             } else if (result is AppResult.Failure) {
                 if (result.error.message.contains("geofence", ignoreCase = true)) {

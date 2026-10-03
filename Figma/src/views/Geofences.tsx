@@ -34,9 +34,11 @@ import {
   Eye,
   EyeOff,
   Layers,
+  Loader2,
   MapPin,
   Plus,
   RefreshCw,
+  Search,
   Trash2,
   UserCheck,
   UserMinus,
@@ -49,10 +51,11 @@ import { useAuth } from '../auth/AuthContext';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { publicEnvironment } from '../lib/env';
 import { geofenceService, type GeofenceWithPolygon } from '../services/geofence.service';
+import { organizationService } from '../services/organization.service';
 import { employeeService } from '../services/employee.service';
 import { pointInPolygon } from '../lib/geo';
 import type { LngLat } from '../lib/geo';
-import type { EmployeeProfileRow, GeofenceStatus, CheckinMode } from '../types/database';
+import type { BranchRow, EmployeeProfileRow, GeofenceStatus, CheckinMode } from '../types/database';
 import { geofences as mockGeofences, employees as mockEmployees } from '../data/mockData';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +66,14 @@ const PALETTE = ['#2563eb', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4
 const CLOSE_RADIUS_PX = 14;
 const DEFAULT_CENTER: [number, number] = [24.688, 46.722]; // Riyadh
 const DEFAULT_ZOOM = 15;
+
+interface LocationSearchResult {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
+  boundingbox?: [string, string, string, string];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -114,25 +125,27 @@ interface SaveModalProps {
   editId: string | null;
   initialName: string;
   initialColor: string;
+  initialBranchId: string;
+  sites: Array<Pick<BranchRow, 'id' | 'name'>>;
   initialMode: CheckinMode;
   initialAccuracy: number;
   initialTimeout: number;
   saving: boolean;
   error: string;
-  onSave: (name: string, color: string, mode: CheckinMode, accuracy: number, timeout: number) => void;
+  onSave: (name: string, branchId: string, color: string, mode: CheckinMode, accuracy: number, timeout: number) => void;
   onCancel: () => void;
 }
 
 function SaveModal({
-  ring, editId, initialName, initialColor, initialMode, initialAccuracy, initialTimeout,
+  ring, editId, initialName, initialColor, initialBranchId, sites, initialMode, initialAccuracy, initialTimeout,
   saving, error, onSave, onCancel,
 }: SaveModalProps) {
   const [name, setName] = useState(initialName);
   const [color, setColor] = useState(initialColor);
+  const [branchId, setBranchId] = useState(initialBranchId || sites[0]?.id || '');
   const [mode, setMode] = useState<CheckinMode>(initialMode);
   const [accuracy, setAccuracy] = useState(String(initialAccuracy));
   const [timeout, setTimeout_] = useState(String(initialTimeout));
-  const [saved, setSaved] = useState(false);
 
   // Compute bounding box of ring for SVG preview
   const preview = useMemo(() => {
@@ -154,9 +167,8 @@ function SaveModal({
   }, [ring]);
 
   const handleSave = () => {
-    if (!name.trim()) return;
-    setSaved(true);
-    onSave(name.trim(), color, mode, Number(accuracy) || 50, Number(timeout) || 15);
+    if (!name.trim() || !branchId) return;
+    onSave(name.trim(), branchId, color, mode, Number(accuracy) || 50, Number(timeout) || 15);
   };
 
   return (
@@ -167,15 +179,7 @@ function SaveModal({
         <button onClick={onCancel} aria-label="Close geofence form" style={{ color: '#4b6a8a' }}><X size={14} /></button>
         </div>
 
-        {saved && !error ? (
-          <div className="flex flex-col items-center py-10 gap-3">
-            <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: 'rgba(16,185,129,0.15)' }}>
-              <CheckCircle size={24} style={{ color: '#10b981' }} />
-            </div>
-            <div className="text-white font-bold text-sm">{editId ? 'Geofence Updated' : 'Geofence Saved'}</div>
-          </div>
-        ) : (
-          <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4">
             {error && <ErrorBanner msg={error} />}
 
             {/* Polygon preview */}
@@ -207,6 +211,25 @@ function SaveModal({
                 onKeyDown={e => e.key === 'Enter' && handleSave()}
                 autoFocus
               />
+            </div>
+
+            {/* Site */}
+            <div>
+              <label className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>Site *</label>
+              <select
+                value={branchId}
+                onChange={event => setBranchId(event.target.value)}
+                className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+                style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
+              >
+                <option value="">Select a site</option>
+                {sites.map(site => <option key={site.id} value={site.id}>{site.name}</option>)}
+              </select>
+              {sites.length === 0 && (
+                <div className="mt-1.5 text-xs" style={{ color: '#f59e0b' }}>
+                  Create an active site in Organization Setup before saving a geofence.
+                </div>
+              )}
             </div>
 
             {/* Color picker */}
@@ -264,24 +287,23 @@ function SaveModal({
               {ring.length} vertices · {editId ? 'updating existing boundary' : 'creating new geofence'}
             </div>
 
-            {!name.trim() && (
+            {(!name.trim() || !branchId) && (
               <div className="flex items-center gap-2 text-xs" style={{ color: '#f59e0b' }}>
-                <AlertCircle size={11} /> Enter a location name to continue.
+                <AlertCircle size={11} /> Enter a location name and select a site to continue.
               </div>
             )}
 
             <div className="flex gap-2 pt-1">
               <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl text-sm"
                 style={{ background: '#122338', color: '#4b6a8a', border: '1px solid #1e3a5a' }}>Cancel</button>
-              <button onClick={handleSave} disabled={!name.trim() || saving}
+              <button onClick={handleSave} disabled={!name.trim() || !branchId || saving}
                 className="flex-1 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-opacity"
-                style={{ background: name.trim() ? 'linear-gradient(135deg,#2563eb,#1d4ed8)' : '#1e3a5a', color: '#fff', opacity: saving ? 0.7 : 1 }}>
+                style={{ background: name.trim() && branchId ? 'linear-gradient(135deg,#2563eb,#1d4ed8)' : '#1e3a5a', color: '#fff', opacity: saving ? 0.7 : 1 }}>
                 {saving ? <RefreshCw size={13} className="animate-spin" /> : null}
                 {saving ? 'Saving…' : editId ? 'Update' : 'Save Geofence'}
               </button>
             </div>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -456,9 +478,24 @@ function LeafletMap({
   const polygonsRef = useRef<Map<string, LPolygon>>(new Map());
   const drawPolygonRef = useRef<LPolygon | null>(null);
   const drawMarkersRef = useRef<LMarker[]>([]);
+  const searchMarkerRef = useRef<LMarker | null>(null);
+  const onMapClickRef = useRef(onMapClick);
+  const drawModeRef = useRef(drawMode);
   const [leafletReady, setLeafletReady] = useState(false);
+  const [locationQuery, setLocationQuery] = useState('');
+  const [locationResults, setLocationResults] = useState<LocationSearchResult[]>([]);
+  const [locationSearching, setLocationSearching] = useState(false);
+  const [locationSearchError, setLocationSearchError] = useState('');
 
   const mapboxToken = publicEnvironment.mapboxToken;
+
+  useEffect(() => {
+    onMapClickRef.current = onMapClick;
+  }, [onMapClick]);
+
+  useEffect(() => {
+    drawModeRef.current = drawMode;
+  }, [drawMode]);
 
   // ── Initialise Leaflet once ──────────────────────────────────────────────
   useLayoutEffect(() => {
@@ -502,7 +539,7 @@ function LeafletMap({
       }
 
       map.on('click', (e: { latlng: { lat: number; lng: number } }) => {
-        onMapClick([e.latlng.lng, e.latlng.lat]);
+        onMapClickRef.current([e.latlng.lng, e.latlng.lat]);
       });
 
       mapRef.current = map;
@@ -516,11 +553,78 @@ function LeafletMap({
         polygonsRef.current.clear();
         drawMarkersRef.current = [];
         drawPolygonRef.current = null;
+        searchMarkerRef.current = null;
         setLeafletReady(false);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!leafletReady || !mapRef.current) return;
+    mapRef.current.getContainer().style.cursor = drawMode && !drawClosed ? 'crosshair' : '';
+    const frame = window.requestAnimationFrame(() => mapRef.current?.invalidateSize());
+    return () => window.cancelAnimationFrame(frame);
+  }, [leafletReady, drawMode, drawClosed]);
+
+  const searchLocation = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const query = locationQuery.trim();
+    if (query.length < 3) {
+      setLocationSearchError('Enter at least 3 characters.');
+      setLocationResults([]);
+      return;
+    }
+
+    setLocationSearching(true);
+    setLocationSearchError('');
+    try {
+      const params = new URLSearchParams({ q: query, format: 'jsonv2', limit: '5', addressdetails: '1' });
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) throw new Error(`Location search failed (${response.status}).`);
+      const results = await response.json() as LocationSearchResult[];
+      setLocationResults(results.filter(result => Number.isFinite(Number(result.lat)) && Number.isFinite(Number(result.lon))));
+      if (results.length === 0) setLocationSearchError('No matching locations found.');
+    } catch (caught) {
+      setLocationResults([]);
+      setLocationSearchError(caught instanceof Error ? caught.message : 'Location search is unavailable.');
+    } finally {
+      setLocationSearching(false);
+    }
+  };
+
+  const selectLocation = async (result: LocationSearchResult) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const lat = Number(result.lat);
+    const lng = Number(result.lon);
+    const L = await import('leaflet');
+
+    if (searchMarkerRef.current) map.removeLayer(searchMarkerRef.current);
+    const icon = L.divIcon({
+      html: '<div style="width:18px;height:18px;border-radius:50% 50% 50% 0;background:#2563eb;border:3px solid #fff;transform:rotate(-45deg);box-shadow:0 2px 10px rgba(0,0,0,.45)"></div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 18],
+      className: '',
+    });
+    searchMarkerRef.current = L.marker([lat, lng], { icon, interactive: false }).addTo(map);
+
+    if (result.boundingbox?.length === 4) {
+      const [south, north, west, east] = result.boundingbox.map(Number);
+      if ([south, north, west, east].every(Number.isFinite)) {
+        map.fitBounds([[south, west], [north, east]], { padding: [50, 50], maxZoom: 18 });
+      } else {
+        map.flyTo([lat, lng], 18);
+      }
+    } else {
+      map.flyTo([lat, lng], 18);
+    }
+    setLocationQuery(result.display_name);
+    setLocationResults([]);
+    setLocationSearchError('');
+  };
 
   // ── Sync geofence polygons ───────────────────────────────────────────────
   useEffect(() => {
@@ -574,6 +678,7 @@ function LeafletMap({
           );
 
           poly.on('click', (e: { originalEvent: MouseEvent }) => {
+            if (drawModeRef.current) return;
             e.originalEvent.stopPropagation();
             onSelectGeofence(gf.id);
           });
@@ -645,6 +750,46 @@ function LeafletMap({
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', minHeight: 400 }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%', borderRadius: 'inherit' }} />
+      <div className="absolute top-3 left-14 w-[min(420px,calc(100%-7rem))]" style={{ zIndex: 1000 }}>
+        <form onSubmit={event => void searchLocation(event)} className="flex overflow-hidden rounded-lg shadow-lg" style={{ border: '1px solid #1e3a5a', background: '#0d1b2e' }}>
+          <label htmlFor="geofence-location-search" className="sr-only">Search map location</label>
+          <Search size={15} className="ml-3 self-center shrink-0" style={{ color: '#4b6a8a' }} />
+          <input
+            id="geofence-location-search"
+            value={locationQuery}
+            onChange={event => setLocationQuery(event.target.value)}
+            placeholder="Search address or place…"
+            autoComplete="off"
+            className="min-w-0 flex-1 bg-transparent px-2.5 py-2.5 text-sm outline-none"
+            style={{ color: '#f0f6ff' }}
+          />
+          <button
+            type="submit"
+            disabled={locationSearching || locationQuery.trim().length < 3}
+            className="px-3 flex items-center justify-center disabled:opacity-40"
+            style={{ color: '#93c5fd', borderLeft: '1px solid #1e3a5a' }}
+            aria-label="Search location"
+          >
+            {locationSearching ? <Loader2 size={15} className="animate-spin" /> : 'Search'}
+          </button>
+        </form>
+        {(locationResults.length > 0 || locationSearchError) && (
+          <div className="mt-1 max-h-56 overflow-y-auto rounded-lg shadow-xl" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+            {locationSearchError && <div className="px-3 py-2.5 text-xs" style={{ color: '#fca5a5' }}>{locationSearchError}</div>}
+            {locationResults.map(result => (
+              <button
+                key={result.place_id}
+                type="button"
+                onClick={() => void selectLocation(result)}
+                className="w-full px-3 py-2.5 text-left text-xs hover:bg-white/5"
+                style={{ color: '#cbd5e1', borderTop: '1px solid #152a42' }}
+              >
+                {result.display_name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       {/* Tile attribution / map type badge */}
       {leafletReady && (
         <div
@@ -782,6 +927,7 @@ export default function Geofences() {
 
   // ── Supabase state ───────────────────────────────────────────────────────
   const [sbFences, setSbFences] = useState<GeofenceWithPolygon[]>([]);
+  const [sites, setSites] = useState<BranchRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -813,15 +959,19 @@ export default function Geofences() {
     setLoading(true);
     setError('');
     try {
-      const data = await geofenceService.listWithPolygons(organizationId);
+      const [data, siteRows] = await Promise.all([
+        geofenceService.listWithPolygons(organizationId),
+        organizationService.listSites(organizationId),
+      ]);
       setSbFences(data);
-      if (!selectedId && data.length > 0) setSelectedId(data[0].id);
+      setSites(siteRows.filter(site => site.status === 'active'));
+      setSelectedId(current => current ?? data[0]?.id ?? null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load geofences.');
     } finally {
       setLoading(false);
     }
-  }, [supabaseReady, organizationId, selectedId]);
+  }, [supabaseReady, organizationId]);
 
   useEffect(() => { void loadFences(); }, [loadFences]);
 
@@ -900,7 +1050,7 @@ export default function Geofences() {
   };
 
   // ── Save / Update ────────────────────────────────────────────────────────
-  const handleSave = async (name: string, color: string, mode: CheckinMode, accuracy: number, timeout: number) => {
+  const handleSave = async (name: string, branchId: string, color: string, mode: CheckinMode, accuracy: number, timeout: number) => {
     setSaving(true);
     setSaveError('');
 
@@ -930,12 +1080,9 @@ export default function Geofences() {
     }
 
     try {
-      // Get the branch_id from an existing fence or first fence
-      const branchId = sbFences[0]?.branch_id ?? '';
-
       if (editId) {
         const updated = await geofenceService.update(editId, {
-          name, checkin_mode: mode, required_accuracy_meters: accuracy,
+          name, branch_id: branchId, color, checkin_mode: mode, required_accuracy_meters: accuracy,
           auto_checkout_timeout_minutes: timeout, ring: drawRing, updated_by: user?.id,
         });
         setSbFences(prev => prev.map(f => f.id === editId ? updated : f));
@@ -944,7 +1091,7 @@ export default function Geofences() {
         const created = await geofenceService.create({
           organization_id: organizationId,
           branch_id: branchId,
-          name, checkin_mode: mode, required_accuracy_meters: accuracy,
+          name, color, checkin_mode: mode, required_accuracy_meters: accuracy,
           auto_checkout_timeout_minutes: timeout,
           ring: drawRing, created_by: user?.id ?? null,
         });
@@ -1003,12 +1150,14 @@ export default function Geofences() {
           editId={editId}
           initialName={editId ? (fences.find(f => f.id === editId)?.name ?? '') : ''}
           initialColor={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.color ?? PALETTE[0]) : PALETTE[0]}
+          initialBranchId={supabaseReady ? (editId ? (fences.find(f => f.id === editId)?.branch_id ?? '') : (sites[0]?.id ?? '')) : 'preview'}
+          sites={supabaseReady ? sites : [{ id: 'preview', name: 'Preview site' }]}
           initialMode={checkinMode}
           initialAccuracy={Number(gpsAccuracy)}
           initialTimeout={Number(autoTimeout)}
           saving={saving}
           error={saveError}
-          onSave={(n, c, m, a, t) => void handleSave(n, c, m, a, t)}
+          onSave={(n, branchId, c, m, a, t) => void handleSave(n, branchId, c, m, a, t)}
           onCancel={() => setShowSave(false)}
         />
       )}

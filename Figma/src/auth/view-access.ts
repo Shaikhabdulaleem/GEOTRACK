@@ -33,7 +33,7 @@ export const VIEW_ROLES: Readonly<Record<ViewId, readonly AppRole[]>> = Object.f
   reports: ['administrator', 'manager'],
   notifications: ['administrator', 'manager', 'employee'],
   mobile: ['administrator', 'manager', 'employee'],
-  settings: ['administrator'],
+  settings: ['administrator', 'manager'],
 });
 
 export function canAccessView(roles: readonly AppRole[], view: ViewId): boolean {

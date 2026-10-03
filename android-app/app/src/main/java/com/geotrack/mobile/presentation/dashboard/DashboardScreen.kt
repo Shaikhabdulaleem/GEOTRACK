@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.geotrack.mobile.domain.model.TodayScheduleState
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 @Composable
 fun DashboardScreen(
@@ -37,9 +39,6 @@ fun DashboardScreen(
 
     val reqPermissions = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> }
-    val requestBackgroundLocation = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
     ) { _ -> }
 
     LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
@@ -86,7 +85,7 @@ fun DashboardScreen(
 
         // 3 & 4. Check In/Out (Am I checked in? What time?)
         if (uiState.scheduleState == TodayScheduleState.WORKING_DAY) {
-            SimpleAttendanceCard(uiState, viewModel, reqPermissions, requestBackgroundLocation, context)
+            SimpleAttendanceCard(uiState, viewModel, reqPermissions, context)
         }
 
         // 5, 6, 7, 8. Stats Grid
@@ -164,8 +163,8 @@ fun SimpleScheduleBanner(uiState: DashboardUiState) {
                     color = contentColor,
                     fontWeight = FontWeight.Bold
                 )
-                val start = uiState.shiftStartTime ?: ""
-                val end = uiState.shiftEndTime ?: ""
+                val start = uiState.shiftStartTime?.toDisplayTime().orEmpty()
+                val end = uiState.shiftEndTime?.toDisplayTime().orEmpty()
                 Text(
                     text = if (start.isNotBlank() && end.isNotBlank()) "$start to $end" else "",
                     style = MaterialTheme.typography.titleMedium,
@@ -188,12 +187,15 @@ fun SimpleScheduleBanner(uiState: DashboardUiState) {
     }
 }
 
+private fun String.toDisplayTime(): String = runCatching {
+    LocalTime.parse(take(8)).format(DateTimeFormatter.ofPattern("h:mm a"))
+}.getOrDefault(this)
+
 @Composable
 fun SimpleAttendanceCard(
     uiState: DashboardUiState, 
     viewModel: DashboardViewModel,
     reqPerms: androidx.activity.result.ActivityResultLauncher<Array<String>>,
-    requestBackgroundLocation: androidx.activity.result.ActivityResultLauncher<String>,
     context: Context
 ) {
     Card(
@@ -240,8 +242,7 @@ fun SimpleAttendanceCard(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             // Action Button
-            } else if (!uiState.hasForegroundLocation || !uiState.isGpsEnabled ||
-                (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q && !uiState.hasBackgroundLocation)) {
+            } else if (!uiState.hasForegroundLocation || !uiState.isGpsEnabled) {
                 Button(
                     onClick = {
                         if (!uiState.hasForegroundLocation) {
@@ -249,8 +250,6 @@ fun SimpleAttendanceCard(
                                 android.Manifest.permission.ACCESS_FINE_LOCATION,
                                 android.Manifest.permission.ACCESS_COARSE_LOCATION
                             ))
-                        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q && !uiState.hasBackgroundLocation) {
-                            requestBackgroundLocation.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                         } else {
                             context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
                         }
@@ -261,7 +260,6 @@ fun SimpleAttendanceCard(
                     Text(
                         when {
                             !uiState.hasForegroundLocation -> "ALLOW LOCATION TO CHECK IN"
-                            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q && !uiState.hasBackgroundLocation -> "ALLOW BACKGROUND LOCATION"
                             else -> "ENABLE GPS TO CHECK IN"
                         },
                         fontSize = 16.sp,
