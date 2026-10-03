@@ -269,6 +269,9 @@ create trigger departments_guard_deactivation before update of status on public.
 create trigger shifts_guard_deactivation before update of status on public.shifts
   for each row execute function private.guard_master_data_deactivation();
 
+revoke all on function private.guard_master_data_deactivation()
+  from public, anon, authenticated;
+
 create or replace function private.pin_assignment_shift_version()
 returns trigger
 language plpgsql
@@ -295,6 +298,9 @@ $$;
 create trigger shift_assignments_pin_version
   before insert or update of shift_id, work_date on public.shift_assignments
   for each row execute function private.pin_assignment_shift_version();
+
+revoke all on function private.pin_assignment_shift_version()
+  from public, anon, authenticated;
 
 -- Internal resolver bypasses table RLS only after one of the public entry
 -- points has authenticated and authorized the employee. It is not executable
@@ -435,7 +441,7 @@ returns table (
 )
 language plpgsql
 stable
-security invoker
+security definer
 set search_path = ''
 as $$
 declare v_org_id uuid;

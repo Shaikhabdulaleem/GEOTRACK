@@ -24,10 +24,26 @@ BEGIN
         -- This will automatically trigger private.handle_new_auth_user() to insert into public.users
         INSERT INTO auth.users (
             instance_id, id, aud, role, email, encrypted_password, 
-            email_confirmed_at, raw_user_meta_data, created_at, updated_at
+            email_confirmed_at,
+            confirmation_token,
+            recovery_token,
+            email_change_token_new,
+            email_change,
+            raw_app_meta_data,
+            raw_user_meta_data,
+            created_at,
+            updated_at
         ) VALUES (
             '00000000-0000-0000-0000-000000000000', v_new_user_id, 'authenticated', 'authenticated', v_email, v_encrypted_pass,
-            now(), jsonb_build_object('display_name', emp.full_name), now(), now()
+            now(),
+            '',
+            '',
+            '',
+            '',
+            jsonb_build_object('provider', 'email', 'providers', jsonb_build_array('email')),
+            jsonb_build_object('display_name', emp.full_name),
+            now(),
+            now()
         );
 
         -- Link auth user to employee profile
@@ -37,8 +53,13 @@ BEGIN
 
         -- Create organization membership so they can pass RLS and authenticate in the app
         INSERT INTO public.organization_memberships (organization_id, user_id, role_code, status)
-        VALUES (emp.organization_id, v_new_user_id, 'employee', 'active')
-        ON CONFLICT (organization_id, user_id) DO NOTHING;
+        SELECT emp.organization_id, v_new_user_id, 'employee', 'active'
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM public.organization_memberships membership
+            WHERE membership.organization_id = emp.organization_id
+              AND membership.user_id = v_new_user_id
+        );
 
     END LOOP;
 END $$;

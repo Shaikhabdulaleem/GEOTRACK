@@ -596,7 +596,6 @@ as $$
 declare
   v_inside boolean := false;
   v_count integer;
-  i integer;
   j integer;
   xi double precision;
   yi double precision;
@@ -645,7 +644,6 @@ declare
   v_polygon jsonb;
   v_ring jsonb;
   v_in_hole boolean;
-  v_ring_index integer;
 begin
   if p_geometry ->> 'type' <> 'MultiPolygon' then return false; end if;
   for v_polygon in select value from jsonb_array_elements(p_geometry -> 'coordinates') loop
@@ -698,6 +696,7 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+#variable_conflict use_column
 declare
   v_user_id uuid := (select auth.uid());
   v_employee public.employee_profiles%rowtype;
