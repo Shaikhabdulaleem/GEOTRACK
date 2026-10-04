@@ -112,11 +112,11 @@ fun LoginScreen(
             OutlinedTextField(
                 value = uiState.email,
                 onValueChange = viewModel::onEmailChange,
-                label = { Text("Employee ID or Iqama") },
+                label = { Text("Work email") },
                 singleLine = true,
                 enabled = !uiState.isLoading,
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Text,
+                    keyboardType = KeyboardType.Email,
                     imeAction = ImeAction.Next,
                 ),
                 keyboardActions = KeyboardActions(

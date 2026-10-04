@@ -38,6 +38,26 @@ values
   ('11000000-0000-0000-0000-000000000001', 'test', 'fixture'),
   ('21000000-0000-0000-0000-000000000001', 'test', 'fixture');
 
+do $$ begin
+  if exists (
+    select 1
+    from information_schema.role_table_grants
+    where table_schema = 'public'
+      and grantee = 'anon'
+  ) then
+    raise exception 'anon must not have public table privileges';
+  end if;
+  if exists (
+    select 1
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'private')
+      and has_function_privilege('anon', p.oid, 'execute')
+  ) then
+    raise exception 'anon must not execute application functions';
+  end if;
+end $$;
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true);
 do $$ begin
@@ -47,6 +67,12 @@ do $$ begin
   if (select count(*) from public.audit_logs) <> 1 then
     raise exception 'administrator audit scope failed';
   end if;
+  insert into public.shifts (
+    organization_id, code, name, start_time, end_time, crosses_midnight
+  ) values (
+    '11000000-0000-0000-0000-000000000001', 'RLS-ADMIN', 'Admin Shift',
+    '08:00', '16:00', false
+  );
 end $$;
 
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000002', true);
@@ -57,17 +83,67 @@ do $$ begin
   if (select count(*) from public.audit_logs) <> 0 then
     raise exception 'manager audit isolation failed';
   end if;
+  insert into public.weekly_offs (
+    organization_id, employee_id, weekday, effective_from
+  ) values (
+    '11000000-0000-0000-0000-000000000001',
+    '14000000-0000-0000-0000-000000000001',
+    5,
+    current_date
+  );
+  begin
+    insert into public.weekly_offs (
+      organization_id, employee_id, weekday, effective_from
+    ) values (
+      '11000000-0000-0000-0000-000000000001',
+      '14000000-0000-0000-0000-000000000002',
+      6,
+      current_date
+    );
+    raise exception 'manager wrote outside assigned scope';
+  exception
+    when insufficient_privilege then null;
+  end;
 end $$;
 
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000003', true);
-do $$ begin
+do $employee$
+declare
+  affected integer;
+begin
   if (select count(*) from public.employee_profiles) <> 1 then
     raise exception 'employee self scope failed';
   end if;
   if has_table_privilege('authenticated', 'public.attendance_events', 'INSERT') then
     raise exception 'direct attendance insert must remain revoked';
   end if;
-end $$;
+  update public.employee_profiles
+     set full_name = 'Unauthorized change'
+   where id = '14000000-0000-0000-0000-000000000002';
+  get diagnostics affected = row_count;
+  if affected <> 0 then
+    raise exception 'employee updated another employee profile';
+  end if;
+  begin
+    perform *
+    from public.process_attendance_event(
+      '14000000-0000-0000-0000-000000000002',
+      null,
+      'check_in',
+      false,
+      0,
+      0,
+      10,
+      false,
+      'rls-impersonation-attempt',
+      '{}'::jsonb
+    );
+    raise exception 'employee attendance impersonation was accepted';
+  exception
+    when insufficient_privilege then null;
+  end;
+end
+$employee$;
 
 select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000001', true);
 do $$ begin

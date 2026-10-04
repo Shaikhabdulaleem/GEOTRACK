@@ -13,6 +13,13 @@ export interface PasswordResetInput {
   redirectTo?: string;
 }
 
+export interface EmployeeInvitation {
+  id: string;
+  employee_id: string;
+  organization_id: string;
+  invited_at: string;
+}
+
 export const authService = {
   async signInWithPassword(input: PasswordSignInInput): Promise<Session> {
     const { data, error } = await getSupabaseClient().auth.signInWithPassword(input);
@@ -65,5 +72,13 @@ export const authService = {
   async updatePassword(password: string): Promise<void> {
     const { error } = await getSupabaseClient().auth.updateUser({ password });
     if (error) throw toAppError(error, 'Unable to update the password.');
+  },
+
+  /** Records an invitation request. Delivery and account creation happen in
+   * the trusted Auth Admin worker; the browser never receives credentials. */
+  async requestEmployeeInvitation(employeeId: string): Promise<EmployeeInvitation> {
+    const { data, error } = await getSupabaseClient().rpc('request_employee_invitation', { p_employee_id: employeeId });
+    if (error) throw toAppError(error, 'Unable to send the account invitation.');
+    return data as unknown as EmployeeInvitation;
   },
 };

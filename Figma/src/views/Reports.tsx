@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { FileText, FileSpreadsheet, FileType, CheckCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
+import { todayInTimezone } from '../lib/dates';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { reportService, type ReportFormat } from '../services/report.service';
 import { employeeService } from '../services/employee.service';
@@ -30,7 +31,7 @@ export default function Reports() {
   const supabaseReady = isSupabaseConfigured();
 
   // Filters
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayInTimezone('Asia/Riyadh');
   const [fromDate, setFromDate] = useState(today);
   const [toDate, setToDate] = useState(today);
   const [filterBranchId, setFilterBranchId] = useState('');
@@ -59,13 +60,13 @@ export default function Reports() {
         client.from('branches').select('id, name').eq('organization_id', organizationId),
         client.from('departments').select('id, name').eq('organization_id', organizationId),
         client.from('shifts').select('id, name').eq('organization_id', organizationId),
-        employeeService.list({ organizationId, pageSize: 500 })
+        employeeService.listAll({ organizationId })
       ]);
       setBranches(br.data || []);
       setDepartments(dep.data || []);
       setShifts(sh.data || []);
       
-      const emps = empData.rows || [];
+      const emps = empData || [];
       setEmployeeProfiles(emps);
       
       const mgrIds = [...new Set(emps.map(e => e.manager_user_id).filter(Boolean))] as string[];

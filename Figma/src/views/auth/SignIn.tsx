@@ -3,7 +3,6 @@ import { AlertCircle, Eye, EyeOff, Loader2, LockKeyhole, Mail, MapPin } from 'lu
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { authService } from '../../services/auth.service';
-import { getErrorMessage } from '../../lib/errors';
 import AuthLoading from './AuthLoading';
 import ConfigurationRequired from './ConfigurationRequired';
 
@@ -50,9 +49,10 @@ export default function SignIn() {
     setError('');
     try {
       await authService.signInWithPassword({ email: email.trim(), password });
-    } catch (caught) {
-      const message = getErrorMessage(caught);
-      setError(/invalid login credentials/i.test(message) ? 'The email or password is incorrect.' : message);
+    } catch {
+      // Do not disclose whether an account exists, is confirmed, or is
+      // temporarily rate-limited. Detailed diagnostics stay in server logs.
+      setError('The email or password is incorrect. Please try again later.');
       setSubmitting(false);
     }
   };

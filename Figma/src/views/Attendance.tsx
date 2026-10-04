@@ -10,6 +10,7 @@ import { overtimeService } from '../services/overtime.service';
 import { correctionService } from '../services/correction.service';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { employees as mockEmployees } from '../data/mockData';
+import { todayInTimezone } from '../lib/dates';
 import type { AttendanceRecordRow, EmployeeProfileRow, ShiftAssignmentRow, ShiftRow, OvertimeRecordRow, ManualAttendanceRequestRow } from '../types/database';
 
 const tabs = ['Today', 'Overtime', 'Corrections'];
@@ -83,18 +84,18 @@ export default function Attendance() {
     setLoading(true);
     setError('');
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = todayInTimezone('Asia/Riyadh');
       
       const [recData, empData, assignData, otData, corrData] = await Promise.all([
         attendanceService.list({ organizationId, fromDate: today, toDate: today }),
-        employeeService.list({ organizationId, pageSize: 100 }),
+        employeeService.listAll({ organizationId }),
         shiftService.listAssignments({ organization_id: organizationId, from_date: today, to_date: today }),
         overtimeService.list({ organizationId }),
         correctionService.list({ organizationId })
       ]);
       
       setRecords(recData);
-      setEmps(empData.rows);
+      setEmps(empData);
       setAssignments(assignData);
       setOvertimeRecords(otData);
       setCorrections(corrData);

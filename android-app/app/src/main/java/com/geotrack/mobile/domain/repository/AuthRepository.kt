@@ -12,5 +12,8 @@ interface AuthRepository {
     /** Authenticates with Supabase using email + password and persists the session. */
     suspend fun signIn(email: String, password: String): AppResult<AuthSession>
 
+    /** Sends a generic recovery message through Supabase Auth. */
+    suspend fun requestPasswordReset(email: String): AppResult<Unit>
+
     suspend fun signOut(): AppResult<Unit>
 }

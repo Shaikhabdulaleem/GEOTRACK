@@ -343,14 +343,14 @@ function AssignPanel({ geofenceId, organizationId, onClose }: AssignPanelProps) 
     try {
       const [rawAssignments, empResult] = await Promise.all([
         geofenceService.listAssignments(geofenceId),
-        employeeService.list({ organizationId, pageSize: 100 }),
+        employeeService.listAll({ organizationId }),
       ]);
       setAssignments(rawAssignments.map(a => ({
         id: a.id,
         employeeId: a.employee_id,
         name: (a.employee as EmployeeProfileRow | null)?.full_name ?? a.employee_id,
       })));
-      setAllEmployees(empResult.rows);
+      setAllEmployees(empResult);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load assignments.');
     } finally {

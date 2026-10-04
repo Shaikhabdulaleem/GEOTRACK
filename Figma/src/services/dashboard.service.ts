@@ -1,4 +1,6 @@
 import { getSupabaseClient } from '../lib/supabase';
+import { AppError } from '../lib/errors';
+import { logger } from '../lib/logger';
 import { shiftService } from './shift.service';
 
 export interface DashboardFilters {
@@ -17,6 +19,20 @@ export interface DashboardGeofencePoint {
   polygon: Array<[number, number]>;
   present: number;
   employees: number;
+}
+
+interface LegacyShiftAssignment {
+  employee_id: string;
+  shift_id: string | null;
+  status: string;
+  shift: { id: string; crosses_midnight: boolean } | null;
+}
+
+function isMissingScheduleResolver(error: unknown): boolean {
+  if (!(error instanceof AppError)) return false;
+  const cause = error.cause as { code?: string; message?: string } | undefined;
+  return cause?.code === 'PGRST202'
+    && cause.message?.includes('resolve_employee_schedule') === true;
 }
 
 export const dashboardService = {
@@ -111,12 +127,44 @@ export const dashboardService = {
     let dayShiftCount = 0;
     let nightShiftCount = 0;
     
-    const schedules = await Promise.all(validEmpIds.map(employeeId => shiftService.resolveSchedule(employeeId, filters.date, filters.date)));
-    schedules.flat().forEach(row => {
-      if (row.state !== 'working' || (filters.shiftId && row.shift_id !== filters.shiftId)) return;
-      if (row.crosses_midnight) nightShiftCount++;
-      else dayShiftCount++;
-    });
+    try {
+      const schedules = await Promise.all(
+        validEmpIds.map(employeeId => shiftService.resolveSchedule(employeeId, filters.date, filters.date)),
+      );
+      schedules.flat().forEach(row => {
+        if (row.state !== 'working' || (filters.shiftId && row.shift_id !== filters.shiftId)) return;
+        if (row.crosses_midnight) nightShiftCount++;
+        else dayShiftCount++;
+      });
+    } catch (error) {
+      if (!isMissingScheduleResolver(error)) throw error;
+
+      // Compatibility path for deployments where the recurring-schedule
+      // migration has not reached the database yet. Explicit assignments are
+      // still useful dashboard data, and one missing RPC must not blank every
+      // KPI on the page.
+      logger.warn('Schedule resolver is unavailable; using explicit shift assignments for dashboard counts.', {
+        error,
+      });
+      const assignments: LegacyShiftAssignment[] = [];
+      for (let i = 0; i < validEmpIds.length; i += batchSize) {
+        const batchIds = validEmpIds.slice(i, i + batchSize);
+        const { data, error: assignmentError } = await client
+          .from('shift_assignments')
+          .select('employee_id, shift_id, status, shift:shifts(id, crosses_midnight)')
+          .eq('organization_id', organizationId)
+          .eq('work_date', filters.date)
+          .eq('status', 'scheduled')
+          .in('employee_id', batchIds);
+        if (assignmentError) throw assignmentError;
+        assignments.push(...((data ?? []) as unknown as LegacyShiftAssignment[]));
+      }
+      assignments.forEach(assignment => {
+        if (!assignment.shift || (filters.shiftId && assignment.shift_id !== filters.shiftId)) return;
+        if (assignment.shift.crosses_midnight) nightShiftCount++;
+        else dayShiftCount++;
+      });
+    }
     
     // Pending Approvals (Overtime + Manual)
     const [otReqs, manualReqs] = await Promise.all([

@@ -2,6 +2,7 @@ import { getSupabaseClient } from '../lib/supabase';
 import { executeQuery } from './database.service';
 import { AppError } from '../lib/errors';
 import type { BranchRow, DepartmentRow, EmployeeProfileRow, EmploymentStatus, RecurringScheduleRow, RecurringScheduleRuleRow, ShiftAssignmentRow, ShiftRow, TablesInsert, TablesUpdate, UserRow } from '../types/database';
+import { todayInTimezone } from '../lib/dates';
 
 export interface EmployeeListQuery {
   organizationId: string;
@@ -56,6 +57,21 @@ export const employeeService = {
     return { rows: result.data ?? [], count: result.count ?? 0 };
   },
 
+  /** Fetches every matching row in bounded pages. Callers that aggregate
+   * workforce data must use this instead of requesting an oversized page,
+   * which PostgREST caps silently. */
+  async listAll(input: Omit<EmployeeListQuery, 'page' | 'pageSize'> & { pageSize?: number }): Promise<EmployeeProfileRow[]> {
+    const pageSize = Math.min(100, Math.max(1, input.pageSize ?? 100));
+    const rows: EmployeeProfileRow[] = [];
+    let page = 1;
+    while (true) {
+      const result = await this.list({ ...input, page, pageSize });
+      rows.push(...result.rows);
+      if (rows.length >= result.count || result.rows.length === 0) return rows;
+      page += 1;
+    }
+  },
+
   async getById(employeeId: string): Promise<EmployeeProfileRow> {
     return executeQuery(
       getSupabaseClient().from('employee_profiles').select('*').eq('id', employeeId).single(),
@@ -89,7 +105,7 @@ export const employeeService = {
         organization_id: input.organization_id,
         employee_id: input.employee_id,
         shift_id: input.shift_id,
-        work_date: input.work_date ?? new Date().toISOString().slice(0, 10),
+        work_date: input.work_date ?? todayInTimezone('Asia/Riyadh'),
         status: 'scheduled',
         source: 'manual',
       } as TablesInsert<'shift_assignments'>, { onConflict: 'employee_id,work_date' }).select('*').single(),

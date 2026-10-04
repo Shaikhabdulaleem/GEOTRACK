@@ -5,6 +5,7 @@ import Avatar from '../components/Avatar';
 import { getSupabaseClient } from '../lib/supabase';
 import { useAuth } from '../auth/AuthContext';
 import { toAppError } from '../lib/errors';
+import { todayInTimezone } from '../lib/dates';
 
 const filters = ['All', 'Present', 'Late', 'Absent', 'Missing', 'Inside Geofence', 'Outside Geofence'];
 
@@ -33,7 +34,7 @@ export default function LiveAttendance() {
         
       if (pError) throw pError;
       
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayInTimezone('Asia/Riyadh');
       
       const { data: records, error: rError } = await client
         .from('attendance_records')

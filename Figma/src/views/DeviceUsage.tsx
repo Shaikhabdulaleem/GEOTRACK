@@ -32,12 +32,12 @@ export default function DeviceUsage() {
         year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(new Date());
       const [profilesResult, usage, weekly] = await Promise.all([
-        employeeService.list({ organizationId: activeMembership.organization_id, pageSize: 100 }),
+        employeeService.listAll({ organizationId: activeMembership.organization_id }),
         deviceService.getDashboardUsage(activeMembership.organization_id, workDate),
         deviceService.getWeeklyAverages(activeMembership.organization_id, workDate),
       ]);
       const usageByEmployee = new Map(usage.map(row => [row.employee_id, row]));
-      const mapped = profilesResult.rows.map(p => {
+      const mapped = profilesResult.map(p => {
         const row = usageByEmployee.get(p.id);
         const workedMinutes = row?.worked_minutes ?? 0;
         return {

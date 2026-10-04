@@ -6,6 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 import Avatar from '../components/Avatar';
 import { employees, sessionStore, getSessions, leaveStore } from '../data/mockData';
 import { useAuth } from '../auth/AuthContext';
+import { todayInTimezone } from '../lib/dates';
 import { productivityService } from '../services/productivity.service';
 import { attendanceService } from '../services/attendance.service';
 import { employeeService } from '../services/employee.service';
@@ -306,7 +307,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const supabaseReady = isSupabaseConfigured();
 
   // Filters
-  const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
+  const [filterDate, setFilterDate] = useState(todayInTimezone('Asia/Riyadh'));
   const [filterBranchId, setFilterBranchId] = useState('');
   const [filterDeptId, setFilterDeptId] = useState('');
   const [filterShiftId, setFilterShiftId] = useState('');
@@ -333,13 +334,13 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
       const { dashboardService } = await import('../services/dashboard.service');
       const [lookups, empData] = await Promise.all([
         dashboardService.getLookups(organizationId),
-        employeeService.list({ organizationId, pageSize: 500 }) // Needed for ranking names anyway
+        employeeService.listAll({ organizationId })
       ]);
       setBranches(lookups.branches);
       setDepartments(lookups.departments);
       setShifts(lookups.shifts);
       
-      const emps = empData.rows || [];
+      const emps = empData || [];
       setEmployeeProfiles(emps);
       
       // Extract unique managers
@@ -371,6 +372,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
     if (!supabaseReady || !organizationId) return;
     const loadData = async () => {
       setLoading(true);
+      setError(null);
       try {
         const { dashboardService } = await import('../services/dashboard.service');
         const { deviceService } = await import('../services/device.service');

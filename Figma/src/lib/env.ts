@@ -82,6 +82,10 @@ if (appEnv !== 'development' && appMode === 'demo') {
   throw new Error('Demo mode cannot be enabled in staging or production.');
 }
 
+if (appEnv !== 'development' && (!supabaseUrl || !supabasePublishableKey)) {
+  throw new Error('Supabase must be configured outside local development; mock data is disabled.');
+}
+
 export const publicEnvironment: Readonly<PublicEnvironment> = Object.freeze({
   supabaseUrl,
   supabasePublishableKey,

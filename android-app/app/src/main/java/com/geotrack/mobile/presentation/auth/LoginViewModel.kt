@@ -99,7 +99,7 @@ class LoginViewModel @Inject constructor(
                 }
                 is AppResult.Failure -> {
                     _uiState.update {
-                        it.copy(isLoading = false, errorMessage = result.error.message)
+                        it.copy(isLoading = false, errorMessage = "The email or password is incorrect. Please try again later.")
                     }
                 }
             }

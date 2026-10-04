@@ -1,7 +1,11 @@
 package com.geotrack.mobile.presentation.home
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Home
@@ -11,6 +15,7 @@ import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Notifications
@@ -19,11 +24,15 @@ import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,7 +63,7 @@ private enum class HomeTab(
 ) {
     DASHBOARD(
         route = "home/dashboard",
-        label = "Dashboard",
+        label = "Home",
         selectedIcon = Icons.Filled.Home,
         unselectedIcon = Icons.Outlined.Home,
     ),
@@ -66,7 +75,7 @@ private enum class HomeTab(
     ),
     NOTIFICATIONS(
         route = "home/notifications",
-        label = "Notifications",
+        label = "Alerts",
         selectedIcon = Icons.Filled.Notifications,
         unselectedIcon = Icons.Outlined.Notifications,
     ),
@@ -100,6 +109,12 @@ private enum class HomeTab(
         selectedIcon = Icons.Filled.Person,
         unselectedIcon = Icons.Outlined.Person,
     ),
+    MORE(
+        route = "home/more",
+        label = "More",
+        selectedIcon = Icons.Filled.MoreHoriz,
+        unselectedIcon = Icons.Outlined.MoreHoriz,
+    ),
 }
 
 /**
@@ -119,12 +134,10 @@ fun HomeScreen(
     onSignOut: () -> Unit,
 ) {
     val innerNavController = rememberNavController()
-    val tabs = HomeTab.entries.filter {
-        when (role) {
-            AppRole.EMPLOYEE -> it != HomeTab.TEAM
-            AppRole.MANAGER -> it == HomeTab.DASHBOARD || it == HomeTab.TEAM || it == HomeTab.NOTIFICATIONS || it == HomeTab.PROFILE
-            AppRole.ADMINISTRATOR -> it == HomeTab.DASHBOARD || it == HomeTab.NOTIFICATIONS || it == HomeTab.PROFILE
-        }
+    val tabs = when (role) {
+        AppRole.EMPLOYEE -> listOf(HomeTab.DASHBOARD, HomeTab.SCHEDULE, HomeTab.NOTIFICATIONS, HomeTab.MORE)
+        AppRole.MANAGER -> listOf(HomeTab.DASHBOARD, HomeTab.TEAM, HomeTab.NOTIFICATIONS, HomeTab.PROFILE)
+        AppRole.ADMINISTRATOR -> listOf(HomeTab.DASHBOARD, HomeTab.NOTIFICATIONS, HomeTab.PROFILE)
     }
 
     Scaffold(
@@ -139,8 +152,18 @@ fun HomeScreen(
                 val currentDestination = navBackStackEntry?.destination
 
                 tabs.forEach { tab ->
-                    val selected = currentDestination?.hierarchy
-                        ?.any { it.route == tab.route } == true
+                    val currentRoute = currentDestination?.route
+                    val selected = if (tab == HomeTab.MORE) {
+                        currentRoute in setOf(
+                            HomeTab.MORE.route,
+                            HomeTab.OVERTIME.route,
+                            HomeTab.PRODUCTIVITY.route,
+                            HomeTab.PHONE_USAGE.route,
+                            HomeTab.PROFILE.route,
+                        )
+                    } else {
+                        currentDestination?.hierarchy?.any { it.route == tab.route } == true
+                    }
 
                     NavigationBarItem(
                         selected = selected,
@@ -181,6 +204,48 @@ fun HomeScreen(
             composable(HomeTab.PHONE_USAGE.route) { if (role == AppRole.EMPLOYEE) PhoneUsageScreen() }
             composable(HomeTab.TEAM.route) { if (role == AppRole.MANAGER) ManagerHomeScreen(detailed = true) }
             composable(HomeTab.PROFILE.route) { ProfileScreen(onSignOut = onSignOut) }
+            composable(HomeTab.MORE.route) {
+                EmployeeMoreScreen(
+                    onNavigate = { route -> innerNavController.navigate(route) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmployeeMoreScreen(onNavigate: (String) -> Unit) {
+    val destinations = listOf(
+        Triple("Overtime", HomeTab.OVERTIME, Icons.Outlined.Timer),
+        Triple("Productivity", HomeTab.PRODUCTIVITY, Icons.Outlined.TrendingUp),
+        Triple("Phone Usage", HomeTab.PHONE_USAGE, Icons.Outlined.Smartphone),
+        Triple("Profile & Sign Out", HomeTab.PROFILE, Icons.Outlined.Person),
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = "More",
+            style = androidx.compose.material3.MaterialTheme.typography.headlineMedium,
+        )
+        Text(
+            text = "Attendance insights and account settings",
+            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Card(modifier = Modifier.fillMaxWidth()) {
+            destinations.forEachIndexed { index, (label, destination, icon) ->
+                ListItem(
+                    headlineContent = { Text(label) },
+                    leadingContent = { Icon(icon, contentDescription = null) },
+                    modifier = Modifier.clickable { onNavigate(destination.route) },
+                )
+                if (index < destinations.lastIndex) HorizontalDivider()
+            }
         }
     }
 }

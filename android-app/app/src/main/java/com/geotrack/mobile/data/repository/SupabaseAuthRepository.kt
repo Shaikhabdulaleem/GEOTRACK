@@ -12,9 +12,6 @@ import io.github.jan.supabase.auth.status.RefreshFailureCause
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.exceptions.RestException
 import io.github.jan.supabase.postgrest.postgrest
-import io.github.jan.supabase.postgrest.rpc
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -115,21 +112,8 @@ class SupabaseAuthRepository @Inject constructor(
         return try {
             val client = requireNotNull(clientHolder.client)
             
-            // Try to resolve the Employee ID or Iqama into a valid email
-            val resolvedEmail = try {
-                client.postgrest.rpc(
-                    "resolve_login_email",
-                    buildJsonObject { put("p_identifier", email.trim()) }
-                ).data.trim('"')
-            } catch (e: Exception) {
-                // Fallback to exactly what the user typed (if it's already an email)
-                email.trim()
-            }
-            
-            val targetEmail = if (resolvedEmail.isNotBlank() && resolvedEmail != "null") resolvedEmail else email.trim()
-
             client.auth.signInWith(Email) {
-                this.email = targetEmail
+                this.email = email.trim().lowercase()
                 this.password = password
             }
             val sbSession = client.auth.currentSessionOrNull()
@@ -144,17 +128,22 @@ class SupabaseAuthRepository @Inject constructor(
         } catch (e: RestException) {
             AppResult.Failure(
                 AppError.Unauthorized(
-                    when {
-                        e.message?.contains("Invalid login credentials", ignoreCase = true) == true ->
-                            "Invalid email or password."
-                        e.message?.contains("Email not confirmed", ignoreCase = true) == true ->
-                            "Please confirm your email address before signing in."
-                        else -> e.message ?: "Sign in failed."
-                    },
+                    "The email or password is incorrect. Please try again later if the problem persists.",
                 ),
             )
         } catch (e: Exception) {
             AppResult.Failure(AppError.Network(e.message ?: "Network error.", e))
+        }
+    }
+
+    override suspend fun requestPasswordReset(email: String): AppResult<Unit> {
+        if (!clientHolder.config.isConfigured) return AppResult.Failure(AppError.Configuration("Supabase is not configured."))
+        return try {
+            requireNotNull(clientHolder.client).auth.resetPasswordForEmail(email.trim().lowercase())
+            AppResult.Success(Unit)
+        } catch (e: Exception) {
+            // Keep account existence private and present one generic outcome.
+            AppResult.Success(Unit)
         }
     }
 

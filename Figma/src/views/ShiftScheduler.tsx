@@ -463,14 +463,14 @@ export default function ShiftScheduler() {
     setError('');
     try {
       const [empResult, shiftList, rawAssignments, offs, summary] = await Promise.all([
-        employeeService.list({ organizationId, pageSize: 100 }),
+        employeeService.listAll({ organizationId }),
         shiftService.listShifts(organizationId),
         shiftService.listAssignments({ organization_id: organizationId, from_date: fromDate, to_date: toDate }),
         shiftService.listWeeklyOffs(organizationId),
         shiftService.getWeeklySummary({ organization_id: organizationId, from_date: fromDate, to_date: toDate }),
       ]);
 
-      setEmployees(empResult.rows);
+      setEmployees(empResult);
       setShifts(shiftList);
       setAssignments(rawAssignments);
       setSummaries(summary);

@@ -43,14 +43,14 @@ export default function Productivity() {
 
       const [prodData, empData, assignData] = await Promise.all([
         productivityService.list({ organizationId, fromDate: fromIso, toDate: toIso }),
-        employeeService.list({ organizationId, pageSize: 200 }),
+        employeeService.listAll({ organizationId }),
         shiftService.listAssignments({ organization_id: organizationId, from_date: fromIso, to_date: toIso })
       ]);
 
       setRecords(prodData);
       
       const empMap: Record<string, EmployeeProfileRow> = {};
-      empData.rows.forEach(e => empMap[e.id] = e);
+      empData.forEach(e => empMap[e.id] = e);
       setEmps(empMap);
 
       const assignMap: Record<string, ShiftAssignmentRow> = {};

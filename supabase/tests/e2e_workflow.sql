@@ -28,15 +28,6 @@ BEGIN
     (v_empC, 'empC@test.local', '{"name":"Emp C"}'),
     (v_empD, 'empD@test.local', '{"name":"Emp D"}');
 
-  INSERT INTO public.users (id, display_name, email)
-  VALUES 
-    (v_admin, 'Admin', 'admin@test.local'),
-    (v_manager, 'Manager', 'manager@test.local'),
-    (v_empA, 'Emp A', 'empA@test.local'),
-    (v_empB, 'Emp B', 'empB@test.local'),
-    (v_empC, 'Emp C', 'empC@test.local'),
-    (v_empD, 'Emp D', 'empD@test.local');
-
   INSERT INTO public.organizations (name, slug, timezone)
   VALUES ('Test Org', 'test-org-e2e', 'UTC')
   RETURNING id INTO v_org;
@@ -58,12 +49,15 @@ BEGIN
   VALUES (v_org, v_branch, 'D1', 'Test Dept')
   RETURNING id INTO v_dept;
 
-  INSERT INTO public.employee_profiles (id, user_id, organization_id, branch_id, department_id, employee_code, manager_user_id)
+  INSERT INTO public.employee_profiles (
+    id, user_id, organization_id, branch_id, department_id, employee_code,
+    iqama_number, full_name, manager_user_id
+  )
   VALUES 
-    (v_empA, v_empA, v_org, v_branch, v_dept, 'E01', v_manager),
-    (v_empB, v_empB, v_org, v_branch, v_dept, 'E02', v_manager),
-    (v_empC, v_empC, v_org, v_branch, v_dept, 'E03', v_manager),
-    (v_empD, v_empD, v_org, v_branch, v_dept, 'E04', v_manager);
+    (v_empA, v_empA, v_org, v_branch, v_dept, 'E01', '9000000001', 'Emp A', v_manager),
+    (v_empB, v_empB, v_org, v_branch, v_dept, 'E02', '9000000002', 'Emp B', v_manager),
+    (v_empC, v_empC, v_org, v_branch, v_dept, 'E03', '9000000003', 'Emp C', v_manager),
+    (v_empD, v_empD, v_org, v_branch, v_dept, 'E04', '9000000004', 'Emp D', v_manager);
 
   INSERT INTO public.manager_scopes (organization_id, manager_user_id, department_id)
   VALUES (v_org, v_manager, v_dept);
@@ -88,21 +82,31 @@ BEGIN
   INSERT INTO public.weekly_offs (organization_id, employee_id, weekday, effective_from)
   VALUES (v_org, v_empC, extract(dow from current_date)::integer, current_date - interval '1 day');
 
-  INSERT INTO public.leave_requests (organization_id, employee_id, leave_type, start_date, end_date, status)
-  VALUES (v_org, v_empD, 'annual', current_date, current_date, 'approved');
+  INSERT INTO public.leave_requests (
+    organization_id, employee_id, leave_type, from_date, to_date, days,
+    reason, status, requested_by, reviewed_by, reviewed_at
+  )
+  VALUES (
+    v_org, v_empD, 'annual', current_date, current_date, 1,
+    'E2E fixture', 'approved', v_empD, v_manager, clock_timestamp()
+  );
 
-  INSERT INTO public.geofences (organization_id, name, required_accuracy_meters, status)
-  VALUES (v_org, 'Test Geofence', 100, 'active')
+  INSERT INTO public.geofences (
+    organization_id, branch_id, name, required_accuracy_meters, status, created_by
+  )
+  VALUES (v_org, v_branch, 'Test Geofence', 100, 'active', v_admin)
   RETURNING id INTO v_geofence;
 
   INSERT INTO public.geofence_polygons (geofence_id, version_number, polygon, is_active)
   VALUES (v_geofence, 1, '{"type": "MultiPolygon", "coordinates": [[[[ -10, -10 ], [ 10, -10 ], [ 10, 10 ], [ -10, 10 ], [ -10, -10 ]]]]}', true);
 
-  INSERT INTO public.geofence_assignments (organization_id, geofence_id, employee_id)
+  INSERT INTO public.geofence_assignments (
+    organization_id, geofence_id, employee_id, effective_from
+  )
   VALUES 
-    (v_org, v_geofence, v_empA),
-    (v_org, v_geofence, v_empB),
-    (v_org, v_geofence, v_empC);
+    (v_org, v_geofence, v_empA, current_date),
+    (v_org, v_geofence, v_empB, current_date),
+    (v_org, v_geofence, v_empC, current_date);
 
   ---------------------------------------------------------
   -- Emp A: Day Shift Test (09:00 - 17:00)
@@ -146,8 +150,9 @@ BEGIN
     RAISE EXCEPTION 'Manager cannot read Emp A records! RLS failed!';
   end if;
 
-  RAISE EXCEPTION 'Test completed successfully! Rolling back.';
+  RAISE NOTICE 'E2E workflow assertions completed successfully.';
 END;
 $test$;
 
+RESET ROLE;
 ROLLBACK;
