@@ -172,10 +172,21 @@ function SaveModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(6,13,26,0.9)' }}>
-      <div className="rounded-2xl w-96" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+    <div
+      className="fixed inset-0 z-[2000] flex items-center justify-center overflow-y-auto p-4"
+      style={{ background: 'rgba(6,13,26,0.9)' }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="geofence-save-dialog-title"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-y-auto overscroll-contain rounded-2xl"
+        style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}
+      >
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #1e3a5a' }}>
-          <div className="font-semibold text-sm text-white">{editId ? 'Update Geofence' : 'Save New Geofence'}</div>
+          <div id="geofence-save-dialog-title" className="font-semibold text-sm text-white">
+            {editId ? 'Update Geofence' : 'Save New Geofence'}
+          </div>
         <button onClick={onCancel} aria-label="Close geofence form" style={{ color: '#4b6a8a' }}><X size={14} /></button>
         </div>
 
