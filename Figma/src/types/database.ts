@@ -559,8 +559,8 @@ export interface Database {
     Views: Record<string, never>;
     Functions: {
       request_employee_invitation: {
-        Args: { p_employee_id: string };
-        Returns: { id: string; organization_id: string; employee_id: string; invited_by: string; invited_at: string; accepted_at: string | null; revoked_at: string | null };
+        Args: { p_employee_id: string; p_email: string };
+        Returns: { id: string; organization_id: string; employee_id: string; invited_by: string; invited_at: string; requested_email: string | null; auth_user_id: string | null; status: string; accepted_at: string | null; revoked_at: string | null };
       };
       resolve_employee_schedule: {
         Args: { p_employee_id: string; p_start_date: string; p_end_date: string };
