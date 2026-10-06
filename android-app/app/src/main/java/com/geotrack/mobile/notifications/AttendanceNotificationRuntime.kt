@@ -3,7 +3,9 @@ package com.geotrack.mobile.notifications
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -41,7 +43,41 @@ object AttendanceChannels {
 
 @Singleton
 class AttendanceNotificationPoster @Inject constructor(@ApplicationContext private val context: Context) {
-    fun post(n: AttendanceNotification) { if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return; AttendanceChannels.create(context); val channel = if (n.type in setOf(AttendanceNotificationType.ATTENDANCE_RECORDED, AttendanceNotificationType.OUTSIDE_GEOFENCE)) AttendanceChannels.STATUS else if (n.type in setOf(AttendanceNotificationType.SHIFT_CHANGED, AttendanceNotificationType.WEEKLY_OFF_CHANGED)) AttendanceChannels.SCHEDULE else AttendanceChannels.REMINDERS; NotificationManagerCompat.from(context).notify((n.id ?: n.type.name).hashCode(), NotificationCompat.Builder(context, channel).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(n.title).setContentText(n.body).setAutoCancel(true).build()) }
+    fun post(n: AttendanceNotification) { if (android.os.Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return; AttendanceChannels.create(context); val channel = if (n.type in setOf(AttendanceNotificationType.ATTENDANCE_RECORDED, AttendanceNotificationType.OUTSIDE_GEOFENCE)) AttendanceChannels.STATUS else if (n.type in setOf(AttendanceNotificationType.SHIFT_CHANGED, AttendanceNotificationType.WEEKLY_OFF_CHANGED)) AttendanceChannels.SCHEDULE else AttendanceChannels.REMINDERS; val notificationId = (n.id ?: n.type.name).hashCode(); NotificationManagerCompat.from(context).notify(notificationId, NotificationCompat.Builder(context, channel).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(n.title).setContentText(n.body).setContentIntent(launchIntent(notificationId)).setAutoCancel(true).build()) }
+
+    // Tapping a reminder must open the app so the employee can mark attendance.
+    private fun launchIntent(requestCode: Int): PendingIntent? {
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        } ?: return null
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getActivity(context, requestCode, launch, flags)
+    }
+
+    fun postTest(type: AttendanceNotificationType) {
+        val notification = when (type) {
+            AttendanceNotificationType.NOT_CHECKED_IN -> AttendanceNotification(
+                id = "test-not-checked-in-${System.currentTimeMillis()}",
+                type = type,
+                title = "Attendance reminder (test)",
+                body = "You have not checked in. Open GeoTrack and mark your attendance now.",
+            )
+            AttendanceNotificationType.MISSED_ATTENDANCE -> AttendanceNotification(
+                id = "test-missed-attendance-${System.currentTimeMillis()}",
+                type = type,
+                title = "Missed attendance (test)",
+                body = "No attendance was recorded for your shift. Open GeoTrack to review it and submit a correction if needed.",
+            )
+            AttendanceNotificationType.SHIFT_CHANGED -> AttendanceNotification(
+                id = "test-shift-changed-${System.currentTimeMillis()}",
+                type = type,
+                title = "Shift changed (test)",
+                body = "Your shift has changed. Open GeoTrack to review your updated schedule.",
+            )
+            else -> return
+        }
+        post(notification)
+    }
 }
 
 @Singleton

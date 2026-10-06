@@ -18,6 +18,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import com.geotrack.mobile.BuildConfig
+import com.geotrack.mobile.notifications.AttendanceNotificationType
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -51,10 +53,36 @@ fun PhoneUsageScreen(viewModel: PhoneUsageViewModel = hiltViewModel()) {
             }
             item { Text("Today's Usage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
             item { state.today?.let { UsageCard(it) } ?: Text("No data for today's scheduled shift.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            if (BuildConfig.DEBUG) {
+                item { NotificationTestCard(onTest = viewModel::testNotification) }
+            }
             item { Text("Recent Usage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
             if (state.history.isEmpty()) item { Text("No usage data available.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             items(state.history, key = { it.date.toString() }) { UsageCard(it) }
             state.errorMessage?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
+        }
+    }
+}
+
+@Composable
+private fun NotificationTestCard(onTest: (AttendanceNotificationType) -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Notification Test", fontWeight = FontWeight.Bold)
+            Text(
+                "Debug build only. Each button posts a real device notification without changing attendance or schedule data.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = { onTest(AttendanceNotificationType.NOT_CHECKED_IN) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Test Mark Attendance Reminder")
+            }
+            OutlinedButton(onClick = { onTest(AttendanceNotificationType.MISSED_ATTENDANCE) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Test Missed Attendance")
+            }
+            OutlinedButton(onClick = { onTest(AttendanceNotificationType.SHIFT_CHANGED) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Test Shift Change")
+            }
         }
     }
 }

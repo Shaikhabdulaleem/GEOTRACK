@@ -8,6 +8,8 @@ import com.geotrack.mobile.domain.model.PhoneUsageSummary
 import com.geotrack.mobile.domain.repository.PhoneUsageRepository
 import com.geotrack.mobile.domain.repository.SessionRepository
 import com.geotrack.mobile.phoneusage.PhoneUsageReader
+import com.geotrack.mobile.notifications.AttendanceNotificationPoster
+import com.geotrack.mobile.notifications.AttendanceNotificationType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import java.time.ZoneId
@@ -32,6 +34,7 @@ class PhoneUsageViewModel @Inject constructor(
     private val sessions: SessionRepository,
     private val repository: PhoneUsageRepository,
     private val reader: PhoneUsageReader,
+    private val notificationPoster: AttendanceNotificationPoster,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PhoneUsageUiState())
     val uiState: StateFlow<PhoneUsageUiState> = _uiState.asStateFlow()
@@ -57,4 +60,6 @@ class PhoneUsageViewModel @Inject constructor(
     }
 
     fun usageAccessIntent() = reader.usageAccessSettingsIntent()
+
+    fun testNotification(type: AttendanceNotificationType) = notificationPoster.postTest(type)
 }
