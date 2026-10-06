@@ -1,15 +1,35 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.2';
 import { importPKCS8, SignJWT } from 'npm:jose@6.1.0';
 
-const allowedOrigins = new Set([
-  'https://geotrack-fieldtrack-ksa.vercel.app',
-  'http://localhost:5173',
-]);
+// Allow the app's own origins. The Vercel project is served from several hosts
+// that all begin with "geotrack" and end in ".vercel.app" — the production
+// alias (geotrack-fieldtrack-ksa.vercel.app), the branch deployment the admins
+// actually use (geotrack-git-main-fieldtrack-ksa.vercel.app), and per-commit
+// previews — plus a custom domain and local dev. Extra origins can be added via
+// the ALLOWED_ORIGINS secret (comma-separated) without a code change.
+const staticAllowedOrigins = new Set(
+  [
+    'https://geotrack-fieldtrack-ksa.vercel.app',
+    'https://geotrack-git-main-fieldtrack-ksa.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:8443',
+    ...(Deno.env.get('ALLOWED_ORIGINS')?.split(',') ?? []),
+  ]
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0),
+);
+
+// Any GeoTrack Vercel host (production alias, git-branch build, or preview).
+const geotrackVercelOrigin = /^https:\/\/geotrack[a-z0-9-]*\.vercel\.app$/;
+
+function isAllowedOrigin(origin: string | null): origin is string {
+  return !!origin && (staticAllowedOrigins.has(origin) || geotrackVercelOrigin.test(origin));
+}
 
 function corsHeaders(request: Request): Record<string, string> {
   const origin = request.headers.get('origin');
   return {
-    ...(origin && allowedOrigins.has(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}),
+    ...(isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}),
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
   };
