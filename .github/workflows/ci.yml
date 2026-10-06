@@ -28,6 +28,33 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
 
+  database:
+    name: Database migrations & SQL tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local Supabase stack (applies all migrations)
+        run: supabase start -x studio,realtime,storage-api,imgproxy,inbucket,edge-runtime,logflare,vector,pgbouncer
+      - name: Run transactional SQL tests (each rolls back)
+        env:
+          # Stable default for the local Supabase Postgres container.
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          set -euo pipefail
+          for t in supabase/tests/rls_smoke.sql \
+                   supabase/tests/recurring_schedule_resolver.sql \
+                   supabase/tests/e2e_workflow.sql; do
+            echo "::group::$t"
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$t"
+            echo "::endgroup::"
+          done
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup || true
+
   android:
     name: Android checks
     runs-on: ubuntu-latest

@@ -63,6 +63,14 @@ revoked or inactive, audit/security logs [period], and rejected/offline events
 [period]. Data must be deleted or irreversibly anonymized when no longer
 needed, subject to legal holds and statutory recordkeeping.
 
+The system enforces data minimization automatically (`private.enforce_data_retention`,
+run daily via pg_cron): precise coordinates, accuracy and raw device details are
+irreversibly redacted from attendance audit events after 180 days while the
+validation outcome is retained; notifications and phone-usage summaries are
+purged after 365 days. Confirm these windows match the controller-approved
+schedule above and adjust the function arguments if legal/HR require different
+periods.
+
 ## Employee choices and rights
 
 Employees may ask the privacy contact for access, correction, a copy of their
