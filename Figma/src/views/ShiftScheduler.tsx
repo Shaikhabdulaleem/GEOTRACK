@@ -32,7 +32,7 @@ import {
   type ShiftSummary,
 } from '../services/shift.service';
 import { employeeService } from '../services/employee.service';
-import type { ShiftRow, ShiftAssignmentRow, EmployeeProfileRow } from '../types/database';
+import type { ShiftRow, ShiftAssignmentRow, EmployeeProfileRow, ResolvedScheduleRow } from '../types/database';
 import { scheduleData } from '../data/mockData';
 import { ShiftEditorModal as ShiftModal } from '../components/ShiftEditorModal';
 
@@ -430,6 +430,10 @@ export default function ShiftScheduler() {
   const [shifts, setShifts] = useState<ShiftRow[]>(MOCK_SHIFTS);
   const [employees, setEmployees] = useState<EmployeeProfileRow[]>([]);
   const [assignments, setAssignments] = useState<ShiftAssignmentRow[]>([]);
+  // Resolved schedule (recurring patterns, weekly offs, holidays, leave) keyed by
+  // `${employeeId}_${workDate}`. Used to display shifts that come from a recurring
+  // pattern rather than a dated shift_assignments row, which the grid alone misses.
+  const [resolvedSchedule, setResolvedSchedule] = useState<Record<string, ResolvedScheduleRow>>({});
   const [weeklyOffs, setWeeklyOffs] = useState<Record<string, number[]>>({});
   const [summaries, setSummaries] = useState<ShiftSummary[]>([]);
   const [conflicts, setConflicts] = useState<ConflictResult[]>([]);
@@ -474,6 +478,20 @@ export default function ShiftScheduler() {
       setShifts(shiftList);
       setAssignments(rawAssignments);
       setSummaries(summary);
+
+      // Resolve each employee's effective schedule for the week so the grid can
+      // show shifts that come from a recurring pattern (no dated assignment row).
+      const resolvedEntries = await Promise.all(
+        empResult.map(async emp => {
+          try {
+            const rows = await shiftService.resolveSchedule(emp.id, fromDate, toDate);
+            return rows.map(r => [`${emp.id}_${r.work_date}`, r] as const);
+          } catch {
+            return [] as (readonly [string, ResolvedScheduleRow])[];
+          }
+        }),
+      );
+      setResolvedSchedule(Object.fromEntries(resolvedEntries.flat()));
 
       // Build weeklyOffs map: employeeId → weekday[]
       const offMap: Record<string, number[]> = {};
@@ -522,7 +540,19 @@ export default function ShiftScheduler() {
   const getCellDisplay = useCallback(
     (employeeId: string, workDate: string): { label: string; abbr: string; c: ReturnType<typeof shiftBadgeColor>; shiftId: string | null; status: 'scheduled' | 'off' | 'leave' | 'cancelled' } => {
       const a = getAssignment(employeeId, workDate);
-      if (!a || a.status === 'off') return { label: 'OFF', abbr: '—', c: SHIFT_COLORS.OFF, shiftId: null, status: 'off' };
+      // No dated assignment: fall back to the resolved recurring schedule so
+      // recurring-pattern shifts (and their off/leave/holiday days) still show.
+      if (!a) {
+        const r = resolvedSchedule[`${employeeId}_${workDate}`];
+        if (r && r.state === 'working' && r.shift_id) {
+          const abbr = r.crosses_midnight ? 'N' : 'D';
+          const c = r.crosses_midnight ? SHIFT_COLORS.Night : SHIFT_COLORS.Day;
+          return { label: r.shift_name ?? 'Scheduled', abbr, c, shiftId: r.shift_id, status: 'scheduled' };
+        }
+        if (r && r.state === 'leave') return { label: 'Leave', abbr: 'L', c: SHIFT_COLORS.Leave, shiftId: null, status: 'leave' };
+        return { label: 'OFF', abbr: '—', c: SHIFT_COLORS.OFF, shiftId: null, status: 'off' };
+      }
+      if (a.status === 'off') return { label: 'OFF', abbr: '—', c: SHIFT_COLORS.OFF, shiftId: null, status: 'off' };
       if (a.status === 'leave') return { label: 'Leave', abbr: 'L', c: SHIFT_COLORS.Leave, shiftId: null, status: 'leave' };
       if (a.status === 'cancelled') return { label: 'Cancelled', abbr: '✕', c: SHIFT_COLORS.OFF, shiftId: null, status: 'cancelled' };
       const shift = getShift(a.shift_id);
@@ -531,7 +561,7 @@ export default function ShiftScheduler() {
       const abbr = shift.crosses_midnight ? 'N' : 'D';
       return { label: shift.name, abbr, c, shiftId: a.shift_id, status: 'scheduled' };
     },
-    [getAssignment, getShift],
+    [getAssignment, getShift, resolvedSchedule],
   );
 
   // ── Mock cycle (no Supabase) ─────────────────

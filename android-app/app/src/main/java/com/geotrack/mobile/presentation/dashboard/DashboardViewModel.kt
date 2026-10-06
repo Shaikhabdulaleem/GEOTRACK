@@ -12,6 +12,7 @@ import com.geotrack.mobile.notifications.NotificationCoordinator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
@@ -120,25 +121,51 @@ class DashboardViewModel @Inject constructor(
             
             val zone = runCatching { ZoneId.of(ctx.organization.timezone) }.getOrDefault(ZoneId.of("UTC"))
             val today = LocalDate.now(zone)
-            
+            val yesterday = today.minusDays(1)
+            val nowTime = LocalTime.now(zone)
+
             val schedResult = scheduleRepository.getTodaySchedule(ctx.organization.id, profile.id, today)
-            val attResult = attendanceRepository.getAttendanceForDate(ctx.organization.id, profile.id, today)
-            
+
+            // A night shift that began yesterday and crosses midnight is still the
+            // active shift in the early-morning hours, so after midnight it — not
+            // today's not-yet-started shift — is what the employee must check in
+            // against. The server applies the same rule in process_attendance_event.
+            val yesterdayActive = runCatching {
+                (scheduleRepository.getScheduleWindow(ctx.organization.id, profile.id, yesterday, yesterday)
+                    as? AppResult.Success)?.value?.firstOrNull()
+            }.getOrNull()?.takeIf { y ->
+                y.state == TodayScheduleState.WORKING_DAY && y.crossesMidnight &&
+                    y.endTime?.let { et -> runCatching { nowTime <= LocalTime.parse(et) }.getOrDefault(false) } == true
+            }
+
+            val activeShift = yesterdayActive ?: (schedResult as? AppResult.Success)?.value?.today
+            val attendanceDate = activeShift?.date ?: today
+            val attResult = attendanceRepository.getAttendanceForDate(ctx.organization.id, profile.id, attendanceDate)
+
             _internalState.update { current ->
                 var newState = current.copy(isLoading = false)
-                
+
+                if (activeShift != null) {
+                    newState = newState.copy(
+                        scheduleState = activeShift.state,
+                        shiftName = activeShift.shiftName,
+                        shiftStartTime = activeShift.startTime,
+                        shiftEndTime = activeShift.endTime,
+                        reason = activeShift.reason,
+                        // Allow attendance whenever a real shift is scheduled for the
+                        // active working day. Recurring schedules carry no dated
+                        // shiftAssignmentId, so gate on shiftId (the server creates the
+                        // dated assignment on first check-in for recurring shifts).
+                        isAttendanceAllowed = activeShift.state == TodayScheduleState.WORKING_DAY && activeShift.shiftId != null
+                    )
+                }
+
                 if (schedResult is AppResult.Success) {
                     val data = schedResult.value
                     newState = newState.copy(
-                        scheduleState = data.today.state,
-                        shiftName = data.today.shiftName,
-                        shiftStartTime = data.today.startTime,
-                        shiftEndTime = data.today.endTime,
-                        reason = data.today.reason,
                         nextWorkingDate = data.nextWorkingDay?.date?.toString(),
                         nextShiftName = data.nextWorkingDay?.shiftName,
                         nextOffDate = data.nextOffDay?.date?.toString(),
-                        isAttendanceAllowed = data.today.state == TodayScheduleState.WORKING_DAY && data.today.shiftAssignmentId != null
                     )
                 }
                 
