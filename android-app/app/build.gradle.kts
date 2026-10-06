@@ -68,7 +68,11 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("release")
-            isMinifyEnabled = false
+            // Obfuscate and shrink the production build. Keep rules live in
+            // proguard-rules.pro; validate a signed release on a device after
+            // dependency changes (serialization/reflection are R8-sensitive).
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

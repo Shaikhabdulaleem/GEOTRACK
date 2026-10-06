@@ -47,7 +47,7 @@ BEGIN
     RAISE EXCEPTION 'A valid work email is required' USING errcode = '22023';
   END IF;
   INSERT INTO public.employee_account_invitations (organization_id, employee_id, invited_by, requested_email)
-  SELECT e.organization_id, e.id, auth.uid()
+  SELECT e.organization_id, e.id, auth.uid(), lower(btrim(p_email))
   FROM public.employee_profiles e
   WHERE e.id = p_employee_id AND e.user_id IS NULL
   RETURNING * INTO v_row;
