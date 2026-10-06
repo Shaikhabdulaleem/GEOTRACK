@@ -95,6 +95,7 @@ export const geofenceService = {
       .from('geofences')
       .select('*')
       .eq('organization_id', organizationId)
+      .neq('status', 'archived')
       .order('name');
     if (fencesErr) throw fencesErr;
     const fences = (fencesData ?? []) as GeofenceRow[];
