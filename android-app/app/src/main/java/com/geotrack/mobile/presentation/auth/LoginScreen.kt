@@ -108,15 +108,15 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(48.dp))
 
-            // ── Email ──────────────────────────────────────────────────────
+            // ── Employee ID / Iqama ──────────────────────────────────────────
             OutlinedTextField(
-                value = uiState.email,
-                onValueChange = viewModel::onEmailChange,
-                label = { Text("Work email") },
+                value = uiState.identifier,
+                onValueChange = viewModel::onIdentifierChange,
+                label = { Text("Employee ID or Iqama number") },
                 singleLine = true,
                 enabled = !uiState.isLoading,
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Email,
+                    keyboardType = KeyboardType.Text,
                     imeAction = ImeAction.Next,
                 ),
                 keyboardActions = KeyboardActions(

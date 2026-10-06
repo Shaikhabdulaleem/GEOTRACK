@@ -7,6 +7,12 @@ project_id = "GEOTRACK"
 [functions.provision-employee]
 verify_jwt = true
 
+# Pre-authentication endpoint: employees sign in with Employee ID / Iqama.
+# It resolves the identifier to an account server-side and returns a session
+# only on valid credentials, so it must be callable without a JWT.
+[functions.employee-login]
+verify_jwt = false
+
 [api]
 enabled = true
 # Port to use for the API URL.

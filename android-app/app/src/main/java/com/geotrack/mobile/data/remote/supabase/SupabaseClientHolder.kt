@@ -4,6 +4,7 @@ import com.geotrack.mobile.core.config.SupabaseConfig
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.functions.Functions
 import io.github.jan.supabase.postgrest.Postgrest
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,6 +27,9 @@ class SupabaseClientHolder @Inject constructor(
                 alwaysAutoRefresh = true
             }
             install(Postgrest)
+            // Used to call the employee-login Edge Function, which signs in
+            // employees by Employee ID / Iqama (no mailbox required).
+            install(Functions)
         }
     } else {
         null

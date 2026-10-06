@@ -57,18 +57,26 @@ run-time IANA-timezone check, apostrophe-escaping guidance). To use it:
 
 ---
 
-## 3. Employee onboarding workflow — **[YOU]** (document & communicate)
+## 3. Employee onboarding & login workflow — **[CODE: done]** / **[YOU]**
 
-Current flow is two-surface and must be written down for field/mailroom staff:
-1. Admin provisions an employee (sends an email invitation via the Edge Function).
-2. Employee opens the **web** app link, sets a password.
-3. Employee logs into the **Android** app with work email + password.
+Employees sign in on Android with their **Employee ID or Iqama number** +
+password — field/mailroom staff have no mailbox, so email login does not apply
+to them. This is handled by the `employee-login` Edge Function (deployed,
+verify_jwt=false), which resolves the identifier to the account server-side and
+returns a session only on valid credentials (it never exposes the account email
+and is not an enumeration oracle). Admins/managers still use the **web** console
+with email + password.
 
-- Password reset from Android also routes to the web app (`/reset-password`).
-- Optional improvement: add an Android deep link to `additional_redirect_urls`
-  so invites/resets can complete in-app. Not required for launch.
-- Confirm SendGrid deliverability (SPF/DKIM) and that the raised email rate
-  limit covers your onboarding batch size.
+**[YOU]** — remaining for employee accounts:
+- New employees still get an auth account via the `provision-employee` flow. For
+  staff without a real mailbox, set each employee's initial password via the
+  Auth admin API (or dashboard) and distribute it securely; the employee then
+  logs in by ID/Iqama. The synthetic `@geotrack.app` email is only an internal
+  account key.
+- The existing 9 seeded accounts already carry seeded passwords — reset each to
+  a strong per-employee password before launch (see §6 below).
+- Build & device-test the Android app after this change (new Functions plugin +
+  session import) — see the verification note in the deploy summary.
 
 ---
 
