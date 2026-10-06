@@ -243,6 +243,75 @@ export const dashboardService = {
     };
   },
 
+  /**
+   * Real per-employee attendance for the dashboard "Live Attendance" widget.
+   * Replaces the previous hardcoded "everyone present" placeholder: each row
+   * reflects the employee's actual status, check-in time and shift for the date.
+   */
+  async getLiveAttendance(organizationId: string, filters: DashboardFilters) {
+    const client = getSupabaseClient();
+
+    let empQuery = client
+      .from('employee_profiles')
+      .select('id, full_name, department_id, employment_status')
+      .eq('organization_id', organizationId);
+    if (filters.branchId) empQuery = empQuery.eq('branch_id', filters.branchId);
+    if (filters.departmentId) empQuery = empQuery.eq('department_id', filters.departmentId);
+    if (filters.managerId) empQuery = empQuery.eq('manager_user_id', filters.managerId);
+    if (filters.employeeId) empQuery = empQuery.eq('id', filters.employeeId);
+
+    const { data: emps, error: empErr } = await empQuery;
+    if (empErr) throw empErr;
+    const active = (emps || []).filter(e => e.employment_status === 'active');
+    const ids = active.map(e => e.id);
+    if (ids.length === 0) return [] as Array<Record<string, unknown>>;
+
+    const [{ data: depts }, { data: records }, { data: assignments }] = await Promise.all([
+      client.from('departments').select('id, name').eq('organization_id', organizationId),
+      client.from('attendance_records')
+        .select('employee_id, status, check_in_at, check_out_at, geofence_validated')
+        .eq('organization_id', organizationId)
+        .eq('attendance_date', filters.date)
+        .in('employee_id', ids),
+      client.from('shift_assignments')
+        .select('employee_id, shift_id, shift:shifts(name, crosses_midnight)')
+        .eq('organization_id', organizationId)
+        .eq('work_date', filters.date)
+        .in('employee_id', ids),
+    ]);
+
+    const deptMap = new Map((depts || []).map((d: { id: string; name: string }) => [d.id, d.name]));
+    const recMap = new Map((records || []).map((r: { employee_id: string }) => [r.employee_id, r]));
+    const shiftMap = new Map(
+      (assignments || []).map((a: { employee_id: string; shift_id: string | null; shift: { name: string; crosses_midnight: boolean } | null }) => [a.employee_id, a]),
+    );
+
+    const rows = active.map(e => {
+      const r = recMap.get(e.id) as { status?: string; check_in_at?: string | null; check_out_at?: string | null; geofence_validated?: boolean } | undefined;
+      const a = shiftMap.get(e.id) as { shift_id: string | null; shift: unknown } | undefined;
+      // PostgREST embeds a to-one relation as an object, but can surface as an array.
+      const shiftObj = Array.isArray(a?.shift) ? a?.shift[0] : a?.shift;
+      const crossesMidnight = (shiftObj as { crosses_midnight?: boolean } | undefined)?.crosses_midnight;
+      const shiftLabel = shiftObj ? (crossesMidnight ? 'Night' : 'Day') : null;
+      return {
+        id: e.id,
+        name: e.full_name,
+        dept: deptMap.get(e.department_id) || '—',
+        shift: shiftLabel,
+        shiftId: a?.shift_id ?? null,
+        checkInAt: r?.check_in_at ?? null,
+        attendance: r?.status ?? 'absent',
+        inside: Boolean(r && r.check_in_at && !r.check_out_at && r.geofence_validated),
+        location: '',
+      };
+    });
+
+    const filtered = filters.shiftId ? rows.filter(row => row.shiftId === filters.shiftId) : rows;
+    // Checked-in employees first, so the widget surfaces who is actually working.
+    const rank = (s: string) => (s === 'present' || s === 'late' ? 0 : s === 'absent' ? 2 : 1);
+    return filtered.sort((x, y) => rank(x.attendance) - rank(y.attendance));
+  },
+
   async getLookups(organizationId: string) {
     const client = getSupabaseClient();
     const [br, dep, sh] = await Promise.all([

@@ -49,16 +49,19 @@ class NotificationsViewModel @Inject constructor(
         viewModelScope.launch {
             val userId = auth.session.first()?.userId
             if (userId != null) {
-                try {
+                // Best-effort refresh of server notifications into the local cache.
+                runCatching {
                     val client = holder.client ?: error("offline")
                     val remote = client.postgrest["notifications"].select {
                         filter { eq("recipient_user_id", userId) }
                     }.decodeList<ServerNotificationDto>()
-                    _items.value = remote
                     database.workforceCacheDao().upsertNotifications(remote.map { CachedNotificationEntity(it.id, userId, it.title, it.body, it.notificationType, it.readAt, it.createdAt, System.currentTimeMillis()) })
-                } catch (_: Exception) {
-                    _items.value = database.workforceCacheDao().notifications(userId).map { ServerNotificationDto(it.notificationId, it.notificationType, it.title, it.body, it.createdAt, it.readAt) }
                 }
+                // Present the unified cache so on-device reminders and server
+                // notifications appear together, newest first, online or offline.
+                _items.value = database.workforceCacheDao().notifications(userId)
+                    .map { ServerNotificationDto(it.notificationId, it.notificationType, it.title, it.body, it.createdAt, it.readAt) }
+                    .sortedByDescending { it.createdAt }
             }
             _loading.value = false
         }

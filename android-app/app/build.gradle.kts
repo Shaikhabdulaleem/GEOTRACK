@@ -68,7 +68,11 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("release")
-            isMinifyEnabled = false
+            // Obfuscate and shrink the production build. Keep rules live in
+            // proguard-rules.pro; validate a signed release on a device after
+            // dependency changes (serialization/reflection are R8-sensitive).
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -124,6 +128,7 @@ dependencies {
     implementation(platform("io.github.jan-tennert.supabase:bom:3.1.4"))
     implementation("io.github.jan-tennert.supabase:auth-kt")
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
+    implementation("io.github.jan-tennert.supabase:functions-kt")
     implementation("io.ktor:ktor-client-okhttp:3.1.3")
 
     implementation("androidx.room:room-runtime:2.7.2")
@@ -138,6 +143,8 @@ dependencies {
     kapt("androidx.hilt:hilt-compiler:1.2.0")
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-messaging")
+
+    testImplementation("junit:junit:4.13.2")
 }
 
 kapt {

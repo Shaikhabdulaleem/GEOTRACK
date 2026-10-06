@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class LoginUiState(
-    val email: String = "",
+    val identifier: String = "",
     val password: String = "",
     val passwordVisible: Boolean = false,
     val isLoading: Boolean = false,
@@ -45,8 +45,8 @@ class LoginViewModel @Inject constructor(
     private val _navigateToUnauthorized = Channel<Unit>(capacity = Channel.BUFFERED)
     val navigateToUnauthorized = _navigateToUnauthorized.receiveAsFlow()
 
-    fun onEmailChange(value: String) {
-        _uiState.update { it.copy(email = value, errorMessage = null) }
+    fun onIdentifierChange(value: String) {
+        _uiState.update { it.copy(identifier = value, errorMessage = null) }
     }
 
     fun onPasswordChange(value: String) {
@@ -59,8 +59,8 @@ class LoginViewModel @Inject constructor(
 
     fun signIn() {
         val state = _uiState.value
-        if (state.email.isBlank()) {
-            _uiState.update { it.copy(errorMessage = "Email address is required.") }
+        if (state.identifier.isBlank()) {
+            _uiState.update { it.copy(errorMessage = "Employee ID or Iqama number is required.") }
             return
         }
         if (state.password.isEmpty()) {
@@ -71,7 +71,7 @@ class LoginViewModel @Inject constructor(
         _uiState.update { it.copy(isLoading = true, errorMessage = null) }
 
         viewModelScope.launch {
-            when (val result = authRepository.signIn(state.email, state.password)) {
+            when (val result = authRepository.signInWithIdentifier(state.identifier, state.password)) {
                 is AppResult.Success -> {
                     when (val contextResult = sessionRepository.loadContext(result.value.userId)) {
                         is AppResult.Success -> {
@@ -99,7 +99,7 @@ class LoginViewModel @Inject constructor(
                 }
                 is AppResult.Failure -> {
                     _uiState.update {
-                        it.copy(isLoading = false, errorMessage = "The email or password is incorrect. Please try again later.")
+                        it.copy(isLoading = false, errorMessage = "The employee ID/iqama number or password is incorrect. Please try again later.")
                     }
                 }
             }

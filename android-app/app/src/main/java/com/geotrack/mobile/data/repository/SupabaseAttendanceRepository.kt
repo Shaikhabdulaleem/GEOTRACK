@@ -16,6 +16,8 @@ import java.time.LocalDate
 import java.util.UUID
 import java.time.Instant
 import android.content.Context
+import android.provider.Settings
+import java.security.MessageDigest
 import com.geotrack.mobile.location.OfflineAttendanceSyncScheduler
 import com.geotrack.mobile.location.hasNetworkConnection
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -32,6 +34,19 @@ class SupabaseAttendanceRepository @Inject constructor(
     private val database: GeoTrackDatabase,
     @ApplicationContext private val appContext: Context,
 ) : AttendanceRepository {
+
+    /**
+     * Stable, privacy-preserving device identifier for anti-fraud device
+     * binding: SHA-256 of the app-scoped ANDROID_ID (survives app reinstall on
+     * the same device, unlike a random UUID). The server stores only this hash.
+     */
+    @Suppress("HardwareIds")
+    private fun deviceHash(): String {
+        val androidId = Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
+            ?: "unknown"
+        val digest = MessageDigest.getInstance("SHA-256").digest("geotrack-device:$androidId".toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }
+    }
 
     override suspend fun latestLocalSyncStatus(employeeId: String): String? =
         database.offlineAttendanceDao().forEmployee(employeeId).firstOrNull()?.syncStatus
@@ -155,15 +170,19 @@ class SupabaseAttendanceRepository @Inject constructor(
                 p_accuracy_meters = accuracyMeters,
                 p_is_mock_location = isMock,
                 p_idempotency_key = localEventId.toString(),
-                p_device_info = buildJsonObject { 
+                p_device_info = buildJsonObject {
                     put("platform", "android")
-                }
+                },
+                p_device_hash = deviceHash()
             )
             
             val response = client.postgrest.rpc("process_attendance_event", args).decodeList<ProcessAttendanceResponse>()
             val first = response.firstOrNull()
                 ?: return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Network("Attendance server returned no validation result"))
             
+            if (first?.status == "device_blocked") {
+                 return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("This device isn't registered for your account. Ask your administrator to reset your device."))
+            }
             if (first?.status == "rejected" || first?.status == "error" || first?.status == "failed") {
                  return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown(first.validation_status))
             }
@@ -180,6 +199,8 @@ class SupabaseAttendanceRepository @Inject constructor(
             val msg = e.message ?: "Unknown"
             if (msg.contains("Already checked in")) {
                 AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("Already checked in today."))
+            } else if (msg.contains("not registered for your account")) {
+                AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("This device isn't registered for your account. Ask your administrator to reset your device."))
             } else if (msg.contains("low_accuracy")) {
                 AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("Location accuracy is too low. Please try again."))
             } else {

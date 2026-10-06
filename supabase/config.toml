@@ -4,6 +4,15 @@
 # working directory name when running `supabase init`.
 project_id = "GEOTRACK"
 
+[functions.provision-employee]
+verify_jwt = true
+
+# Pre-authentication endpoint: employees sign in with Employee ID / Iqama.
+# It resolves the identifier to an account server-side and returns a session
+# only on valid credentials, so it must be callable without a JWT.
+[functions.employee-login]
+verify_jwt = false
+
 [api]
 enabled = true
 # Port to use for the API URL.
@@ -175,7 +184,10 @@ enable_refresh_token_rotation = true
 # Requires enable_refresh_token_rotation = true.
 refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
-enable_signup = true
+# GEOTRACK is invite-only: employee accounts are created exclusively through the
+# trusted provision-employee Edge Function (Auth Admin inviteUserByEmail). Public
+# self-signup is disabled so no one can register an account outside provisioning.
+enable_signup = false
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
@@ -198,7 +210,10 @@ password_requirements = "lower_upper_letters_digits_symbols"
 
 [auth.rate_limit]
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
-email_sent = 2
+# Raised from 2 so bulk employee onboarding (invitations) and password resets are
+# not throttled. Tune to your headcount and SendGrid plan; also confirm the hosted
+# project's Auth rate limits in the Supabase dashboard, which this file does not push.
+email_sent = 100
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
 sms_sent = 30
 # Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
@@ -220,7 +235,9 @@ web3 = 30
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
-enable_signup = true
+# Invite-only (see [auth].enable_signup). Invitations and password resets use the
+# Auth Admin API and still work with public email signup disabled.
+enable_signup = false
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true

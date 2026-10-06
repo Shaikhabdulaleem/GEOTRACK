@@ -327,6 +327,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const [metrics, setMetrics] = useState<any>(null);
   const [prodMetrics, setProdMetrics] = useState<any>(null);
   const [phoneUsage, setPhoneUsage] = useState<Array<any>>([]);
+  const [liveAttendance, setLiveAttendance] = useState<Array<any>>([]);
 
   useEffect(() => {
     if (!supabaseReady || !organizationId) return;
@@ -354,18 +355,20 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
     initLookups();
   }, [supabaseReady, organizationId]);
 
-  // Provide filteredEmps fallback for the mock UI maps below
-  const filteredEmps = supabaseReady ? employeeProfiles.map(e => ({
+  // Real per-employee live attendance (status, check-in time, shift, geofence).
+  const filteredEmps = supabaseReady ? liveAttendance.map(e => ({
     id: e.id,
-    name: e.full_name,
-    status: 'Present',
-    phone: 45,
-    dept: 'Operations',
-    shift: 'Day',
-    attendance: 'present',
-    location: 'Riyadh',
-    checkin: '09:00 AM',
-    inside: true
+    name: e.name,
+    status: e.attendance === 'late' ? 'Late' : e.attendance === 'present' ? 'Present' : e.attendance === 'absent' ? 'Absent' : 'Missing',
+    phone: 0,
+    dept: e.dept,
+    shift: e.shift,
+    attendance: e.attendance,
+    location: e.location ?? '',
+    checkin: e.checkInAt
+      ? new Date(e.checkInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Riyadh' })
+      : null,
+    inside: e.inside
   })) : [];
 
   useEffect(() => {
@@ -386,15 +389,17 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
           employeeId: filterEmployeeId || undefined
         };
 
-        const [dashData, prodData, phoneData] = await Promise.all([
+        const [dashData, prodData, phoneData, liveData] = await Promise.all([
           dashboardService.getMetrics(organizationId, filters),
           productivityService.getDashboardMetrics(organizationId, filterDate, filterDate),
-          deviceService.getDashboardUsage(organizationId, filterDate)
+          deviceService.getDashboardUsage(organizationId, filterDate),
+          dashboardService.getLiveAttendance(organizationId, filters)
         ]);
-        
+
         setMetrics(dashData);
         setProdMetrics(prodData);
         setPhoneUsage(phoneData);
+        setLiveAttendance(liveData);
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : 'Failed to load dashboard data.');
         logger.error('Unable to load dashboard data.', err);
@@ -538,7 +543,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
       {/* KPI Row 1 */}
       <div className="grid grid-cols-5 gap-3">
         <KpiCard title="Total Staff" value={totalStaff} sub="Registered employees" icon={Users} color="#3b82f6" />
-        <KpiCard title="Present / Working" value={currentlyWorking} sub={`${totalStaff ? Math.round(present/totalStaff*100) : 0}% attendance rate`} icon={UserCheck} color="#10b981" trend={2} />
+        <KpiCard title="Present / Working" value={currentlyWorking} sub={`${totalStaff ? Math.round(present/totalStaff*100) : 0}% attendance rate`} icon={UserCheck} color="#10b981" />
         <KpiCard title="Absent" value={absent} sub="Missing check-in" icon={UserX} color="#ef4444" />
         <KpiCard title="Late Arrivals" value={late} sub="Employees arrived late" icon={Clock} color="#f59e0b" />
         <KpiCard title="OT Hours" value={`${totalOvertimeHours}h`} sub="System Calculated OT" icon={Timer} color="#8b5cf6" />
@@ -567,7 +572,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
                 <Avatar name={emp.name} />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-medium text-white truncate">{emp.name}</div>
-                  <div className="text-xs" style={{ color: '#4b6a8a' }}>{emp.dept} · {emp.shift} Shift</div>
+                  <div className="text-xs" style={{ color: '#4b6a8a' }}>{emp.dept}{emp.shift ? ` · ${emp.shift} Shift` : ''}</div>
                 </div>
                 <div className="text-xs font-mono" style={{ color: '#94a3b8' }}>{emp.checkin ?? '—'}</div>
                 <StatusBadge status={emp.attendance} />

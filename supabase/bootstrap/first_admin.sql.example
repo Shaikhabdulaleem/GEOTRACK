@@ -1,15 +1,22 @@
 -- Run this once in the Supabase SQL Editor after creating the Auth user.
 -- Replace all four angle-bracket placeholders before running it.
 -- This creates only the production organization and its first admin membership.
+--
+-- Placeholder notes:
+--   v_user_id_text : the auth.users UUID of the admin you created in Supabase Auth.
+--   v_org_name     : display name. If it contains an apostrophe, double it ('' )
+--                    e.g. 'Acme''s Org' — a single ' will break the SQL literal.
+--   v_org_slug     : lowercase kebab-case (e.g. 'acme-ksa'), NOT the project ref.
+--   v_timezone     : a valid IANA timezone (e.g. 'Asia/Riyadh'), NOT an AWS region.
 
 begin;
 
 do $$
 declare
-  v_user_id_text text := '<1b484410-aa14-4305-bd11-5d015f010485>';
-  v_org_name text := '<Shaikhabdulaleem's Org>';
-  v_org_slug text := '<gaixauomldxecknkkejl>';
-  v_timezone text := '<ap-south-1>';
+  v_user_id_text text := '<00000000-0000-0000-0000-000000000000>';
+  v_org_name text := '<Your Organization Name>';
+  v_org_slug text := '<your-org-slug>';
+  v_timezone text := '<Asia/Riyadh>';
   v_user_id uuid;
   v_organization_id uuid;
 begin
@@ -28,6 +35,10 @@ begin
 
   if v_org_slug !~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' then
     raise exception 'Organization slug must be lowercase kebab-case';
+  end if;
+
+  if not exists (select 1 from pg_timezone_names where name = v_timezone) then
+    raise exception 'Timezone % is not a valid IANA timezone (use e.g. Asia/Riyadh, not an AWS region)', v_timezone;
   end if;
 
   if exists (

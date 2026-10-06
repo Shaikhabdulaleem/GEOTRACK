@@ -8,6 +8,8 @@ import com.geotrack.mobile.data.remote.dto.PushTokenParams
 import com.geotrack.mobile.data.remote.dto.ServerNotificationDto
 import com.geotrack.mobile.data.remote.dto.AttendanceRecordDto
 import com.geotrack.mobile.data.remote.supabase.SupabaseClientHolder
+import com.geotrack.mobile.database.CachedNotificationEntity
+import com.geotrack.mobile.database.GeoTrackDatabase
 import com.geotrack.mobile.domain.repository.ScheduleRepository
 import com.geotrack.mobile.domain.repository.SessionRepository
 import com.geotrack.mobile.domain.model.TodayScheduleState
@@ -30,6 +32,7 @@ class SupabaseAttendanceNotificationRepository @Inject constructor(
     private val holder: SupabaseClientHolder,
     private val sessions: SessionRepository,
     private val schedules: ScheduleRepository,
+    private val database: GeoTrackDatabase,
     @ApplicationContext context: Context,
 ) : AttendanceNotificationRepository {
     private val prefs = context.getSharedPreferences("notification-install", Context.MODE_PRIVATE)
@@ -54,6 +57,7 @@ class SupabaseAttendanceNotificationRepository @Inject constructor(
                 out += ScheduledNotification(AttendanceNotificationType.NOT_CHECKED_IN, today, start.plusMinutes(15).toInstant())
                 out += ScheduledNotification(AttendanceNotificationType.SHIFT_ENDING, today, end.minusMinutes(30).toInstant())
                 out += ScheduledNotification(AttendanceNotificationType.FORGOT_CHECKOUT, today, end.plusMinutes(15).toInstant())
+                out += ScheduledNotification(AttendanceNotificationType.MISSED_ATTENDANCE, today, end.plusMinutes(15).toInstant())
             }
         }
         val tomorrow = list.firstOrNull { it.date == today.plusDays(1) }
@@ -77,21 +81,45 @@ class SupabaseAttendanceNotificationRepository @Inject constructor(
       return try {
         val identity = identity() ?: return AppResult.Success(null); val (context, employee) = identity
         val schedule = schedules.getScheduleWindow(context.organization.id, employee.id, workDate, workDate).let { (it as? AppResult.Success)?.value?.firstOrNull() }
-        if (type in setOf(AttendanceNotificationType.SHIFT_START, AttendanceNotificationType.NOT_CHECKED_IN, AttendanceNotificationType.SHIFT_ENDING, AttendanceNotificationType.FORGOT_CHECKOUT) && !schedule.isAssignedWorkingShift()) return AppResult.Success(null)
+        if (type in setOf(AttendanceNotificationType.SHIFT_START, AttendanceNotificationType.NOT_CHECKED_IN, AttendanceNotificationType.MISSED_ATTENDANCE, AttendanceNotificationType.SHIFT_ENDING, AttendanceNotificationType.FORGOT_CHECKOUT) && !schedule.isAssignedWorkingShift()) return AppResult.Success(null)
         if (type == AttendanceNotificationType.TOMORROW_WORKING && !schedule.isAssignedWorkingShift()) return AppResult.Success(null)
         if (type == AttendanceNotificationType.TOMORROW_OFF && schedule?.state !in setOf(TodayScheduleState.OFF_DAY, TodayScheduleState.HOLIDAY, TodayScheduleState.LEAVE)) return AppResult.Success(null)
-        val attendance = if (type in setOf(AttendanceNotificationType.NOT_CHECKED_IN, AttendanceNotificationType.SHIFT_ENDING, AttendanceNotificationType.FORGOT_CHECKOUT)) hasAttendance(employee.id, workDate) else null
-        val value = when (type) {
-            AttendanceNotificationType.SHIFT_START -> "Your shift starts at ${format(schedule!!.startTime!!)}."
-            AttendanceNotificationType.NOT_CHECKED_IN -> if (attendance?.checkInAt == null) "You have not checked in." else null
-            AttendanceNotificationType.SHIFT_ENDING -> if (attendance?.checkInAt != null && attendance.checkOutAt == null) "Your shift ends in 30 minutes." else null
-            AttendanceNotificationType.FORGOT_CHECKOUT -> if (attendance?.checkInAt != null && attendance.checkOutAt == null) "You forgot to check out." else null
-            AttendanceNotificationType.TOMORROW_OFF -> "Tomorrow is your scheduled off day."
-            AttendanceNotificationType.TOMORROW_WORKING -> "You are working tomorrow: ${schedule?.shiftName ?: "Scheduled shift"} ${formatCompactTime(schedule?.startTime)} – ${formatCompactTime(schedule?.endTime)}."
-            else -> null
-        }
-        AppResult.Success(value?.let { AttendanceNotification(type = type, title = "GeoTrack", body = it) })
+        val attendance = if (type in setOf(AttendanceNotificationType.NOT_CHECKED_IN, AttendanceNotificationType.MISSED_ATTENDANCE, AttendanceNotificationType.SHIFT_ENDING, AttendanceNotificationType.FORGOT_CHECKOUT)) hasAttendance(employee.id, workDate) else null
+        val content = AttendanceReminderContent.resolve(
+            type = type,
+            shiftStart = schedule?.startTime?.let(::format),
+            shiftEnd = schedule?.endTime?.let(::format),
+            shiftName = schedule?.shiftName,
+            checkedIn = attendance?.checkInAt != null,
+            checkedOut = attendance?.checkOutAt != null,
+        )
+        val notification = content?.let { AttendanceNotification(id = "local-${type.name}-$workDate", type = type, title = it.title, body = it.body) }
+        notification?.let { persistLocal(it) }
+        AppResult.Success(notification)
       } catch (e: Exception) { failure(e) }
+    }
+
+    // On-device reminders are posted as system notifications; mirror them into
+    // the local cache so they also appear in the in-app notifications list.
+    private suspend fun persistLocal(notification: AttendanceNotification) {
+        val userId = holder.client?.auth?.currentSessionOrNull()?.user?.id ?: return
+        val id = notification.id ?: return
+        runCatching {
+            database.workforceCacheDao().upsertNotifications(
+                listOf(
+                    CachedNotificationEntity(
+                        notificationId = id,
+                        recipientUserId = userId,
+                        title = notification.title,
+                        body = notification.body,
+                        notificationType = notification.type.name.lowercase(),
+                        readAt = null,
+                        createdAt = Instant.now().toString(),
+                        cachedAt = System.currentTimeMillis(),
+                    ),
+                ),
+            )
+        }
     }
     private fun format(time: String) = try { LocalTime.parse(time.take(8)).format(DateTimeFormatter.ofPattern("h:mm a")) } catch (_: Exception) { time }
     private fun formatCompactTime(time: String?): String = time?.let {

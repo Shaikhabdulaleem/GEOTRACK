@@ -11,7 +11,12 @@ import io.github.jan.supabase.auth.SignOutScope
 import io.github.jan.supabase.auth.status.RefreshFailureCause
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.exceptions.RestException
+import io.github.jan.supabase.functions.functions
 import io.github.jan.supabase.postgrest.postgrest
+import io.ktor.client.call.body
+import io.ktor.http.isSuccess
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -136,6 +141,53 @@ class SupabaseAuthRepository @Inject constructor(
         }
     }
 
+    // ── Sign in by Employee ID / Iqama ────────────────────────────────────
+
+    override suspend fun signInWithIdentifier(
+        identifier: String,
+        password: String,
+    ): AppResult<AuthSession> {
+        if (!clientHolder.config.isConfigured) {
+            return AppResult.Failure(AppError.Configuration("Supabase is not configured."))
+        }
+        return try {
+            val client = requireNotNull(clientHolder.client)
+            // The employee-login function resolves the identifier to an account
+            // server-side and returns a session only on valid credentials.
+            val response = client.functions.invoke(
+                function = "employee-login",
+                body = EmployeeLoginRequest(identifier.trim(), password),
+            )
+            if (!response.status.isSuccess()) {
+                return AppResult.Failure(
+                    AppError.Unauthorized("The employee ID/iqama number or password is incorrect."),
+                )
+            }
+            val payload = response.body<EmployeeLoginResponse>()
+            client.auth.importAuthToken(
+                accessToken = payload.accessToken,
+                refreshToken = payload.refreshToken,
+                retrieveUser = true,
+                autoRefresh = true,
+            )
+            val sbSession = client.auth.currentSessionOrNull()
+                ?: return AppResult.Failure(
+                    AppError.Unauthorized("Authentication completed without a session."),
+                )
+            val userId = sbSession.user?.id
+                ?: return AppResult.Failure(AppError.Unauthorized("User not found in session."))
+            val authSession = AuthSession(userId = userId, accessTokenPresent = true)
+            _session.value = authSession
+            AppResult.Success(authSession)
+        } catch (e: RestException) {
+            AppResult.Failure(
+                AppError.Unauthorized("The employee ID/iqama number or password is incorrect."),
+            )
+        } catch (e: Exception) {
+            AppResult.Failure(AppError.Network(e.message ?: "Network error.", e))
+        }
+    }
+
     override suspend fun requestPasswordReset(email: String): AppResult<Unit> {
         if (!clientHolder.config.isConfigured) return AppResult.Failure(AppError.Configuration("Supabase is not configured."))
         return try {
@@ -161,3 +213,15 @@ class SupabaseAuthRepository @Inject constructor(
         }
     }
 }
+
+@Serializable
+private data class EmployeeLoginRequest(
+    val identifier: String,
+    val password: String,
+)
+
+@Serializable
+private data class EmployeeLoginResponse(
+    @SerialName("access_token") val accessToken: String,
+    @SerialName("refresh_token") val refreshToken: String,
+)
