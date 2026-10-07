@@ -221,7 +221,7 @@ export const shiftService = {
     effective_to: string | null;
     days: Array<{ weekday: number; shift_id: string | null; is_off: boolean }>;
   }) {
-    return executeQuery(
+    const result = await executeQuery(
       getSupabaseClient().rpc('set_recurring_schedule', {
         p_employee_id: input.employee_id,
         p_effective_from: input.effective_from,
@@ -230,6 +230,24 @@ export const shiftService = {
       }),
       'Unable to save the recurring schedule.',
     );
+    // Notify the employee that their recurring shift/off pattern changed, to
+    // match the dated-override path (assignShift / temporaryShiftChange) which
+    // already notifies. The lookup also yields the organization the
+    // notification belongs to; a not-yet-provisioned employee (no user_id) is
+    // skipped by notifyShiftChanged.
+    try {
+      const { data: employee } = await getSupabaseClient()
+        .from('employee_profiles')
+        .select('organization_id')
+        .eq('id', input.employee_id)
+        .maybeSingle();
+      if (employee?.organization_id) {
+        await this.notifyShiftChanged(employee.organization_id, [input.employee_id]);
+      }
+    } catch (e) {
+      logger.warn('Failed to send recurring-schedule notification.', { error: e });
+    }
+    return result;
   },
 
   async resolveSchedule(employeeId: string, startDate: string, endDate: string): Promise<ResolvedScheduleRow[]> {
