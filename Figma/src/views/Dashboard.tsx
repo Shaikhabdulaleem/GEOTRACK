@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Users, UserCheck, UserX, Clock, Timer, TrendingUp, AlertCircle, Activity, AlertTriangle, Smartphone, ShieldAlert, ChevronDown, ChevronUp, CalendarDays, CheckCircle, ImageIcon } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import KpiCard from '../components/KpiCard';
@@ -10,9 +10,8 @@ import { todayInTimezone } from '../lib/dates';
 import { productivityService } from '../services/productivity.service';
 import { attendanceService } from '../services/attendance.service';
 import { employeeService } from '../services/employee.service';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabase';
 import { logger } from '../lib/logger';
-import { useEffect } from 'react';
 import type { DashboardGeofencePoint } from '../services/dashboard.service';
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -371,44 +370,87 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
     inside: e.inside
   })) : [];
 
+  // Loads all dashboard data for the current filters. Pass { silent: true } for
+  // background refreshes (e.g. realtime updates) so the dashboard isn't blanked
+  // by the loading state — only the explicit initial/filter load shows it.
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!supabaseReady || !organizationId) return;
+    const silent = opts?.silent ?? false;
+    if (!silent) setLoading(true);
+    setError(null);
+    try {
+      const { dashboardService } = await import('../services/dashboard.service');
+      const { deviceService } = await import('../services/device.service');
+
+      const filters = {
+        date: filterDate,
+        branchId: filterBranchId || undefined,
+        departmentId: filterDeptId || undefined,
+        shiftId: filterShiftId || undefined,
+        managerId: filterManagerId || undefined,
+        employeeId: filterEmployeeId || undefined
+      };
+
+      const [dashData, prodData, phoneData, liveData] = await Promise.all([
+        dashboardService.getMetrics(organizationId, filters),
+        productivityService.getDashboardMetrics(organizationId, filterDate, filterDate),
+        deviceService.getDashboardUsage(organizationId, filterDate),
+        dashboardService.getLiveAttendance(organizationId, filters)
+      ]);
+
+      setMetrics(dashData);
+      setProdMetrics(prodData);
+      setPhoneUsage(phoneData);
+      setLiveAttendance(liveData);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard data.');
+      logger.error('Unable to load dashboard data.', err);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [supabaseReady, organizationId, filterDate, filterBranchId, filterDeptId, filterShiftId, filterManagerId, filterEmployeeId]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  // Keep a ref to the latest loadData so the realtime subscription (below) can
+  // call it with current filters without re-subscribing on every filter change.
+  const loadDataRef = useRef(loadData);
+  useEffect(() => { loadDataRef.current = loadData; }, [loadData]);
+
+  // Live updates: silently refetch when today's attendance rows change for this
+  // organization, so KPIs and the Live Attendance panel update without a reload.
+  // Requires Realtime on attendance_records (migration 20261007120000). If it's
+  // not enabled the channel is simply idle and the initial load still works.
+  // Refreshes are debounced so a burst of check-ins triggers one refetch.
   useEffect(() => {
     if (!supabaseReady || !organizationId) return;
-    const loadData = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const { dashboardService } = await import('../services/dashboard.service');
-        const { deviceService } = await import('../services/device.service');
+    const client = getSupabaseClient();
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-        const filters = {
-          date: filterDate,
-          branchId: filterBranchId || undefined,
-          departmentId: filterDeptId || undefined,
-          shiftId: filterShiftId || undefined,
-          managerId: filterManagerId || undefined,
-          employeeId: filterEmployeeId || undefined
-        };
+    const channel = client
+      .channel(`dashboard-attendance-${organizationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'attendance_records',
+          filter: `organization_id=eq.${organizationId}`,
+        },
+        () => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => { void loadDataRef.current({ silent: true }); }, 1000);
+        },
+      )
+      .subscribe();
 
-        const [dashData, prodData, phoneData, liveData] = await Promise.all([
-          dashboardService.getMetrics(organizationId, filters),
-          productivityService.getDashboardMetrics(organizationId, filterDate, filterDate),
-          deviceService.getDashboardUsage(organizationId, filterDate),
-          dashboardService.getLiveAttendance(organizationId, filters)
-        ]);
-
-        setMetrics(dashData);
-        setProdMetrics(prodData);
-        setPhoneUsage(phoneData);
-        setLiveAttendance(liveData);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : 'Failed to load dashboard data.');
-        logger.error('Unable to load dashboard data.', err);
-      } finally {
-        setLoading(false);
-      }
+    return () => {
+      if (timer) clearTimeout(timer);
+      void client.removeChannel(channel);
     };
-    void loadData();
-  }, [supabaseReady, organizationId, filterDate, filterBranchId, filterDeptId, filterShiftId, filterManagerId, filterEmployeeId]);
+  }, [supabaseReady, organizationId]);
 
   // Aggregate values
   const totalStaff = metrics ? metrics.totalEmployees : employees.length;
