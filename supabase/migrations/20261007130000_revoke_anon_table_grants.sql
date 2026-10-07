@@ -1,0 +1,11 @@
+-- Enforce the invariant asserted by supabase/tests/rls_smoke.sql: the `anon`
+-- role must hold no privileges on public application tables. Tables created in
+-- migrations after base_schema (employee_account_invitations, employee_devices)
+-- did not pin their grants the way the rest of the schema does, so the
+-- platform's default grants left `anon` with privileges on them and the smoke
+-- test failed. anon is never used for table access here (the web signs in with
+-- Supabase Auth and queries as `authenticated`; employee-login runs with the
+-- service role), so revoking every anon table privilege is safe and prevents
+-- this class of regression for any future table too. Does not touch the
+-- `authenticated` grants the app relies on.
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
