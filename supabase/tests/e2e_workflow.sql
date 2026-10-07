@@ -129,18 +129,22 @@ BEGIN
   RAISE NOTICE 'Emp A Day Shift Record: worked=%, overtime=%', coalesce(v_record.worked_minutes, 0), coalesce(v_record.overtime_minutes, 0);
 
   ---------------------------------------------------------
-  -- Emp C: OFF Day Test (Overtime)
+  -- Emp C: OFF Day Test — check-in must be rejected
+  -- process_attendance_event resolves the schedule and refuses a check-in when
+  -- no working shift applies (an employee cannot clock in on their weekly off),
+  -- raising errcode 22023. Assert that rejection rather than expecting phantom
+  -- off-day overtime, which the attendance model does not support.
   ---------------------------------------------------------
   perform set_config('request.jwt.claims', format('{"sub": "%s"}', v_empC), true);
-  SELECT * INTO v_out FROM public.process_attendance_event(
-    v_empC, v_geofence, 'check_in', false, 0, 0, 10, false, 'empC-in', '{}'
-  );
-  SELECT * INTO v_out FROM public.process_attendance_event(
-    v_empC, v_geofence, 'check_out', false, 0, 0, 10, false, 'empC-out', '{}'
-  );
-
-  SELECT * INTO v_record FROM public.attendance_records WHERE employee_id = v_empC;
-  RAISE NOTICE 'Emp C OFF Shift Record: worked=%, overtime=%', coalesce(v_record.worked_minutes, 0), coalesce(v_record.overtime_minutes, 0);
+  begin
+    PERFORM public.process_attendance_event(
+      v_empC, v_geofence, 'check_in', false, 0, 0, 10, false, 'empC-in', '{}'
+    );
+    RAISE EXCEPTION 'Emp C off-day check-in should have been rejected';
+  exception
+    when sqlstate '22023' then
+      RAISE NOTICE 'Emp C off-day check-in correctly rejected.';
+  end;
 
   ---------------------------------------------------------
   -- Manager Review Test
