@@ -153,11 +153,21 @@ Deno.serve(async (request) => {
     return json(request, { error: 'Unable to link the new account' }, 500);
   }
 
-  // 3. Grant the employee membership role.
-  await admin.from('organization_memberships').upsert(
+  // 3. Grant the employee membership role. The app denies access without an
+  //    active membership, so a failure here must not be swallowed — otherwise
+  //    we would hand out a password for an account that cannot sign in. The
+  //    unique constraint is on (organization_id, user_id, role_code).
+  const { error: membershipError } = await admin.from('organization_memberships').upsert(
     { organization_id: employee.organization_id, user_id: created.user.id, role_code: 'employee', status: 'active' },
-    { onConflict: 'organization_id,user_id' },
+    { onConflict: 'organization_id,user_id,role_code' },
   );
+  if (membershipError) {
+    // Roll back the auth account and profile link so a retry can succeed cleanly.
+    await admin.from('employee_profiles').update({ user_id: null }).eq('id', employee.id).catch(() => undefined);
+    await admin.auth.admin.deleteUser(created.user.id).catch(() => undefined);
+    console.error(JSON.stringify({ event: 'employee_membership_failed', code: membershipError.code }));
+    return json(request, { error: 'Unable to grant the employee access role' }, 500);
+  }
 
   // 4. Best-effort audit trail. Failure here does not undo a working account.
   await admin.from('employee_account_invitations').insert({
