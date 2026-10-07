@@ -57,6 +57,13 @@ begin
     raise exception 'Dated override did not take precedence over holiday';
   end if;
 
+  -- Seed an approved leave for the same date to assert leave outranks the
+  -- dated override. RLS only lets an employee create their own *pending* leave
+  -- (a manager then approves via update), so this fixture elevates to the owner
+  -- role for the insert rather than faking it as an authenticated admin, which
+  -- the leave_requests policies correctly forbid. Done here, after the
+  -- dated-override assertion, so that check still sees 'working'.
+  perform set_config('role', 'postgres', true);
   insert into public.leave_requests (
     organization_id, employee_id, leave_type, from_date, to_date, days,
     reason, status, requested_by
@@ -65,6 +72,7 @@ begin
     'annual', '2026-10-03', '2026-10-03', 1, 'Test', 'approved',
     '30000000-0000-0000-0000-000000000001'
   );
+  perform set_config('role', 'authenticated', true);
   select * into v_row from public.resolve_employee_schedule(
     '34000000-0000-0000-0000-000000000001', '2026-10-03', '2026-10-03'
   );

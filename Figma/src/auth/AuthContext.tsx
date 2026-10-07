@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { authService } from '../services/auth.service';
 import { identityService } from '../services/identity.service';
@@ -37,7 +37,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(null);
   const [error, setError] = useState<AppError | null>(null);
 
+  // Tracks whose authorization is currently loaded, so a redundant SIGNED_IN
+  // event (Supabase fires one each time the tab regains focus) doesn't trigger
+  // a reload that would flip `loading` back on and unmount the app shell.
+  const loadedUserIdRef = useRef<string | null>(null);
+
   const clearAuthorization = useCallback(() => {
+    loadedUserIdRef.current = null;
     setProfile(null);
     setEmployeeProfile(null);
     setMemberships([]);
@@ -45,6 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadAuthorization = useCallback(async (userId: string) => {
+    loadedUserIdRef.current = userId;
     const [nextProfile, nextMemberships] = await Promise.all([
       identityService.getProfile(userId),
       identityService.getMemberships(userId),
@@ -112,6 +119,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (event === 'TOKEN_REFRESHED') return;
+
+      // Supabase re-emits SIGNED_IN whenever the tab regains focus/visibility.
+      // If it's the same user we've already loaded, skip the reload — flipping
+      // `loading` on here unmounts the app shell and discards in-progress form
+      // state (e.g. a half-typed employee record).
+      if (nextSession.user.id === loadedUserIdRef.current) return;
 
       setLoading(true);
       queueMicrotask(() => {

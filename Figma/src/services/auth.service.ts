@@ -13,11 +13,13 @@ export interface PasswordResetInput {
   redirectTo?: string;
 }
 
-export interface EmployeeInvitation {
-  id: string;
-  employee_id: string;
-  organization_id: string;
-  invited_at: string;
+/** Result of provisioning a field-staff login. The temporary password is
+ * returned exactly once and must be handed to the employee; it is never stored
+ * and cannot be retrieved again. */
+export interface EmployeeAccountCredentials {
+  identifier: string;
+  email: string;
+  temporary_password: string;
   status: string;
 }
 
@@ -75,13 +77,15 @@ export const authService = {
     if (error) throw toAppError(error, 'Unable to update the password.');
   },
 
-  /** Records an invitation request. Delivery and account creation happen in
-   * the trusted Auth Admin worker; the browser never receives credentials. */
-  async requestEmployeeInvitation(employeeId: string, email: string): Promise<EmployeeInvitation> {
+  /** Creates a login account for a field employee who has no mailbox. The
+   * trusted Auth Admin worker mints a synthetic email and a one-time temporary
+   * password, which is returned here so the administrator can hand it to the
+   * employee. The password is not stored anywhere. */
+  async provisionEmployeeAccount(employeeId: string): Promise<EmployeeAccountCredentials> {
     const { data, error } = await getSupabaseClient().functions.invoke('provision-employee', {
-      body: { employee_id: employeeId, email: email.trim().toLowerCase() },
+      body: { employee_id: employeeId },
     });
-    if (error) throw toAppError(error, 'Unable to send the account invitation.');
-    return data as EmployeeInvitation;
+    if (error) throw toAppError(error, 'Unable to create the login account.');
+    return data as EmployeeAccountCredentials;
   },
 };
