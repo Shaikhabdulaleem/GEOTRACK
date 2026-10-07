@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Filter, MapPin, Smartphone, TrendingUp } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import Avatar from '../components/Avatar';
@@ -17,66 +17,87 @@ export default function LiveAttendance() {
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const mountedRef = useRef(true);
+
+  const fetchData = useCallback(async () => {
+    if (!activeMembership) return;
+    const client = getSupabaseClient();
+
+    const { data: profiles, error: pError } = await client
+      .from('employee_profiles')
+      .select('*')
+      .eq('organization_id', activeMembership.organization_id);
+    if (pError) throw pError;
+
+    const today = todayInTimezone('Asia/Riyadh');
+
+    const { data: records, error: rError } = await client
+      .from('attendance_records')
+      .select('*')
+      .eq('organization_id', activeMembership.organization_id)
+      .eq('attendance_date', today);
+    if (rError) throw rError;
+
+    const recordMap = Object.fromEntries((records || []).map(r => [r.employee_id, r]));
+
+    const mapped = (profiles || []).map(p => {
+      const rec = recordMap[p.id];
+      return {
+        id: p.id,
+        name: p.full_name,
+        shift: 'Day',
+        shiftStart: '09:00',
+        checkin: rec ? (rec.check_in_at ? new Date(rec.check_in_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : null) : null,
+        status: rec ? (rec.status ? rec.status.charAt(0).toUpperCase() + rec.status.slice(1) : 'Present') : 'Absent',
+        worked: '0h 00m',
+        inside: true, // simplified
+        productivity: 0,
+        phone: 0,
+        ot: '0h 00m',
+        attendance: rec ? rec.status : 'absent'
+      };
+    });
+
+    if (mountedRef.current) {
+      setEmployees(mapped);
+      setLastUpdated(new Date());
+    }
+  }, [activeMembership]);
 
   useEffect(() => {
     if (!activeMembership) return;
-    
-    let mounted = true;
+    mountedRef.current = true;
     setLoading(true);
-    
-    const fetchData = async () => {
-      const client = getSupabaseClient();
-      
-      const { data: profiles, error: pError } = await client
-        .from('employee_profiles')
-        .select('*')
-        .eq('organization_id', activeMembership.organization_id);
-        
-      if (pError) throw pError;
-      
-      const today = todayInTimezone('Asia/Riyadh');
-      
-      const { data: records, error: rError } = await client
-        .from('attendance_records')
-        .select('*')
-        .eq('organization_id', activeMembership.organization_id)
-        .eq('attendance_date', today);
-        
-      if (rError) throw rError;
-      
-      const recordMap = Object.fromEntries((records || []).map(r => [r.employee_id, r]));
-      
-      const mapped = (profiles || []).map(p => {
-        const rec = recordMap[p.id];
-        return {
-          id: p.id,
-          name: p.full_name,
-          shift: 'Day',
-          shiftStart: '09:00',
-          checkin: rec ? (rec.check_in_at ? new Date(rec.check_in_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : null) : null,
-          status: rec ? (rec.status ? rec.status.charAt(0).toUpperCase() + rec.status.slice(1) : 'Present') : 'Absent',
-          worked: '0h 00m',
-          inside: true, // simplified
-          productivity: 0,
-          phone: 0,
-          ot: '0h 00m',
-          attendance: rec ? rec.status : 'absent'
-        };
-      });
-      
-      if (mounted) setEmployees(mapped);
-    };
-    
+
     fetchData()
-      .catch(err => {
-        if (mounted) setError(toAppError(err).message);
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
-      
-    return () => { mounted = false; };
-  }, [activeMembership]);
+      .catch(err => { if (mountedRef.current) setError(toAppError(err).message); })
+      .finally(() => { if (mountedRef.current) setLoading(false); });
+
+    // Live updates: refetch whenever today's attendance rows change for this
+    // organization. Requires Realtime enabled on attendance_records (migration
+    // 20261007120000_realtime_attendance.sql). If Realtime is not yet enabled
+    // the subscription is simply idle and the initial load still works.
+    const client = getSupabaseClient();
+    const channel = client
+      .channel(`live-attendance-${activeMembership.organization_id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'attendance_records',
+          filter: `organization_id=eq.${activeMembership.organization_id}`,
+        },
+        () => { void fetchData().catch(() => undefined); },
+      )
+      .subscribe();
+
+    return () => {
+      mountedRef.current = false;
+      void client.removeChannel(channel);
+    };
+  }, [activeMembership, fetchData]);
 
   const filtered = employees.filter(e => {
     if (search && !e.name.toLowerCase().includes(search.toLowerCase()) && !e.id.toLowerCase().includes(search.toLowerCase())) return false;
@@ -89,8 +110,7 @@ export default function LiveAttendance() {
     return true;
   });
 
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  const timeStr = (lastUpdated ?? new Date()).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
   if (loading) return <div className="p-4 text-white">Loading...</div>;
   if (error) return <div className="p-4 text-red-500">{error}</div>;
