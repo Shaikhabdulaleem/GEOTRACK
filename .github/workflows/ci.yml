@@ -35,7 +35,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned, not "latest": resolving "latest" calls the GitHub API and
+          # flakily fails with "rate limit exceeded" on shared CI runners.
+          version: 2.120.0
       - name: Start local Supabase stack (applies all migrations)
         run: supabase start -x studio,realtime,storage-api,imgproxy,inbucket,edge-runtime,logflare,vector,pgbouncer
       - name: Run transactional SQL tests (each rolls back)
