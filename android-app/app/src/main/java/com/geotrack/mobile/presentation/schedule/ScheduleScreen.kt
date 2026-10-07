@@ -21,26 +21,43 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.geotrack.mobile.domain.model.DailySchedule
 import com.geotrack.mobile.domain.model.TodayScheduleState
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScheduleScreen(
     viewModel: ScheduleViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Re-fetch whenever the screen returns to the foreground so a shift/off
+    // change made in the dashboard shows up without restarting the app (e.g.
+    // right after the employee taps the push notification). The very first
+    // resume is skipped because init already loaded.
+    var firstResume by remember { mutableStateOf(true) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (firstResume) firstResume = false else viewModel.refresh()
+    }
 
     if (uiState.isLoading) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -49,6 +66,11 @@ fun ScheduleScreen(
         return
     }
 
+    PullToRefreshBox(
+        isRefreshing = uiState.isRefreshing,
+        onRefresh = viewModel::refresh,
+        modifier = Modifier.fillMaxSize()
+    ) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -108,6 +130,7 @@ fun ScheduleScreen(
         item {
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
     }
 }
 

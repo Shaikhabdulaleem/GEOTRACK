@@ -24,6 +24,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.geotrack.mobile.domain.model.TodayScheduleState
 import java.time.LocalTime
@@ -40,6 +42,14 @@ fun DashboardScreen(
     val reqPermissions = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ -> }
+
+    // Re-fetch today's schedule/attendance when the screen returns to the
+    // foreground, so dashboard-side changes appear without an app restart. The
+    // first resume is skipped because init already loaded.
+    var firstResume by remember { mutableStateOf(true) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (firstResume) firstResume = false else viewModel.refresh()
+    }
 
     LaunchedEffect(uiState.errorMessage, uiState.successMessage) {
         if (uiState.errorMessage != null) {

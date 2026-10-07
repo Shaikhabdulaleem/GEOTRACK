@@ -21,7 +21,8 @@ import kotlinx.coroutines.launch
 
 data class ScheduleUiState(
     val isLoading: Boolean = true,
-    
+    val isRefreshing: Boolean = false,
+
     val today: DailySchedule? = null,
     val nextWorkingDay: DailySchedule? = null,
     val nextOffDay: DailySchedule? = null,
@@ -46,14 +47,22 @@ class ScheduleViewModel @Inject constructor(
     init {
         loadSchedule()
     }
-    
-    private fun loadSchedule() {
+
+    /**
+     * Re-fetch the schedule. Called on screen resume (so a shift/off change made
+     * in the dashboard is shown as soon as the employee opens the screen, e.g.
+     * after tapping the push notification) and on manual pull-to-refresh.
+     */
+    fun refresh() = loadSchedule(isManual = true)
+
+    private fun loadSchedule(isManual: Boolean = false) {
         viewModelScope.launch {
+            _uiState.update { if (isManual) it.copy(isRefreshing = true) else it }
             val ctx = sessionRepository.organizationContext.first()
             val profile = sessionRepository.employeeProfile.first()
-            
+
             if (ctx == null || profile == null) {
-                _uiState.update { it.copy(isLoading = false) }
+                _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
                 return@launch
             }
             
@@ -89,6 +98,7 @@ class ScheduleViewModel @Inject constructor(
                 _uiState.update { state ->
                     state.copy(
                         isLoading = false,
+                        isRefreshing = false,
                         today = todaySched,
                         nextWorkingDay = nextWorking,
                         nextOffDay = nextOff,
@@ -99,7 +109,7 @@ class ScheduleViewModel @Inject constructor(
                     )
                 }
             } else {
-                _uiState.update { it.copy(isLoading = false) }
+                _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
             }
         }
     }

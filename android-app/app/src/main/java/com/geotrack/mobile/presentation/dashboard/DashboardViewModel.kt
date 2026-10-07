@@ -106,7 +106,11 @@ class DashboardViewModel @Inject constructor(
         
         loadData()
     }
-    
+
+    /** Re-fetch schedule + attendance. Called on screen resume so dashboard
+     *  changes (shift/off, approvals) appear without an app restart. */
+    fun refresh() = loadData()
+
     private fun loadData() {
         viewModelScope.launch {
             val ctx = sessionRepository.organizationContext.first()
