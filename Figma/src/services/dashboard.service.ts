@@ -2,6 +2,8 @@ import { getSupabaseClient } from '../lib/supabase';
 import { AppError } from '../lib/errors';
 import { logger } from '../lib/logger';
 import { shiftService } from './shift.service';
+import { pointInMultiPolygon, polygonCentroid } from '../lib/geo';
+import type { GeofenceWithPolygon } from './geofence.service';
 
 export interface DashboardFilters {
   date: string;
@@ -19,6 +21,24 @@ export interface DashboardGeofencePoint {
   polygon: Array<[number, number]>;
   present: number;
   employees: number;
+}
+
+/** A single employee's live position for the dashboard workforce map. */
+export interface WorkforcePosition {
+  employeeId: string;
+  name: string;
+  /** Latitude (WGS84). */
+  lat: number;
+  /** Longitude (WGS84). */
+  lng: number;
+  /** True when the employee is inside their geofence. */
+  inside: boolean;
+  /** True when the position is the geofence centroid (no precise GPS recorded). */
+  approximate: boolean;
+  /** Attendance status, e.g. 'present' | 'late' | 'absent'. */
+  status: string;
+  geofenceId: string | null;
+  geofenceName: string | null;
 }
 
 interface LegacyShiftAssignment {
@@ -310,6 +330,136 @@ export const dashboardService = {
     // Checked-in employees first, so the widget surfaces who is actually working.
     const rank = (s: string) => (s === 'present' || s === 'late' ? 0 : s === 'absent' ? 2 : 1);
     return filtered.sort((x, y) => rank(x.attendance) - rank(y.attendance));
+  },
+
+  /**
+   * Live map positions for the dashboard "Geofence Workforce Map".
+   *
+   * One pin per employee who is currently on the map:
+   *  - If a GPS-bearing `attendance_events` row exists for the day, the pin uses
+   *    those exact coordinates and is coloured by inside/outside the geofence.
+   *  - Otherwise, if the employee is checked in and geofence-validated, the pin is
+   *    placed approximately at the centre of their assigned geofence (inside).
+   *
+   * `geofences` is passed in (already fetched by the caller) to avoid a second
+   * round-trip and to share polygon rings for centroid/classification.
+   */
+  async getLiveWorkforcePositions(
+    organizationId: string,
+    filters: DashboardFilters,
+    geofences: GeofenceWithPolygon[],
+  ): Promise<WorkforcePosition[]> {
+    const client = getSupabaseClient();
+
+    // Resolve the active, filtered employee set (mirrors getLiveAttendance).
+    let empQuery = client
+      .from('employee_profiles')
+      .select('id, full_name, employment_status')
+      .eq('organization_id', organizationId);
+    if (filters.branchId) empQuery = empQuery.eq('branch_id', filters.branchId);
+    if (filters.departmentId) empQuery = empQuery.eq('department_id', filters.departmentId);
+    if (filters.managerId) empQuery = empQuery.eq('manager_user_id', filters.managerId);
+    if (filters.employeeId) empQuery = empQuery.eq('id', filters.employeeId);
+
+    const { data: emps, error: empErr } = await empQuery;
+    if (empErr) throw empErr;
+    const active = (emps || []).filter(e => e.employment_status === 'active');
+    const ids = active.map(e => e.id);
+    if (ids.length === 0) return [];
+
+    const [{ data: records }, { data: assignments }, { data: shiftAssignments }] = await Promise.all([
+      client.from('attendance_records')
+        .select('employee_id, status, check_in_at, check_out_at, geofence_validated')
+        .eq('organization_id', organizationId)
+        .eq('attendance_date', filters.date)
+        .in('employee_id', ids),
+      client.from('geofence_assignments')
+        .select('employee_id, geofence_id')
+        .eq('organization_id', organizationId)
+        .is('effective_to', null)
+        .in('employee_id', ids),
+      filters.shiftId
+        ? client.from('shift_assignments')
+            .select('employee_id, shift_id')
+            .eq('organization_id', organizationId)
+            .eq('work_date', filters.date)
+            .in('employee_id', ids)
+        : Promise.resolve({ data: [] as Array<{ employee_id: string; shift_id: string | null }> }),
+    ]);
+
+    // Latest GPS event per employee for the day (best-effort; table may be empty).
+    const latestEventByEmp = new Map<string, { lng: number; lat: number; inside: boolean | null; geofenceId: string | null }>();
+    try {
+      const { data: events } = await client
+        .from('attendance_events')
+        .select('employee_id, event_at, location_point, inside_geofence, geofence_id')
+        .eq('organization_id', organizationId)
+        .in('employee_id', ids)
+        .not('location_point', 'is', null)
+        .gte('event_at', `${filters.date}T00:00:00`)
+        .lte('event_at', `${filters.date}T23:59:59.999`)
+        .order('event_at', { ascending: false });
+      for (const ev of (events || []) as Array<{ employee_id: string; location_point: { coordinates: [number, number] } | null; inside_geofence: boolean | null; geofence_id: string | null }>) {
+        if (latestEventByEmp.has(ev.employee_id)) continue; // desc order → first seen is latest
+        const coords = ev.location_point?.coordinates;
+        if (!coords || coords.length < 2) continue;
+        latestEventByEmp.set(ev.employee_id, {
+          lng: coords[0], lat: coords[1], inside: ev.inside_geofence, geofenceId: ev.geofence_id,
+        });
+      }
+    } catch (err) {
+      logger.warn('attendance_events position query failed; using geofence-centroid fallback only.', { error: err });
+    }
+
+    const recMap = new Map((records || []).map((r: { employee_id: string }) => [r.employee_id, r]));
+    const assignMap = new Map<string, string>();
+    for (const a of (assignments || []) as Array<{ employee_id: string; geofence_id: string }>) {
+      if (!assignMap.has(a.employee_id)) assignMap.set(a.employee_id, a.geofence_id);
+    }
+    const shiftSet = filters.shiftId
+      ? new Set((shiftAssignments || []).filter(s => s.shift_id === filters.shiftId).map(s => s.employee_id))
+      : null;
+    const fenceById = new Map(geofences.map(g => [g.id, g]));
+
+    const positions: WorkforcePosition[] = [];
+    for (const e of active) {
+      if (shiftSet && !shiftSet.has(e.id)) continue;
+      const rec = recMap.get(e.id) as { status?: string; check_in_at?: string | null; check_out_at?: string | null; geofence_validated?: boolean } | undefined;
+      const checkedIn = Boolean(rec && rec.check_in_at && !rec.check_out_at);
+      const status = rec?.status ?? 'absent';
+
+      const ev = latestEventByEmp.get(e.id);
+      if (ev) {
+        const assignedId = assignMap.get(e.id);
+        const fence = (ev.geofenceId && fenceById.get(ev.geofenceId)) || (assignedId ? fenceById.get(assignedId) : undefined);
+        let inside = ev.inside ?? false;
+        if (ev.inside === null && fence?.activePolygon) {
+          inside = pointInMultiPolygon([ev.lng, ev.lat], fence.activePolygon.polygon.coordinates);
+        }
+        positions.push({
+          employeeId: e.id, name: e.full_name, lat: ev.lat, lng: ev.lng,
+          inside, approximate: false, status,
+          geofenceId: fence?.id ?? ev.geofenceId ?? null, geofenceName: fence?.name ?? null,
+        });
+        continue;
+      }
+
+      // Fallback: checked in & geofence-validated but no GPS → assigned-fence centroid.
+      if (checkedIn && rec?.geofence_validated) {
+        const fenceId = assignMap.get(e.id);
+        const fence = fenceId ? fenceById.get(fenceId) : undefined;
+        if (fence && fence.ring.length >= 3) {
+          const [lng, lat] = polygonCentroid(fence.ring);
+          positions.push({
+            employeeId: e.id, name: e.full_name, lat, lng,
+            inside: true, approximate: true, status,
+            geofenceId: fence.id, geofenceName: fence.name,
+          });
+        }
+      }
+    }
+
+    return positions;
   },
 
   async getLookups(organizationId: string) {

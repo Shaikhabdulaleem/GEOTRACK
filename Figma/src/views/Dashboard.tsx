@@ -12,7 +12,10 @@ import { attendanceService } from '../services/attendance.service';
 import { employeeService } from '../services/employee.service';
 import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabase';
 import { logger } from '../lib/logger';
-import type { DashboardGeofencePoint } from '../services/dashboard.service';
+import WorkforceMap from '../components/WorkforceMap';
+import { geofenceService } from '../services/geofence.service';
+import type { GeofenceWithPolygon } from '../services/geofence.service';
+import type { WorkforcePosition } from '../services/dashboard.service';
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload?.length) {
@@ -327,6 +330,8 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const [prodMetrics, setProdMetrics] = useState<any>(null);
   const [phoneUsage, setPhoneUsage] = useState<Array<any>>([]);
   const [liveAttendance, setLiveAttendance] = useState<Array<any>>([]);
+  const [geofencePolys, setGeofencePolys] = useState<GeofenceWithPolygon[]>([]);
+  const [workforcePositions, setWorkforcePositions] = useState<WorkforcePosition[]>([]);
 
   useEffect(() => {
     if (!supabaseReady || !organizationId) return;
@@ -391,17 +396,23 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
         employeeId: filterEmployeeId || undefined
       };
 
-      const [dashData, prodData, phoneData, liveData] = await Promise.all([
+      const [dashData, prodData, phoneData, liveData, geoData] = await Promise.all([
         dashboardService.getMetrics(organizationId, filters),
         productivityService.getDashboardMetrics(organizationId, filterDate, filterDate),
         deviceService.getDashboardUsage(organizationId, filterDate),
-        dashboardService.getLiveAttendance(organizationId, filters)
+        dashboardService.getLiveAttendance(organizationId, filters),
+        geofenceService.listWithPolygons(organizationId)
       ]);
+
+      // Live map positions depend on the geofence polygons (centroids + classification).
+      const positions = await dashboardService.getLiveWorkforcePositions(organizationId, filters, geoData);
 
       setMetrics(dashData);
       setProdMetrics(prodData);
       setPhoneUsage(phoneData);
       setLiveAttendance(liveData);
+      setGeofencePolys(geoData);
+      setWorkforcePositions(positions);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data.');
       logger.error('Unable to load dashboard data.', err);
@@ -497,8 +508,6 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const attendanceTrend = supabaseReady && metrics ? metrics.attendanceTrend : [];
   const otTrend = supabaseReady && metrics ? metrics.otTrend : [];
   const productivityTrend = supabaseReady && metrics ? metrics.productivityTrend : [];
-  const geofences: DashboardGeofencePoint[] = supabaseReady && metrics ? metrics.geofencesData : [];
-
   const alertCounts = { missing: missing, missingOut: 0, otApproval: pendingApprovals, correction: 0, geofence: geofenceViolations };
 
   return (
@@ -600,71 +609,42 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
         <KpiCard title="Active Alerts" value={missing + geofenceViolations} sub={`${geofenceViolations} geofence, ${missing} missing`} icon={AlertCircle} color="#ef4444" />
       </div>
 
-      {/* Mid row */}
-      <div className="grid grid-cols-2 gap-4">
-        {/* Live Attendance */}
-        <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="font-semibold text-sm text-white">Live Attendance by Shift</div>
-            <button onClick={() => onNav('live')} className="text-xs transition-colors hover:text-blue-300" style={{ color: '#3b82f6' }}>View All →</button>
-          </div>
-          <div className="space-y-2">
-            {filteredEmps.slice(0, 6).map(emp => (
-              <div key={emp.id} className="flex items-center gap-3 py-2 rounded-lg px-2 transition-colors hover:bg-white/5">
-                <Avatar name={emp.name} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium text-white truncate">{emp.name}</div>
-                  <div className="text-xs" style={{ color: '#4b6a8a' }}>{emp.dept}{emp.shift ? ` · ${emp.shift} Shift` : ''}</div>
-                </div>
-                <div className="text-xs font-mono" style={{ color: '#94a3b8' }}>{emp.checkin ?? '—'}</div>
-                <StatusBadge status={emp.attendance} />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Geofence Map */}
-        <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
-          <div className="flex items-center justify-between mb-3">
+      {/* Geofence Workforce Map — full-width, live employee pins (inside/outside) */}
+      <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+        <div className="flex items-center justify-between mb-3">
+          <div>
             <div className="font-semibold text-sm text-white">Geofence Workforce Map</div>
-            <button onClick={() => onNav('geofences')} className="text-xs transition-colors hover:text-blue-300" style={{ color: '#3b82f6' }}>Manage →</button>
-          </div>
-          <div className="relative rounded-lg overflow-hidden" style={{ height: 200, background: '#060d1a' }}>
-            <svg width="100%" height="100%" viewBox="0 0 660 210">
-              {[0,1,2,3,4,5].map(i => (
-                <line key={`h${i}`} x1="0" y1={i*42} x2="660" y2={i*42} stroke="#1e3a5a" strokeWidth="0.5" strokeDasharray="4,4" />
-              ))}
-              {[0,1,2,3,4,5,6].map(i => (
-                <line key={`v${i}`} x1={i*110} y1="0" x2={i*110} y2="210" stroke="#1e3a5a" strokeWidth="0.5" strokeDasharray="4,4" />
-              ))}
-              {geofences.map(gf => (
-                <g key={gf.id}>
-                  <polygon points={gf.polygon.map(([x,y]) => `${x},${y}`).join(' ')} fill={`${gf.color}18`} stroke={gf.color} strokeWidth="1.5" strokeDasharray="5,3" />
-                  <text x={gf.polygon.reduce((s,[x])=>s+x,0)/gf.polygon.length} y={gf.polygon.reduce((s,[,y])=>s+y,0)/gf.polygon.length} textAnchor="middle" fill={gf.color} fontSize="8" fontFamily="JetBrains Mono" fontWeight="600">{gf.present}/{gf.employees}</text>
-                </g>
-              ))}
-              {filteredEmps.filter(e => e.inside).map((e, i) => {
-                const gf = geofences.find(g => g.name.includes(e.location.split(' ').pop()!));
-                if (!gf) return null;
-                const cx = gf.polygon.reduce((s,[x])=>s+x,0)/gf.polygon.length + (i*15 - 30);
-                const cy = gf.polygon.reduce((s,[,y])=>s+y,0)/gf.polygon.length;
-                return (
-                  <g key={e.id}>
-                    <circle cx={cx} cy={cy} r="5" fill={e.status === 'Late' ? '#f59e0b' : '#10b981'} />
-                    <circle cx={cx} cy={cy} r="8" fill="none" stroke={e.status === 'Late' ? '#f59e0b' : '#10b981'} strokeWidth="0.5" opacity="0.4" />
-                  </g>
-                );
-              })}
-            </svg>
-            <div className="absolute bottom-2 left-2 flex flex-col gap-1">
-              {geofences.map(gf => (
-                <div key={gf.id} className="flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-md" style={{ background: 'rgba(6,13,26,0.85)', color: '#f0f6ff' }}>
-                  <span className="w-2 h-2 rounded-sm" style={{ background: gf.color }}></span>
-                  {gf.name}: <span style={{ color: gf.color }}>{gf.present}/{gf.employees}</span>
-                </div>
-              ))}
+            <div className="text-xs mt-0.5" style={{ color: '#4b6a8a' }}>
+              {workforcePositions.length
+                ? `${workforcePositions.length} on map · ${workforcePositions.filter(p => p.inside).length} inside, ${workforcePositions.filter(p => !p.inside).length} outside`
+                : 'Live employee locations across geofences'}
             </div>
           </div>
+          <button onClick={() => onNav('geofences')} className="text-xs transition-colors hover:text-blue-300" style={{ color: '#3b82f6' }}>Manage →</button>
+        </div>
+        <div className="relative rounded-lg overflow-hidden" style={{ height: 400, background: '#060d1a' }}>
+          <WorkforceMap geofences={geofencePolys} positions={workforcePositions} />
+        </div>
+      </div>
+
+      {/* Live Attendance by Shift */}
+      <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-semibold text-sm text-white">Live Attendance by Shift</div>
+          <button onClick={() => onNav('live')} className="text-xs transition-colors hover:text-blue-300" style={{ color: '#3b82f6' }}>View All →</button>
+        </div>
+        <div className="space-y-2">
+          {filteredEmps.slice(0, 6).map(emp => (
+            <div key={emp.id} className="flex items-center gap-3 py-2 rounded-lg px-2 transition-colors hover:bg-white/5">
+              <Avatar name={emp.name} />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-white truncate">{emp.name}</div>
+                <div className="text-xs" style={{ color: '#4b6a8a' }}>{emp.dept}{emp.shift ? ` · ${emp.shift} Shift` : ''}</div>
+              </div>
+              <div className="text-xs font-mono" style={{ color: '#94a3b8' }}>{emp.checkin ?? '—'}</div>
+              <StatusBadge status={emp.attendance} />
+            </div>
+          ))}
         </div>
       </div>
 
