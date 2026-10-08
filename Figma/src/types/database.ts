@@ -640,6 +640,34 @@ export interface Database {
         Args: { p_notification_id: string };
         Returns: NotificationRow[];
       };
+      record_location_ping: {
+        Args: {
+          p_employee_id: string;
+          p_latitude: number;
+          p_longitude: number;
+          p_accuracy_meters: number;
+          p_is_mock: boolean;
+        };
+        Returns: Array<{
+          ping_id: string | null;
+          inside_geofence: boolean | null;
+          recorded: boolean;
+        }>;
+      };
+      get_active_geofence_breaches: {
+        Args: { p_organization_id: string };
+        Returns: Array<{
+          breach_id: string;
+          employee_id: string;
+          employee_name: string | null;
+          geofence_id: string | null;
+          geofence_name: string | null;
+          started_at: string;
+          detected_at: string;
+          last_seen_outside_at: string;
+          minutes_outside: number;
+        }>;
+      };
     };
     Enums: {
       app_role: AppRole;

@@ -31,4 +31,19 @@ interface AttendanceRepository {
 
     /** Local outbox state for the most recent employee action: SYNCED, PENDING_SYNC, or SYNC_FAILED. */
     suspend fun latestLocalSyncStatus(employeeId: String): String?
+
+    /**
+     * Posts a periodic in-shift location sample so the server can detect
+     * sustained out-of-geofence breaches. The server only stores it while an
+     * attendance session is open and never auto-checks-out from it. Returns true
+     * when a sample was actually recorded.
+     */
+    suspend fun recordLocationPing(
+        organizationId: String,
+        employeeId: String,
+        latitude: Double,
+        longitude: Double,
+        accuracyMeters: Float,
+        isMock: Boolean
+    ): AppResult<Boolean>
 }

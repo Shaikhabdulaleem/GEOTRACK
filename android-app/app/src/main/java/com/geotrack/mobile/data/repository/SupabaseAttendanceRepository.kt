@@ -51,6 +51,35 @@ class SupabaseAttendanceRepository @Inject constructor(
     override suspend fun latestLocalSyncStatus(employeeId: String): String? =
         database.offlineAttendanceDao().forEmployee(employeeId).firstOrNull()?.syncStatus
 
+    override suspend fun recordLocationPing(
+        organizationId: String,
+        employeeId: String,
+        latitude: Double,
+        longitude: Double,
+        accuracyMeters: Float,
+        isMock: Boolean
+    ): AppResult<Boolean> {
+        val client = clientHolder.client
+            ?: return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Configuration("Supabase not configured"))
+        // Presence pings are a best-effort live signal; drop silently when
+        // offline rather than queueing, since a stale sample has no value.
+        if (!appContext.hasNetworkConnection()) {
+            return AppResult.Success(false)
+        }
+        return try {
+            val response = client.postgrest.rpc("record_location_ping", buildJsonObject {
+                put("p_employee_id", employeeId)
+                put("p_latitude", latitude)
+                put("p_longitude", longitude)
+                put("p_accuracy_meters", accuracyMeters.toDouble())
+                put("p_is_mock", isMock)
+            }).decodeList<RecordLocationPingResponse>()
+            AppResult.Success(response.firstOrNull()?.recorded ?: false)
+        } catch (e: Exception) {
+            AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown(e.message ?: "Unknown", e))
+        }
+    }
+
     override suspend fun getAttendanceForDate(
         organizationId: String,
         employeeId: String,
@@ -270,6 +299,13 @@ class SupabaseAttendanceRepository @Inject constructor(
             ?.geofenceId
     }
 }
+
+@Serializable
+private data class RecordLocationPingResponse(
+    @SerialName("ping_id") val pingId: String? = null,
+    @SerialName("inside_geofence") val insideGeofence: Boolean? = null,
+    val recorded: Boolean = false,
+)
 
 @Serializable
 private data class GeofenceAssignmentDto(

@@ -13,9 +13,10 @@ import { employeeService } from '../services/employee.service';
 import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabase';
 import { logger } from '../lib/logger';
 import WorkforceMap from '../components/WorkforceMap';
+import GeofenceBreachPanel from '../components/GeofenceBreachPanel';
 import { geofenceService } from '../services/geofence.service';
 import type { GeofenceWithPolygon } from '../services/geofence.service';
-import type { WorkforcePosition } from '../services/dashboard.service';
+import type { WorkforcePosition, GeofenceBreach } from '../services/dashboard.service';
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload?.length) {
@@ -332,6 +333,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const [liveAttendance, setLiveAttendance] = useState<Array<any>>([]);
   const [geofencePolys, setGeofencePolys] = useState<GeofenceWithPolygon[]>([]);
   const [workforcePositions, setWorkforcePositions] = useState<WorkforcePosition[]>([]);
+  const [geofenceBreaches, setGeofenceBreaches] = useState<GeofenceBreach[]>([]);
 
   useEffect(() => {
     if (!supabaseReady || !organizationId) return;
@@ -413,6 +415,16 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
       setLiveAttendance(liveData);
       setGeofencePolys(geoData);
       setWorkforcePositions(positions);
+
+      // Active out-of-geofence breaches (org-wide "now"; independent of the date
+      // filter). Best-effort: if the detector migration isn't deployed yet, a
+      // missing RPC must not blank the rest of the dashboard.
+      try {
+        setGeofenceBreaches(await dashboardService.getActiveGeofenceBreaches(organizationId));
+      } catch (breachErr) {
+        logger.warn('Active geofence breaches unavailable.', { error: breachErr });
+        setGeofenceBreaches([]);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data.');
       logger.error('Unable to load dashboard data.', err);
@@ -455,12 +467,39 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
           timer = setTimeout(() => { void loadDataRef.current({ silent: true }); }, 1000);
         },
       )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'geofence_breaches',
+          filter: `organization_id=eq.${organizationId}`,
+        },
+        () => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => { void loadDataRef.current({ silent: true }); }, 1000);
+        },
+      )
       .subscribe();
 
     return () => {
       if (timer) clearTimeout(timer);
       void client.removeChannel(channel);
     };
+  }, [supabaseReady, organizationId]);
+
+  // The breach duration counts up live between detector runs and realtime
+  // events, so refetch just the active breaches every 60s to keep "X min
+  // outside" current without reloading the whole dashboard.
+  useEffect(() => {
+    if (!supabaseReady || !organizationId) return;
+    const id = setInterval(async () => {
+      try {
+        const { dashboardService } = await import('../services/dashboard.service');
+        setGeofenceBreaches(await dashboardService.getActiveGeofenceBreaches(organizationId));
+      } catch { /* best-effort; the next full load will reconcile */ }
+    }, 60_000);
+    return () => clearInterval(id);
   }, [supabaseReady, organizationId]);
 
   // Aggregate values
@@ -626,6 +665,9 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
           <WorkforceMap geofences={geofencePolys} positions={workforcePositions} />
         </div>
       </div>
+
+      {/* Sustained out-of-geofence breaches during working hours */}
+      <GeofenceBreachPanel breaches={geofenceBreaches} onNav={onNav} />
 
       {/* Live Attendance by Shift */}
       <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>

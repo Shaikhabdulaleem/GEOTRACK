@@ -41,6 +41,23 @@ export interface WorkforcePosition {
   geofenceName: string | null;
 }
 
+/** An employee currently outside their geofence past the org threshold. */
+export interface GeofenceBreach {
+  breachId: string;
+  employeeId: string;
+  employeeName: string;
+  geofenceId: string | null;
+  geofenceName: string | null;
+  /** ISO timestamp the current continuous-outside streak began. */
+  startedAt: string;
+  /** ISO timestamp the breach was first raised. */
+  detectedAt: string;
+  /** ISO timestamp of the latest outside sample. */
+  lastSeenOutsideAt: string;
+  /** Live minutes continuously outside the geofence. */
+  minutesOutside: number;
+}
+
 interface LegacyShiftAssignment {
   employee_id: string;
   shift_id: string | null;
@@ -460,6 +477,40 @@ export const dashboardService = {
     }
 
     return positions;
+  },
+
+  /**
+   * Employees currently in a sustained out-of-geofence breach (checked in but
+   * continuously outside their fence past the org threshold). Backed by the
+   * server-side detector; manager scoping is enforced in the RPC.
+   */
+  async getActiveGeofenceBreaches(organizationId: string): Promise<GeofenceBreach[]> {
+    const client = getSupabaseClient();
+    const { data, error } = await client.rpc('get_active_geofence_breaches', {
+      p_organization_id: organizationId,
+    });
+    if (error) throw error;
+    return ((data ?? []) as Array<{
+      breach_id: string;
+      employee_id: string;
+      employee_name: string | null;
+      geofence_id: string | null;
+      geofence_name: string | null;
+      started_at: string;
+      detected_at: string;
+      last_seen_outside_at: string;
+      minutes_outside: number;
+    }>).map(row => ({
+      breachId: row.breach_id,
+      employeeId: row.employee_id,
+      employeeName: row.employee_name ?? 'Unknown employee',
+      geofenceId: row.geofence_id,
+      geofenceName: row.geofence_name,
+      startedAt: row.started_at,
+      detectedAt: row.detected_at,
+      lastSeenOutsideAt: row.last_seen_outside_at,
+      minutesOutside: row.minutes_outside,
+    }));
   },
 
   async getLookups(organizationId: string) {
