@@ -103,7 +103,7 @@ alter table public.geofence_breaches enable row level security;
 drop policy if exists manager_scoped_breach_select on public.geofence_breaches;
 create policy manager_scoped_breach_select on public.geofence_breaches
   for select to authenticated
-  using (private.manager_can_access_employee(employee_id));
+  using (private.can_access_employee(organization_id, employee_id));
 revoke all on table public.geofence_breaches from anon, authenticated;
 grant select on table public.geofence_breaches to authenticated;
 grant all on table public.geofence_breaches to service_role;
@@ -413,7 +413,7 @@ as $$
   where b.organization_id = p_organization_id
     and b.status = 'open'
     and private.is_org_member(p_organization_id)
-    and private.manager_can_access_employee(b.employee_id)
+    and private.can_access_employee(p_organization_id, b.employee_id)
   order by b.detected_at desc;
 $$;
 
