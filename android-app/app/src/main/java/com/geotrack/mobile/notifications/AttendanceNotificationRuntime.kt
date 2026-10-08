@@ -19,6 +19,7 @@ import com.google.firebase.FirebaseOptions
 import com.google.firebase.messaging.FirebaseMessaging
 import com.geotrack.mobile.phoneusage.PhoneUsageScheduler
 import com.geotrack.mobile.location.OfflineAttendanceSyncScheduler
+import com.geotrack.mobile.location.LocationHeartbeatScheduler
 import com.geotrack.mobile.location.GeofenceManager
 import com.geotrack.mobile.core.session.WorkerSessionBootstrapper
 import com.geotrack.mobile.data.remote.supabase.SupabaseClientHolder
@@ -83,13 +84,14 @@ class AttendanceNotificationPoster @Inject constructor(@ApplicationContext priva
 @Singleton
 class AndroidAttendanceNotificationCoordinator @Inject constructor(@ApplicationContext private val context: Context, private val poster: AttendanceNotificationPoster, private val phoneUsageScheduler: PhoneUsageScheduler, private val geofenceManager: GeofenceManager) : NotificationCoordinator {
     private val _state = MutableStateFlow(PushRegistrationState(false, false)); override val registrationState = _state.asStateFlow()
-    override fun onAuthenticated() { AttendanceChannels.create(context); WorkManager.getInstance(context).enqueueUniqueWork("attendance-refresh-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<AttendanceRefreshWorker>().build()); WorkManager.getInstance(context).enqueueUniquePeriodicWork("attendance-refresh", ExistingPeriodicWorkPolicy.UPDATE, PeriodicWorkRequestBuilder<AttendanceRefreshWorker>(12, TimeUnit.HOURS).build()); FirebaseConfig.ensure(context); if (FirebaseConfig.isConfigured(context)) WorkManager.getInstance(context).enqueueUniqueWork("push-token", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<PushTokenWorker>().build()); phoneUsageScheduler.onAuthenticated(); OfflineAttendanceSyncScheduler.enqueue(context); WorkforceCacheScheduler.enqueue(context) }
+    override fun onAuthenticated() { AttendanceChannels.create(context); WorkManager.getInstance(context).enqueueUniqueWork("attendance-refresh-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<AttendanceRefreshWorker>().build()); WorkManager.getInstance(context).enqueueUniquePeriodicWork("attendance-refresh", ExistingPeriodicWorkPolicy.UPDATE, PeriodicWorkRequestBuilder<AttendanceRefreshWorker>(12, TimeUnit.HOURS).build()); FirebaseConfig.ensure(context); if (FirebaseConfig.isConfigured(context)) WorkManager.getInstance(context).enqueueUniqueWork("push-token", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<PushTokenWorker>().build()); phoneUsageScheduler.onAuthenticated(); OfflineAttendanceSyncScheduler.enqueue(context); WorkforceCacheScheduler.enqueue(context); LocationHeartbeatScheduler.enqueue(context) }
     override fun onSignedOut() {
         WorkManager.getInstance(context).apply {
             cancelUniqueWork("attendance-refresh-now")
             cancelUniqueWork("attendance-refresh")
             OfflineAttendanceSyncScheduler.cancel(context)
             WorkforceCacheScheduler.cancel(context)
+            LocationHeartbeatScheduler.cancel(context)
             cancelUniqueWork("push-token")
             cancelAllWorkByTag("attendance-reminder")
         }
