@@ -168,6 +168,8 @@ export interface EmployeeProfileRow {
   manager_user_id: string | null;
   joining_date: string | null;
   employment_status: EmploymentStatus;
+  must_change_password: boolean;
+  login_last_reset_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -639,6 +641,10 @@ export interface Database {
       mark_notification_read: {
         Args: { p_notification_id: string };
         Returns: NotificationRow[];
+      };
+      complete_password_change: {
+        Args: Record<string, never>;
+        Returns: undefined;
       };
       record_location_ping: {
         Args: {

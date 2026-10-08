@@ -18,7 +18,7 @@ export interface PasswordResetInput {
  * and cannot be retrieved again. */
 export interface EmployeeAccountCredentials {
   identifier: string;
-  email: string;
+  email?: string;
   temporary_password: string;
   status: string;
 }
@@ -87,5 +87,22 @@ export const authService = {
     });
     if (error) throw toAppError(error, 'Unable to create the login account.');
     return data as EmployeeAccountCredentials;
+  },
+
+  /** Issues a NEW one-time temporary password for an employee who forgot theirs.
+   * The old password is never revealed; the employee must change the new one on
+   * next sign-in. Callable by scoped managers and administrators. */
+  async resetEmployeeAccount(employeeId: string): Promise<EmployeeAccountCredentials> {
+    const { data, error } = await getSupabaseClient().functions.invoke('reset-employee-login', {
+      body: { employee_id: employeeId },
+    });
+    if (error) throw toAppError(error, 'Unable to reset the login password.');
+    return data as EmployeeAccountCredentials;
+  },
+
+  /** Clears the forced-change flag after the employee sets their own password. */
+  async completePasswordChange(): Promise<void> {
+    const { error } = await getSupabaseClient().rpc('complete_password_change');
+    if (error) throw toAppError(error, 'Unable to finalize the password change.');
   },
 };

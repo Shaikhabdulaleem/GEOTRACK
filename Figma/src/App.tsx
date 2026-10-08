@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar';
 import SignIn from './views/auth/SignIn';
 import Unauthorized from './views/auth/Unauthorized';
 import ResetPassword from './views/auth/ResetPassword';
+import ForcePasswordChange from './views/auth/ForcePasswordChange';
 import AuthLoading from './views/auth/AuthLoading';
 import ConfigurationRequired from './views/auth/ConfigurationRequired';
 import { ProtectedRoute } from './auth/ProtectedRoute';
@@ -55,7 +56,18 @@ function RoleAwareNotifications() {
 }
 
 function ApplicationShell() {
-  const { roles } = useAuth();
+  const { roles, employeeProfile } = useAuth();
+
+  // Employees provisioned (or reset) with a temporary password must set their
+  // own before reaching any view. This blocks the whole shell until done.
+  if (employeeProfile?.must_change_password) {
+    return <ForcePasswordChange />;
+  }
+
+  return <AuthorizedShell roles={roles} />;
+}
+
+function AuthorizedShell({ roles }: { roles: AppRole[] }) {
   const allowedViews = useMemo(() => getAllowedViews(roles), [roles]);
   const nav = useNavigate();
   const loc = useLocation();
