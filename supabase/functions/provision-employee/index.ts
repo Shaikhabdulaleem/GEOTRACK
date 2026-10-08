@@ -74,6 +74,52 @@ function generateTemporaryPassword(): string {
   return chars.join('');
 }
 
+type ManagedEmployee = {
+  id: string;
+  organization_id: string;
+  branch_id: string | null;
+  department_id: string | null;
+  manager_user_id: string | null;
+};
+
+/**
+ * Mirrors the DB's private.can_access_employee: an active administrator of the
+ * org, or an active manager who is the employee's direct manager or has a
+ * matching manager_scopes entry (by employee, branch, or department).
+ */
+async function callerCanManageEmployee(
+  admin: ReturnType<typeof createClient>,
+  callerId: string,
+  employee: ManagedEmployee,
+): Promise<boolean> {
+  const { data: membership } = await admin
+    .from('organization_memberships')
+    .select('role_code')
+    .eq('organization_id', employee.organization_id)
+    .eq('user_id', callerId)
+    .eq('status', 'active')
+    .in('role_code', ['manager', 'administrator'])
+    .maybeSingle();
+  if (!membership) return false;
+  if (membership.role_code === 'administrator') return true;
+
+  // Manager: allowed if they directly manage the employee.
+  if (employee.manager_user_id && employee.manager_user_id === callerId) return true;
+
+  // Otherwise require a manager_scopes row that covers the employee. A null
+  // employee/branch/department column on the scope row is a wildcard.
+  const { data: scopes } = await admin
+    .from('manager_scopes')
+    .select('employee_id, branch_id, department_id')
+    .eq('organization_id', employee.organization_id)
+    .eq('manager_user_id', callerId);
+  return (scopes ?? []).some((scope) =>
+    (scope.employee_id === null || scope.employee_id === employee.id) &&
+    (scope.branch_id === null || scope.branch_id === employee.branch_id) &&
+    (scope.department_id === null || scope.department_id === employee.department_id),
+  );
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders(request) });
   if (request.method !== 'POST') return json(request, { error: 'Method not allowed' }, 405);
@@ -99,7 +145,7 @@ Deno.serve(async (request) => {
   const admin = createClient(url, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const { data: employee, error: employeeError } = await admin
     .from('employee_profiles')
-    .select('id, organization_id, user_id, employee_code')
+    .select('id, organization_id, user_id, employee_code, branch_id, department_id, manager_user_id')
     .eq('id', employeeId)
     .maybeSingle();
   if (employeeError) return json(request, { error: 'Unable to load employee' }, 500);
@@ -107,16 +153,10 @@ Deno.serve(async (request) => {
   if (employee.user_id) return json(request, { error: 'Employee already has a login account' }, 409);
   if (!employee.employee_code) return json(request, { error: 'Employee is missing an Employee ID' }, 422);
 
-  // Caller must be an active administrator of the employee's organization.
-  const { data: membership } = await admin
-    .from('organization_memberships')
-    .select('role_code')
-    .eq('organization_id', employee.organization_id)
-    .eq('user_id', caller.user.id)
-    .eq('status', 'active')
-    .eq('role_code', 'administrator')
-    .maybeSingle();
-  if (!membership) return json(request, { error: 'Administrator access required' }, 403);
+  // Caller must be an active administrator of the org, or a manager whose scope
+  // covers this employee (direct report or an explicit manager_scopes match).
+  const allowed = await callerCanManageEmployee(admin, caller.user.id, employee);
+  if (!allowed) return json(request, { error: 'You do not have access to manage this employee' }, 403);
 
   const identifier = String(employee.employee_code);
   const email = `${identifier.toLowerCase()}@${SYNTHETIC_EMAIL_DOMAIN}`;
@@ -142,7 +182,12 @@ Deno.serve(async (request) => {
   //    prevents a race from clobbering an account provisioned concurrently.
   const { data: linked, error: linkError } = await admin
     .from('employee_profiles')
-    .update({ user_id: created.user.id })
+    .update({
+      user_id: created.user.id,
+      // The temporary password must be replaced on first sign-in.
+      must_change_password: true,
+      login_last_reset_at: new Date().toISOString(),
+    })
     .eq('id', employee.id)
     .is('user_id', null)
     .select('id')
