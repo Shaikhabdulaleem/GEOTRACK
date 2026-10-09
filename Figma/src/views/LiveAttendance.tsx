@@ -41,6 +41,21 @@ export default function LiveAttendance() {
 
     const recordMap = Object.fromEntries((records || []).map(r => [r.employee_id, r]));
 
+    // Latest location signal per employee today. Riyadh is a fixed +03:00 offset,
+    // matching todayInTimezone above. Newest-first, so the first row per employee wins.
+    const { data: events, error: eError } = await client
+      .from('attendance_events')
+      .select('employee_id, inside_geofence, event_at')
+      .eq('organization_id', activeMembership.organization_id)
+      .gte('event_at', `${today}T00:00:00+03:00`)
+      .order('event_at', { ascending: false });
+    if (eError) throw eError;
+
+    const insideMap: Record<string, boolean> = {};
+    for (const ev of events || []) {
+      if (!(ev.employee_id in insideMap)) insideMap[ev.employee_id] = !!ev.inside_geofence;
+    }
+
     const mapped = (profiles || []).map(p => {
       const rec = recordMap[p.id];
       return {
@@ -51,7 +66,7 @@ export default function LiveAttendance() {
         checkin: rec ? (rec.check_in_at ? new Date(rec.check_in_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : null) : null,
         status: rec ? (rec.status ? rec.status.charAt(0).toUpperCase() + rec.status.slice(1) : 'Present') : 'Absent',
         worked: '0h 00m',
-        inside: true, // simplified
+        inside: insideMap[p.id] ?? false, // no location signal today → not Inside
         productivity: 0,
         phone: 0,
         ot: '0h 00m',
