@@ -1,11 +1,11 @@
 # Current release artifact
 
-- Version code: 1
-- Version name: 0.1.0
-- Build date: 2026-09-30
+- Version code: 2
+- Version name: 0.2.0
+- Build date: 2026-10-09
 - Artifact: app/build/outputs/apk/release/app-release.apk
-- Size: 16,278,831 bytes
-- APK SHA-256: 1966DF291443B2757D16937D64BBF3A223845FA14C64D1D4D6A9E67D6C2612B6
+- Size: 3,751,523 bytes
+- APK SHA-256: 43F1B60C753B8C7D6031876DB9D7F4D40091CC1565B174EA47428DFDA8C2DA63
 - Signature: APK Signature Scheme v2
 - Signer certificate SHA-256:
   B482D46B368210E100645E751CA04D600548A2D59C8E15047DDE8298F8BEF153
@@ -14,3 +14,6 @@
 
 This manifest identifies the locally verified release candidate. Repeat the
 build and update the hashes after any source, configuration or version change.
+
+> Signing key unchanged from v0.1.0 (still the development keystore). Rotate to
+> a vault-stored release key before the first production rollout, per RELEASE.md.

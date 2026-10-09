@@ -44,35 +44,16 @@ class SupabaseAttendanceNotificationRepository @Inject constructor(
       return try {
         val identity = identity() ?: return AppResult.Success(emptyList())
         val (context, employee) = identity
-        val now = Instant.now(); val zone = ZoneId.of(context.organization.timezone)
-        val today = LocalDate.now(zone); val window = schedules.getScheduleWindow(context.organization.id, employee.id, today, today.plusDays(1))
+        val zone = ZoneId.of(context.organization.timezone)
+        val today = LocalDate.now(zone)
+        // Fetch a rolling window so upcoming shifts — including ones that start
+        // after midnight — are queued ahead, not only today's events.
+        val window = schedules.getScheduleWindow(context.organization.id, employee.id, today, today.plusDays(HORIZON_DAYS))
         val list = (window as? AppResult.Success)?.value ?: return AppResult.Success(emptyList())
-        val out = mutableListOf<ScheduledNotification>()
-        val todaySchedule = list.firstOrNull { it.date == today }
-        if (todaySchedule.isAssignedWorkingShift()) {
-            todaySchedule?.let { schedule ->
-                val start = parseTime(schedule.startTime!!, today, zone)
-                val end = parseTime(schedule.endTime!!, today, zone).let { if (!it.isAfter(start)) it.plusDays(1) else it }
-                out += ScheduledNotification(AttendanceNotificationType.SHIFT_START, today, start.minusMinutes(30).toInstant())
-                out += ScheduledNotification(AttendanceNotificationType.NOT_CHECKED_IN, today, start.plusMinutes(15).toInstant())
-                out += ScheduledNotification(AttendanceNotificationType.SHIFT_ENDING, today, end.minusMinutes(30).toInstant())
-                out += ScheduledNotification(AttendanceNotificationType.FORGOT_CHECKOUT, today, end.plusMinutes(15).toInstant())
-                out += ScheduledNotification(AttendanceNotificationType.MISSED_ATTENDANCE, today, end.plusMinutes(15).toInstant())
-            }
-        }
-        val tomorrow = list.firstOrNull { it.date == today.plusDays(1) }
-        val evening = today.atTime(18, 0).atZone(zone).toInstant()
-        if (tomorrow.isAssignedWorkingShift()) out += ScheduledNotification(AttendanceNotificationType.TOMORROW_WORKING, today.plusDays(1), evening)
-        else if (tomorrow?.state == TodayScheduleState.OFF_DAY || tomorrow?.state == TodayScheduleState.HOLIDAY || tomorrow?.state == TodayScheduleState.LEAVE) out += ScheduledNotification(AttendanceNotificationType.TOMORROW_OFF, today.plusDays(1), evening)
-        AppResult.Success(out.filter { it.at.isAfter(now.plusSeconds(5)) })
+        AppResult.Success(AttendanceReminderPlanner.build(Instant.now(), zone, list, HORIZON_DAYS))
       } catch (e: Exception) { failure(e) }
     }
 
-    private fun parseTime(value: String, date: LocalDate, zone: ZoneId): ZonedDateTime = ZonedDateTime.of(date, LocalTime.parse(value.take(8)), zone)
-    private fun com.geotrack.mobile.domain.model.DailySchedule?.isAssignedWorkingShift(): Boolean =
-        this?.state == TodayScheduleState.WORKING_DAY &&
-            !this.shiftName.isNullOrBlank() && this.shiftName != "No Shift Assigned" &&
-            !this.startTime.isNullOrBlank() && !this.endTime.isNullOrBlank()
     private suspend fun hasAttendance(employeeId: String, date: LocalDate): AttendanceRecordDto? {
         val c = holder.client ?: return null
         return c.postgrest["attendance_records"].select { filter { eq("employee_id", employeeId); eq("attendance_date", date.toString()) } }.decodeList<AttendanceRecordDto>().firstOrNull()
@@ -155,4 +136,8 @@ class SupabaseAttendanceNotificationRepository @Inject constructor(
         client.postgrest.rpc("unregister_mobile_push_token", buildJsonObject { put("p_token", token) })
         AppResult.Success(Unit)
     } catch (e: Exception) { failure(e) }
+
+    private companion object {
+        const val HORIZON_DAYS = 3L
+    }
 }

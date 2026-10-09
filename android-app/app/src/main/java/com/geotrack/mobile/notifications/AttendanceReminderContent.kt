@@ -14,11 +14,11 @@ internal object AttendanceReminderContent {
     ): Content? = when (type) {
         AttendanceNotificationType.SHIFT_START -> Content(
             title = "Shift starting soon",
-            body = "Your shift starts at ${shiftStart.orEmpty()}. Open GeoTrack when you arrive to mark attendance.",
+            body = "Your shift starts at ${shiftStart.orEmpty()}. Please ensure you are at your assigned location.",
         )
         AttendanceNotificationType.NOT_CHECKED_IN -> if (!checkedIn) Content(
-            title = "Attendance reminder",
-            body = "You have not checked in. Open GeoTrack and mark your attendance now.",
+            title = "Attendance not marked",
+            body = "Your attendance has not been marked. Please open GeoTrack and check in.",
         ) else null
         AttendanceNotificationType.MISSED_ATTENDANCE -> if (!checkedIn) Content(
             title = "Missed attendance",

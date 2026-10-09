@@ -21,6 +21,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <!-- Re-register geofences and re-arm reminder alarms after a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Exact reminder delivery (15-min pre/post shift). Revocable on Android
+         12+; we fall back to an inexact alarm when it is not granted. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <application
         android:name=".GeotrackApplication"
         android:allowBackup="false"
@@ -53,6 +59,22 @@
         <receiver
             android:name=".location.GeofenceBroadcastReceiver"
             android:exported="false" />
+
+        <!-- Fires scheduled attendance reminders at their exact instant. -->
+        <receiver
+            android:name=".notifications.AttendanceAlarmReceiver"
+            android:exported="false" />
+
+        <!-- Rebuilds geofences + reminder alarms after reboot or app update. -->
+        <receiver
+            android:name=".core.boot.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <service android:name=".notifications.GeotrackFirebaseMessagingService" android:exported="false">
             <intent-filter>

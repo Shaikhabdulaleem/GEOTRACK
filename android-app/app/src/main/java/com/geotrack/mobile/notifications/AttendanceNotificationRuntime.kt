@@ -20,6 +20,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.geotrack.mobile.phoneusage.PhoneUsageScheduler
 import com.geotrack.mobile.location.OfflineAttendanceSyncScheduler
 import com.geotrack.mobile.location.LocationHeartbeatScheduler
+import com.geotrack.mobile.location.AutoAttendanceScheduler
 import com.geotrack.mobile.location.GeofenceManager
 import com.geotrack.mobile.core.session.WorkerSessionBootstrapper
 import com.geotrack.mobile.data.remote.supabase.SupabaseClientHolder
@@ -82,9 +83,9 @@ class AttendanceNotificationPoster @Inject constructor(@ApplicationContext priva
 }
 
 @Singleton
-class AndroidAttendanceNotificationCoordinator @Inject constructor(@ApplicationContext private val context: Context, private val poster: AttendanceNotificationPoster, private val phoneUsageScheduler: PhoneUsageScheduler, private val geofenceManager: GeofenceManager) : NotificationCoordinator {
+class AndroidAttendanceNotificationCoordinator @Inject constructor(@ApplicationContext private val context: Context, private val poster: AttendanceNotificationPoster, private val phoneUsageScheduler: PhoneUsageScheduler, private val geofenceManager: GeofenceManager, private val alarmScheduler: AttendanceAlarmScheduler) : NotificationCoordinator {
     private val _state = MutableStateFlow(PushRegistrationState(false, false)); override val registrationState = _state.asStateFlow()
-    override fun onAuthenticated() { AttendanceChannels.create(context); WorkManager.getInstance(context).enqueueUniqueWork("attendance-refresh-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<AttendanceRefreshWorker>().build()); WorkManager.getInstance(context).enqueueUniquePeriodicWork("attendance-refresh", ExistingPeriodicWorkPolicy.UPDATE, PeriodicWorkRequestBuilder<AttendanceRefreshWorker>(12, TimeUnit.HOURS).build()); FirebaseConfig.ensure(context); if (FirebaseConfig.isConfigured(context)) WorkManager.getInstance(context).enqueueUniqueWork("push-token", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<PushTokenWorker>().build()); phoneUsageScheduler.onAuthenticated(); OfflineAttendanceSyncScheduler.enqueue(context); WorkforceCacheScheduler.enqueue(context); LocationHeartbeatScheduler.enqueue(context) }
+    override fun onAuthenticated() { AttendanceChannels.create(context); WorkManager.getInstance(context).enqueueUniqueWork("attendance-refresh-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<AttendanceRefreshWorker>().build()); WorkManager.getInstance(context).enqueueUniquePeriodicWork("attendance-refresh", ExistingPeriodicWorkPolicy.UPDATE, PeriodicWorkRequestBuilder<AttendanceRefreshWorker>(12, TimeUnit.HOURS).build()); FirebaseConfig.ensure(context); if (FirebaseConfig.isConfigured(context)) WorkManager.getInstance(context).enqueueUniqueWork("push-token", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<PushTokenWorker>().build()); phoneUsageScheduler.onAuthenticated(); OfflineAttendanceSyncScheduler.enqueue(context); WorkforceCacheScheduler.enqueue(context); LocationHeartbeatScheduler.enqueue(context); AutoAttendanceScheduler.enqueue(context) }
     override fun onSignedOut() {
         WorkManager.getInstance(context).apply {
             cancelUniqueWork("attendance-refresh-now")
@@ -92,9 +93,11 @@ class AndroidAttendanceNotificationCoordinator @Inject constructor(@ApplicationC
             OfflineAttendanceSyncScheduler.cancel(context)
             WorkforceCacheScheduler.cancel(context)
             LocationHeartbeatScheduler.cancel(context)
+            AutoAttendanceScheduler.cancel(context)
             cancelUniqueWork("push-token")
             cancelAllWorkByTag("attendance-reminder")
         }
+        runCatching { alarmScheduler.cancelAll() }
         phoneUsageScheduler.onSignedOut()
         runCatching { geofenceManager.removeGeofences() }
         _state.value = PushRegistrationState(false, FirebaseConfig.isConfigured(context))
@@ -128,8 +131,17 @@ object FirebaseConfig {
     }
 }
 
-@HiltWorker class AttendanceRefreshWorker @AssistedInject constructor(@Assisted appContext: Context, @Assisted params: WorkerParameters, private val repo: AttendanceNotificationRepository, private val sessionBootstrapper: WorkerSessionBootstrapper) : CoroutineWorker(appContext, params) {
-    override suspend fun doWork(): Result { sessionBootstrapper.restore() ?: return Result.success(); val plans = (repo.plans() as? com.geotrack.mobile.core.common.AppResult.Success)?.value ?: return Result.retry(); val wm = WorkManager.getInstance(applicationContext); wm.cancelAllWorkByTag("attendance-reminder"); plans.forEach { plan -> val delay = (plan.at.toEpochMilli() - Instant.now().toEpochMilli()).coerceAtLeast(0); wm.enqueue(OneTimeWorkRequestBuilder<AttendanceReminderWorker>().setInitialDelay(delay, TimeUnit.MILLISECONDS).addTag("attendance-reminder").setInputData(workDataOf("type" to plan.type.name, "date" to plan.workDate.toString())).build()) }; return Result.success() }
+@HiltWorker class AttendanceRefreshWorker @AssistedInject constructor(@Assisted appContext: Context, @Assisted params: WorkerParameters, private val repo: AttendanceNotificationRepository, private val sessionBootstrapper: WorkerSessionBootstrapper, private val alarmScheduler: AttendanceAlarmScheduler) : CoroutineWorker(appContext, params) {
+    override suspend fun doWork(): Result {
+        sessionBootstrapper.restore() ?: return Result.success()
+        val plans = (repo.plans() as? com.geotrack.mobile.core.common.AppResult.Success)?.value ?: return Result.retry()
+        // Drain any legacy WorkManager-delayed reminders from older builds, then
+        // (re)arm exact alarms for the whole upcoming horizon. Re-planning here
+        // also reconciles after a schedule change or reboot.
+        WorkManager.getInstance(applicationContext).cancelAllWorkByTag("attendance-reminder")
+        alarmScheduler.schedule(plans)
+        return Result.success()
+    }
 }
 
 @HiltWorker class AttendanceReminderWorker @AssistedInject constructor(@Assisted appContext: Context, @Assisted params: WorkerParameters, private val repo: AttendanceNotificationRepository, private val poster: AttendanceNotificationPoster) : CoroutineWorker(appContext, params) {

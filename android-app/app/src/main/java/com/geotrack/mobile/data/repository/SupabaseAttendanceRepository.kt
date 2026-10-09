@@ -158,7 +158,7 @@ class SupabaseAttendanceRepository @Inject constructor(
     ): AppResult<Unit> = processEvent(
         organizationId, employeeId, "check_out", latitude, longitude, accuracyMeters, isMock, isAuto
     )
-    
+
     private suspend fun processEvent(
         organizationId: String,
         employeeId: String,
@@ -170,6 +170,10 @@ class SupabaseAttendanceRepository @Inject constructor(
         isAuto: Boolean
     ): AppResult<Unit> {
         val client = clientHolder.client ?: return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Configuration("Supabase not configured"))
+        // Every attempt uses a fresh idempotency key so a transient failure or a
+        // prior "outside geofence" rejection never blocks a later valid attempt.
+        // Duplicate attendance is prevented server-side (a per-employee advisory
+        // lock + the unique attendance record) and by the caller's pre-read.
         val localEventId = UUID.randomUUID()
         val eventTime = Instant.now()
         val online = appContext.hasNetworkConnection()
