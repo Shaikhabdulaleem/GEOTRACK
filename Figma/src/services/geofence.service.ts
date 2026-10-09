@@ -293,11 +293,25 @@ export const geofenceService = {
   // ── Delete (soft) ────────────────────────────────────────────────────────
 
   async archive(geofenceId: string): Promise<void> {
-    const { error } = await getSupabaseClient()
+    const client = getSupabaseClient();
+    const { error } = await client
       .from('geofences')
       .update({ status: 'archived' } as TablesUpdate<'geofences'>)
       .eq('id', geofenceId);
     if (error) throw error;
+    // End any active assignments so clients stop resolving/monitoring an
+    // archived geofence. Dated yesterday so same-day lookups (effective_to >=
+    // today) exclude it immediately, not just from tomorrow.
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const endedOn = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const { error: assignError } = await client
+      .from('geofence_assignments')
+      .update({ effective_to: endedOn } as TablesUpdate<'geofence_assignments'>)
+      .eq('geofence_id', geofenceId)
+      .is('effective_to', null);
+    if (assignError) throw assignError;
   },
 
   // ── Employee Assignments ─────────────────────────────────────────────────
