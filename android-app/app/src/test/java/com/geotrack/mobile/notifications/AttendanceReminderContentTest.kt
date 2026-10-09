@@ -12,8 +12,8 @@ class AttendanceReminderContentTest {
             checkedIn = false,
         )
 
-        assertEquals("Attendance reminder", content?.title)
-        assertEquals("You have not checked in. Open GeoTrack and mark your attendance now.", content?.body)
+        assertEquals("Attendance not marked", content?.title)
+        assertEquals("Your attendance has not been marked. Please open GeoTrack and check in.", content?.body)
     }
 
     @Test
@@ -58,6 +58,19 @@ class AttendanceReminderContentTest {
                 checkedIn = true,
                 checkedOut = true,
             ),
+        )
+    }
+
+    @Test
+    fun `pre-shift reminder states shift time and location per spec`() {
+        val content = AttendanceReminderContent.resolve(
+            type = AttendanceNotificationType.SHIFT_START,
+            shiftStart = "9:00 AM",
+        )
+        assertEquals("Shift starting soon", content?.title)
+        assertEquals(
+            "Your shift starts at 9:00 AM. Please ensure you are at your assigned location.",
+            content?.body,
         )
     }
 

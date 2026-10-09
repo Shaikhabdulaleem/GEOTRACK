@@ -99,7 +99,7 @@ class WorkforceCacheSyncWorker @AssistedInject constructor(
                 val polygonJson = polygon?.polygon?.toString() ?: "{}"
                 cache.upsertGeofence(CachedGeofenceEntity(employee.id, fence.id, fence.name, polygonJson, assignment.effectiveFrom, assignment.effectiveTo, now))
                 if (polygon != null) {
-                    runCatching { geofenceManager.addGeofenceFromGeoJson(fence.id, polygon.polygon) }
+                    runCatching { geofenceManager.addGeofenceFromGeoJson(fence.id, polygon.polygon, fence.name) }
                 }
             }
         }

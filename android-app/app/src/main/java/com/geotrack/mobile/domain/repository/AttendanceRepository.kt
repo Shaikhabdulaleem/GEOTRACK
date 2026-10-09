@@ -10,20 +10,20 @@ interface AttendanceRepository {
     suspend fun getAttendanceWindow(organizationId: String, employeeId: String, startDate: LocalDate, endDate: LocalDate): AppResult<List<DailyAttendance>>
     
     suspend fun checkIn(
-        organizationId: String, 
-        employeeId: String, 
-        latitude: Double, 
-        longitude: Double, 
+        organizationId: String,
+        employeeId: String,
+        latitude: Double,
+        longitude: Double,
         accuracyMeters: Float,
         isMock: Boolean,
         isAuto: Boolean = false
     ): AppResult<Unit>
-    
+
     suspend fun checkOut(
-        organizationId: String, 
-        employeeId: String, 
-        latitude: Double, 
-        longitude: Double, 
+        organizationId: String,
+        employeeId: String,
+        latitude: Double,
+        longitude: Double,
         accuracyMeters: Float,
         isMock: Boolean,
         isAuto: Boolean = false

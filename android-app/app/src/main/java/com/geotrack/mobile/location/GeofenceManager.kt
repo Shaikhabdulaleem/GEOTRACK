@@ -1,21 +1,28 @@
-﻿package com.geotrack.mobile.location
+package com.geotrack.mobile.location
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import javax.inject.Singleton
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 
+@Singleton
 class GeofenceManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val diagnostics: GeofenceDiagnostics,
 ) {
     private val geofencingClient: GeofencingClient = LocationServices.getGeofencingClient(context)
 
@@ -25,47 +32,109 @@ class GeofenceManager @Inject constructor(
             context,
             0,
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
         )
     }
 
+    /** True only when every permission the OS requires to monitor geofences in
+     * the background is granted. The platform silently refuses registration
+     * otherwise, so this is checked (and surfaced) before every attempt. */
+    fun canMonitor(): Boolean = missingPermissions().isEmpty()
+
+    fun missingPermissions(): List<String> {
+        val missing = mutableListOf<String>()
+        if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            missing += "fine location"
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            !granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        ) {
+            missing += "background location (\"Allow all the time\")"
+        }
+        return missing
+    }
+
+    private fun granted(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
     @SuppressLint("MissingPermission")
-    fun addGeofence(geofenceId: String, lat: Double, lng: Double, radiusMeters: Float) {
+    fun addGeofence(geofenceId: String, lat: Double, lng: Double, radiusMeters: Float, label: String? = null) {
+        val missing = missingPermissions()
+        if (missing.isNotEmpty()) {
+            diagnostics.record(
+                GeofenceDiagnostics.Stage.PERMISSION,
+                ok = false,
+                message = "Cannot register ${label ?: geofenceId}: missing ${missing.joinToString()}.",
+            )
+            return
+        }
+
         val geofence = Geofence.Builder()
             .setRequestId(geofenceId)
             .setCircularRegion(lat, lng, radiusMeters)
             .setExpirationDuration(Geofence.NEVER_EXPIRE)
+            // Lower responsiveness lets the OS batch for battery; the server
+            // re-validates the precise polygon so a few seconds' latency is fine.
+            .setNotificationResponsiveness(30_000)
             .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
             .build()
 
         val geofencingRequest = GeofencingRequest.Builder()
+            // INITIAL_TRIGGER_ENTER makes the platform fire ENTER immediately if
+            // the device is already inside at registration time — the key to
+            // auto check-in for an employee who arrived before their shift.
             .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
             .addGeofence(geofence)
             .build()
 
         geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent)
             .addOnSuccessListener {
-                // Successfully added circular trigger
+                diagnostics.record(
+                    GeofenceDiagnostics.Stage.REGISTRATION,
+                    ok = true,
+                    message = "Registered ${label ?: geofenceId} (r=${radiusMeters.toInt()}m).",
+                )
             }
-            .addOnFailureListener {
-                // Failed to add
+            .addOnFailureListener { error ->
+                diagnostics.record(
+                    GeofenceDiagnostics.Stage.REGISTRATION,
+                    ok = false,
+                    message = "Failed to register ${label ?: geofenceId}: ${error.message ?: error.javaClass.simpleName}. " +
+                        "Check Location is on and set to high accuracy.",
+                )
             }
     }
 
     fun removeGeofences() {
         geofencingClient.removeGeofences(geofencePendingIntent)
+        diagnostics.record(GeofenceDiagnostics.Stage.REGISTRATION, ok = true, message = "Removed all geofences.")
     }
 
-    /** Registers a conservative circular approximation for a cached polygon.
-     * Server-side polygon validation remains authoritative for attendance. */
-    fun addGeofenceFromGeoJson(geofenceId: String, polygon: JsonElement) {
+    /**
+     * Registers a circular trigger that **fully encloses** the assigned polygon.
+     *
+     * Android geofences are circular only, so we take the smallest circle that
+     * contains every polygon vertex (plus a GPS-noise buffer). Over-covering is
+     * intentional: the platform ENTER fires at or before the true polygon
+     * boundary so no crossing is missed, and the server's PostGIS point-in-
+     * polygon check remains the authoritative gate for marking attendance.
+     */
+    fun addGeofenceFromGeoJson(geofenceId: String, polygon: JsonElement, label: String? = null) {
         val points = polygon.flattenCoordinatePairs()
-        if (points.isEmpty()) return
+        if (points.isEmpty()) {
+            diagnostics.record(
+                GeofenceDiagnostics.Stage.REGISTRATION,
+                ok = false,
+                message = "Geofence ${label ?: geofenceId} has no usable polygon coordinates.",
+            )
+            return
+        }
         val lat = points.map { it.second }.average()
         val lng = points.map { it.first }.average()
-        val radius = points.maxOf { point -> distanceMeters(lat, lng, point.second, point.first) }
-            .coerceIn(50f, 1000f)
-        addGeofence(geofenceId, lat, lng, radius)
+        val enclosing = points.maxOf { point -> distanceMeters(lat, lng, point.second, point.first) }
+        // Buffer for GPS jitter; floor so a tiny site still triggers reliably.
+        val radius = (enclosing + GPS_BUFFER_METERS).coerceIn(MIN_RADIUS_METERS, MAX_RADIUS_METERS)
+        addGeofence(geofenceId, lat, lng, radius, label)
     }
 
     private fun distanceMeters(aLat: Double, aLng: Double, bLat: Double, bLng: Double): Float {
@@ -76,9 +145,18 @@ class GeofenceManager @Inject constructor(
 
     private fun JsonElement.flattenCoordinatePairs(): List<Pair<Double, Double>> = when (this) {
         is JsonArray -> if (size >= 2 && get(0) is JsonPrimitive && get(1) is JsonPrimitive &&
-            get(0).toString().toDoubleOrNull() != null && get(1).toString().toDoubleOrNull() != null) {
+            get(0).toString().toDoubleOrNull() != null && get(1).toString().toDoubleOrNull() != null
+        ) {
             listOf(get(0).toString().toDouble() to get(1).toString().toDouble())
-        } else flatMap { it.flattenCoordinatePairs() }
+        } else {
+            flatMap { it.flattenCoordinatePairs() }
+        }
         else -> emptyList()
+    }
+
+    private companion object {
+        const val GPS_BUFFER_METERS = 30f
+        const val MIN_RADIUS_METERS = 100f
+        const val MAX_RADIUS_METERS = 50_000f
     }
 }

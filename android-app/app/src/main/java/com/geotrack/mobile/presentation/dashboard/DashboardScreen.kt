@@ -93,6 +93,9 @@ fun DashboardScreen(
         // 1 & 2. Schedule Banner (Am I working today? What shift?)
         SimpleScheduleBanner(uiState)
 
+        // Surface any permission/system blockers for automatic attendance.
+        AttendanceSetupBanner()
+
         // 3 & 4. Check In/Out (Am I checked in? What time?)
         if (uiState.scheduleState == TodayScheduleState.WORKING_DAY) {
             SimpleAttendanceCard(uiState, viewModel, reqPermissions, context)
