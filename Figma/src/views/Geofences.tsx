@@ -1163,9 +1163,9 @@ export default function Geofences() {
           initialColor={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.color ?? PALETTE[0]) : PALETTE[0]}
           initialBranchId={supabaseReady ? (editId ? (fences.find(f => f.id === editId)?.branch_id ?? '') : (sites[0]?.id ?? '')) : 'preview'}
           sites={supabaseReady ? sites : [{ id: 'preview', name: 'Preview site' }]}
-          initialMode={checkinMode}
-          initialAccuracy={Number(gpsAccuracy)}
-          initialTimeout={Number(autoTimeout)}
+          initialMode={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.checkin_mode ?? 'confirmation') : checkinMode}
+          initialAccuracy={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.required_accuracy_meters ?? 50) : Number(gpsAccuracy)}
+          initialTimeout={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.auto_checkout_timeout_minutes ?? 15) : Number(autoTimeout)}
           saving={saving}
           error={saveError}
           onSave={(n, branchId, c, m, a, t) => void handleSave(n, branchId, c, m, a, t)}
