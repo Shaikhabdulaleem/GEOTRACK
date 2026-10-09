@@ -1,11 +1,11 @@
 # Current release artifact
 
-- Version code: 2
-- Version name: 0.2.0
+- Version code: 3
+- Version name: 0.2.1
 - Build date: 2026-10-09
 - Artifact: app/build/outputs/apk/release/app-release.apk
 - Size: 3,751,523 bytes
-- APK SHA-256: 43F1B60C753B8C7D6031876DB9D7F4D40091CC1565B174EA47428DFDA8C2DA63
+- APK SHA-256: 9FF27CA56AF48EBA05C3DD150FD7A2E0A0492EB355C9563A57683C1933B46185
 - Signature: APK Signature Scheme v2
 - Signer certificate SHA-256:
   B482D46B368210E100645E751CA04D600548A2D59C8E15047DDE8298F8BEF153

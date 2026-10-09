@@ -17,6 +17,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 @Singleton
@@ -120,7 +121,7 @@ class GeofenceManager @Inject constructor(
      * polygon check remains the authoritative gate for marking attendance.
      */
     fun addGeofenceFromGeoJson(geofenceId: String, polygon: JsonElement, label: String? = null) {
-        val points = polygon.flattenCoordinatePairs()
+        val points = flattenCoordinatePairs(polygon)
         if (points.isEmpty()) {
             diagnostics.record(
                 GeofenceDiagnostics.Stage.REGISTRATION,
@@ -143,20 +144,29 @@ class GeofenceManager @Inject constructor(
         return results[0]
     }
 
-    private fun JsonElement.flattenCoordinatePairs(): List<Pair<Double, Double>> = when (this) {
-        is JsonArray -> if (size >= 2 && get(0) is JsonPrimitive && get(1) is JsonPrimitive &&
-            get(0).toString().toDoubleOrNull() != null && get(1).toString().toDoubleOrNull() != null
-        ) {
-            listOf(get(0).toString().toDouble() to get(1).toString().toDouble())
-        } else {
-            flatMap { it.flattenCoordinatePairs() }
-        }
-        else -> emptyList()
-    }
-
     private companion object {
         const val GPS_BUFFER_METERS = 30f
         const val MIN_RADIUS_METERS = 100f
         const val MAX_RADIUS_METERS = 50_000f
     }
+}
+
+/**
+ * Flattens any nesting of a stored geofence polygon into (lng, lat) pairs.
+ *
+ * The DB stores a GeoJSON MultiPolygon object
+ * (`{"type":"MultiPolygon","coordinates":[[[[lng,lat],…]]]}`), so this descends
+ * through both object values and arrays until it reaches `[lng, lat]` primitive
+ * pairs. Top-level so it can be unit tested without Android.
+ */
+internal fun flattenCoordinatePairs(element: JsonElement): List<Pair<Double, Double>> = when (element) {
+    is JsonArray -> if (element.size >= 2 && element[0] is JsonPrimitive && element[1] is JsonPrimitive &&
+        element[0].toString().toDoubleOrNull() != null && element[1].toString().toDoubleOrNull() != null
+    ) {
+        listOf(element[0].toString().toDouble() to element[1].toString().toDouble())
+    } else {
+        element.flatMap { flattenCoordinatePairs(it) }
+    }
+    is JsonObject -> element.values.flatMap { flattenCoordinatePairs(it) }
+    else -> emptyList()
 }
