@@ -960,9 +960,6 @@ export default function Geofences() {
   const [showAssign, setShowAssign] = useState(false);
 
   // ── Config state ─────────────────────────────────────────────────────────
-  const [checkinMode, setCheckinMode] = useState<CheckinMode>('confirmation');
-  const [gpsAccuracy, setGpsAccuracy] = useState('50');
-  const [autoTimeout, setAutoTimeout] = useState('15');
 
   // ── Load data ────────────────────────────────────────────────────────────
   const loadFences = useCallback(async () => {
@@ -1163,9 +1160,9 @@ export default function Geofences() {
           initialColor={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.color ?? PALETTE[0]) : PALETTE[0]}
           initialBranchId={supabaseReady ? (editId ? (fences.find(f => f.id === editId)?.branch_id ?? '') : (sites[0]?.id ?? '')) : 'preview'}
           sites={supabaseReady ? sites : [{ id: 'preview', name: 'Preview site' }]}
-          initialMode={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.checkin_mode ?? 'confirmation') : checkinMode}
-          initialAccuracy={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.required_accuracy_meters ?? 50) : Number(gpsAccuracy)}
-          initialTimeout={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.auto_checkout_timeout_minutes ?? 15) : Number(autoTimeout)}
+          initialMode={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.checkin_mode ?? 'confirmation') : 'confirmation'}
+          initialAccuracy={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.required_accuracy_meters ?? 50) : 50}
+          initialTimeout={editId ? ((fences.find(f => f.id === editId) as GeofenceWithPolygon | undefined)?.auto_checkout_timeout_minutes ?? 15) : 15}
           saving={saving}
           error={saveError}
           onSave={(n, branchId, c, m, a, t) => void handleSave(n, branchId, c, m, a, t)}
@@ -1447,52 +1444,6 @@ export default function Geofences() {
               ) : null;
             })()
           )}
-        </div>
-      </div>
-
-      {/* Configuration panel */}
-      <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
-        <div className="font-semibold text-sm text-white mb-3">Geofence Check-In Configuration</div>
-        <div className="grid grid-cols-3 gap-6">
-          <div>
-            <div className="text-xs mb-2" style={{ color: '#4b6a8a' }}>Check-In Mode</div>
-            <div className="flex flex-col gap-2">
-              {([
-                { value: 'automatic', label: 'Mode A — Automatic (enter = check-in)' },
-                { value: 'confirmation', label: 'Mode B — Confirmation required' },
-                { value: 'manual_only', label: 'Mode C — Manual only' },
-              ] as { value: CheckinMode; label: string }[]).map(m => (
-                <label key={m.value} className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="checkin-mode" style={{ accentColor: '#2563eb' }}
-                    checked={checkinMode === m.value} onChange={() => setCheckinMode(m.value)} />
-                  <span className="text-xs" style={{ color: '#94a3b8' }}>{m.label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs mb-2" style={{ color: '#4b6a8a' }}>Auto Check-Out Timeout</div>
-            <div className="flex items-center gap-2">
-              <input type="number" min="1"
-                className="w-16 px-2 py-1.5 rounded text-xs text-center font-mono outline-none"
-                style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                value={autoTimeout} onChange={e => setAutoTimeout(e.target.value)} />
-              <span className="text-xs" style={{ color: '#4b6a8a' }}>min outside before prompt</span>
-            </div>
-          </div>
-          <div>
-            <div className="text-xs mb-2" style={{ color: '#4b6a8a' }}>GPS Accuracy Minimum</div>
-            <div className="flex items-center gap-2">
-              <input type="number" min="1"
-                className="w-16 px-2 py-1.5 rounded text-xs text-center font-mono outline-none"
-                style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                value={gpsAccuracy} onChange={e => setGpsAccuracy(e.target.value)} />
-              <span className="text-xs" style={{ color: '#4b6a8a' }}>meters</span>
-            </div>
-            <div className="text-xs mt-2" style={{ color: '#4b6a8a' }}>
-              GPS weaker than this = <span style={{ color: '#f59e0b' }}>low_accuracy</span> validation
-            </div>
-          </div>
         </div>
       </div>
 
