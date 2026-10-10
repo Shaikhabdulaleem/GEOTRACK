@@ -124,7 +124,7 @@ private fun buildSetupItems(status: DeviceStatus): List<SetupItem> = buildList {
         add(
             SetupItem(
                 title = "Allow location all the time",
-                detail = "Automatic check-in needs location set to \"Allow all the time\".",
+                detail = "Open Permissions → Location, then choose \"Allow all the time\" so check-in works in the background.",
                 action = "Open location settings",
                 intent = ::appSettingsIntent,
             ),
@@ -189,8 +189,13 @@ private fun buildSetupItems(status: DeviceStatus): List<SetupItem> = buildList {
             SetupItem(
                 title = "Remove battery restrictions",
                 detail = "Battery optimization can stop background check-in and reminders.",
-                action = "Open battery settings",
-                intent = { Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) },
+                action = "Allow background activity",
+                intent = { ctx ->
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:${ctx.packageName}"),
+                    )
+                },
             ),
         )
     }

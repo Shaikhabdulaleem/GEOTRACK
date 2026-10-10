@@ -36,8 +36,18 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -135,9 +145,10 @@ fun HomeScreen(
     role: AppRole,
     onSignOut: () -> Unit,
 ) {
+    FirstRunPermissionPrompt()
     val innerNavController = rememberNavController()
     val tabs = when (role) {
-        AppRole.EMPLOYEE -> listOf(HomeTab.DASHBOARD, HomeTab.SCHEDULE, HomeTab.NOTIFICATIONS, HomeTab.MORE)
+        AppRole.EMPLOYEE -> listOf(HomeTab.DASHBOARD, HomeTab.SCHEDULE, HomeTab.NOTIFICATIONS, HomeTab.PROFILE)
         AppRole.MANAGER -> listOf(HomeTab.DASHBOARD, HomeTab.TEAM, HomeTab.NOTIFICATIONS, HomeTab.PROFILE)
         AppRole.ADMINISTRATOR -> listOf(HomeTab.DASHBOARD, HomeTab.NOTIFICATIONS, HomeTab.PROFILE)
     }
@@ -286,4 +297,53 @@ private fun AppRole.homeTitle(): String = when (this) {
     AppRole.EMPLOYEE -> "Employee Home"
     AppRole.MANAGER -> "Manager Home"
     AppRole.ADMINISTRATOR -> "Admin Home"
+}
+
+/**
+ * On the first authenticated launch of a fresh install, proactively request the
+ * permissions attendance needs — foreground location (+ notifications on
+ * Android 13+), then "Allow all the time" background location once foreground is
+ * granted. Android does not permit silent granting, so the user still taps
+ * Allow; this just surfaces the prompts immediately instead of making them hunt
+ * the setup banner. Exact-alarms and battery optimisation are Settings-only and
+ * stay in [AttendanceSetupBanner]. Runs once per install (a SharedPreferences
+ * flag); the banner remains the fallback if anything is denied.
+ */
+@Composable
+private fun FirstRunPermissionPrompt() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("geotrack_prefs", Context.MODE_PRIVATE) }
+
+    val backgroundLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+
+    val mainLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        val foregroundGranted =
+            result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        // Background location must be requested separately, after foreground is
+        // granted (Android 10+). On Android 11+ this opens the settings page.
+        if (foregroundGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val hasBackground = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!hasBackground) backgroundLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (prefs.getBoolean("perm_prompted", false)) return@LaunchedEffect
+        prefs.edit().putBoolean("perm_prompted", true).apply()
+        val perms = buildList {
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }.toTypedArray()
+        mainLauncher.launch(perms)
+    }
 }

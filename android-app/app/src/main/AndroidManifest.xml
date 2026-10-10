@@ -23,9 +23,14 @@
 
     <!-- Re-register geofences and re-arm reminder alarms after a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Exact reminder delivery (15-min pre/post shift). Revocable on Android
-         12+; we fall back to an inexact alarm when it is not granted. -->
+    <!-- Exact reminder delivery (15-min pre/post shift). USE_EXACT_ALARM is
+         auto-granted at install on Android 13+, so no user action is needed
+         there; SCHEDULE_EXACT_ALARM covers 12 (user-revocable, with an inexact
+         fallback). -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Lets the "keep running in background" prompt be a one-tap dialog. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".GeotrackApplication"
