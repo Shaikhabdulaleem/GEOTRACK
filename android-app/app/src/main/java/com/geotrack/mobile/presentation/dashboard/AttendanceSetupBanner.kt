@@ -62,23 +62,23 @@ fun AttendanceSetupBanner(modifier: Modifier = Modifier) {
 
     Card(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
         shape = RoundedCornerShape(16.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
+                Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
                 Text(
                     text = "Finish setup for automatic attendance",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
                 )
             }
             Text(
                 text = "Until these are enabled, GeoTrack cannot reliably mark your attendance or remind you about your shift.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
             )
             items.forEach { item ->
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -86,12 +86,12 @@ fun AttendanceSetupBanner(modifier: Modifier = Modifier) {
                         text = item.title,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
                     )
                     Text(
                         text = item.detail,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
                     )
                     TextButton(onClick = {
                         if (item.isNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -124,7 +124,7 @@ private fun buildSetupItems(status: DeviceStatus): List<SetupItem> = buildList {
         add(
             SetupItem(
                 title = "Allow location all the time",
-                detail = "Automatic check-in needs location set to \"Allow all the time\".",
+                detail = "Open Permissions → Location, then choose \"Allow all the time\" so check-in works in the background.",
                 action = "Open location settings",
                 intent = ::appSettingsIntent,
             ),
@@ -189,8 +189,13 @@ private fun buildSetupItems(status: DeviceStatus): List<SetupItem> = buildList {
             SetupItem(
                 title = "Remove battery restrictions",
                 detail = "Battery optimization can stop background check-in and reminders.",
-                action = "Open battery settings",
-                intent = { Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) },
+                action = "Allow background activity",
+                intent = { ctx ->
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:${ctx.packageName}"),
+                    )
+                },
             ),
         )
     }

@@ -1,5 +1,6 @@
 package com.geotrack.mobile.presentation.schedule
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,17 +11,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.Event
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -32,6 +31,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -41,7 +42,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.geotrack.mobile.domain.model.DailySchedule
 import com.geotrack.mobile.domain.model.TodayScheduleState
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,9 +51,8 @@ fun ScheduleScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     // Re-fetch whenever the screen returns to the foreground so a shift/off
-    // change made in the dashboard shows up without restarting the app (e.g.
-    // right after the employee taps the push notification). The very first
-    // resume is skipped because init already loaded.
+    // change made in the dashboard shows up without restarting the app. The
+    // very first resume is skipped because init already loaded.
     var firstResume by remember { mutableStateOf(true) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (firstResume) firstResume = false else viewModel.refresh()
@@ -69,250 +68,207 @@ fun ScheduleScreen(
     PullToRefreshBox(
         isRefreshing = uiState.isRefreshing,
         onRefresh = viewModel::refresh,
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier.fillMaxSize(),
     ) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        item {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "My Schedule",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-
-        // Highlights Card
-        item {
-            HighlightsCard(uiState)
-        }
-        
-        // Monthly Stats
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                StatBox(
-                    modifier = Modifier.weight(1f),
-                    label = "Working Days",
-                    value = "${uiState.monthlyWorkingDays}",
-                    subtitle = "in ${uiState.currentMonth}"
-                )
-                StatBox(
-                    modifier = Modifier.weight(1f),
-                    label = "Off Days",
-                    value = "${uiState.monthlyOffDays}",
-                    subtitle = "in ${uiState.currentMonth}"
-                )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item {
+                Spacer(Modifier.height(16.dp))
+                Text("WORK SCHEDULE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text("My Schedule", style = MaterialTheme.typography.headlineMedium)
+                Text(uiState.currentMonth, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        }
-        
-        item {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "${uiState.currentMonth} Schedule",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
 
-        // List of days
-        items(uiState.monthSchedules, key = { it.date.toString() }) { daily ->
-            DailyScheduleRow(daily)
-        }
-        
-        item {
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-    }
-    }
-}
+            // Week strip
+            item { WeekStrip(uiState.monthSchedules) }
 
-@Composable
-private fun HighlightsCard(uiState: ScheduleUiState) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            uiState.today?.let { today ->
-                val todayText = when (today.state) {
-                    TodayScheduleState.WORKING_DAY -> "Working Tonight/Today: ${today.shiftName ?: "Assigned"}"
-                    TodayScheduleState.OFF_DAY -> "You are OFF today"
-                    TodayScheduleState.LEAVE -> "You are on LEAVE today"
-                    TodayScheduleState.HOLIDAY -> "Today is a HOLIDAY"
-                    TodayScheduleState.CANCELLED -> "Today's shift is cancelled"
-                    TodayScheduleState.UNASSIGNED -> "No shift assigned today"
+            // Monthly stats
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    StatBox(Modifier.weight(1f), "${uiState.monthlyWorkingDays}", "Working days", uiState.currentMonth)
+                    StatBox(Modifier.weight(1f), "${uiState.monthlyOffDays}", "Off days", uiState.currentMonth)
                 }
-                Text(
-                    text = todayText,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                Spacer(modifier = Modifier.height(8.dp))
             }
-            
-            uiState.nextWorkingDay?.let { nextWork ->
-                Text(
-                    text = "Next Working Day: ${nextWork.date.format(dateFormatter)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                Text(
-                    text = "Shift: ${nextWork.shiftName ?: "Assigned"} (${nextWork.startTime ?: "--"} - ${nextWork.endTime ?: "--"})",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                Spacer(modifier = Modifier.height(4.dp))
+
+            // Upcoming shifts
+            val upcoming = uiState.monthSchedules.filter {
+                it.state == TodayScheduleState.WORKING_DAY && !it.date.isBefore(LocalDate.now())
+            }.take(4)
+            if (upcoming.isNotEmpty()) {
+                item { Text("Upcoming shifts", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 4.dp)) }
+                items(upcoming, key = { "up-${it.date}" }) { ShiftCard(it) }
             }
-            
-            uiState.nextOffDay?.let { nextOff ->
-                Text(
-                    text = "Next Off Day: ${nextOff.date.format(dateFormatter)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
+
+            // Full month
+            item { Text("${uiState.currentMonth} overview", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 4.dp)) }
+            items(uiState.monthSchedules, key = { it.date.toString() }) { DayRow(it) }
+
+            item { Spacer(Modifier.height(16.dp)) }
         }
     }
 }
 
 @Composable
-private fun StatBox(
-    label: String,
-    value: String,
-    subtitle: String,
-    modifier: Modifier = Modifier
-) {
-    Card(modifier = modifier) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = value,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun DailyScheduleRow(daily: DailySchedule) {
-    val isToday = daily.date == LocalDate.now()
-    val bgColor = if (isToday) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
-    
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = bgColor)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Date column
+private fun WeekStrip(days: List<DailySchedule>) {
+    val today = LocalDate.now()
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(days, key = { "w-${it.date}" }) { d ->
+            val isToday = d.date == today
             Column(
-                modifier = Modifier.width(60.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier
+                    .width(52.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
+                    .padding(vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = daily.date.dayOfWeek.name.take(3),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "${daily.date.dayOfMonth}",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            
-            Spacer(modifier = Modifier.width(16.dp))
-            
-            // Details column
-            Column(modifier = Modifier.weight(1f)) {
-                val stateText = when (daily.state) {
-                    TodayScheduleState.WORKING_DAY -> "WORKING"
-                    TodayScheduleState.OFF_DAY -> "OFF"
-                    TodayScheduleState.LEAVE -> "LEAVE"
-                    TodayScheduleState.HOLIDAY -> "HOLIDAY"
-                    TodayScheduleState.CANCELLED -> "CANCELLED"
-                    TodayScheduleState.UNASSIGNED -> "UNASSIGNED"
-                }
-                
-                val stateColor = when (daily.state) {
-                    TodayScheduleState.WORKING_DAY -> MaterialTheme.colorScheme.primary
-                    TodayScheduleState.OFF_DAY -> MaterialTheme.colorScheme.error
-                    TodayScheduleState.LEAVE -> MaterialTheme.colorScheme.tertiary
-                    TodayScheduleState.HOLIDAY -> MaterialTheme.colorScheme.secondary
-                    TodayScheduleState.CANCELLED -> MaterialTheme.colorScheme.error
-                    TodayScheduleState.UNASSIGNED -> MaterialTheme.colorScheme.onSurfaceVariant
-                }
-                
-                Text(
-                    text = stateText,
+                    d.date.dayOfWeek.name.take(3),
                     style = MaterialTheme.typography.labelSmall,
-                    color = stateColor,
-                    fontWeight = FontWeight.Bold
+                    color = if (isToday) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                
+                Text(
+                    "${d.date.dayOfMonth}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (isToday) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                )
+                Box(Modifier.size(6.dp).clip(CircleShape).background(if (isToday) MaterialTheme.colorScheme.onPrimary else stateColor(d.state)))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatBox(modifier: Modifier, value: String, label: String, subtitle: String) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(value, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
+            Text(label, style = MaterialTheme.typography.titleSmall)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun ShiftCard(daily: DailySchedule) {
+    val isToday = daily.date == LocalDate.now()
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            DateTile(daily, highlighted = isToday)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(daily.shiftName ?: "Assigned shift", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${daily.startTime.toClock()} – ${daily.endTime.toClock()}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                if (isToday) "In progress" else "Upcoming",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isToday) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DayRow(daily: DailySchedule) {
+    val isToday = daily.date == LocalDate.now()
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isToday) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface,
+        ),
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, if (isToday) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            DateTile(daily, highlighted = isToday)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(stateLabel(daily.state), style = MaterialTheme.typography.labelSmall, color = stateColor(daily.state))
                 if (daily.state == TodayScheduleState.WORKING_DAY) {
-                    Text(
-                        text = daily.shiftName ?: "Assigned",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = "${daily.startTime ?: "--"} - ${daily.endTime ?: "--"}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text(daily.shiftName ?: "Assigned", style = MaterialTheme.typography.titleMedium)
+                    Text("${daily.startTime.toClock()} – ${daily.endTime.toClock()}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    daily.reason?.let {
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    daily.reason?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
             }
-            
             if (isToday) {
                 Text(
-                    text = "TODAY",
+                    "TODAY",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier
-                        .background(MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.small)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
             }
         }
     }
 }
 
-private val dateFormatter = DateTimeFormatter.ofPattern("EEE, MMM d")
+@Composable
+private fun DateTile(daily: DailySchedule, highlighted: Boolean) {
+    Column(
+        modifier = Modifier
+            .width(46.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(if (highlighted) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLowest)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            daily.date.dayOfWeek.name.take(3),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (highlighted) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "${daily.date.dayOfMonth}",
+            style = MaterialTheme.typography.titleLarge,
+            color = if (highlighted) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+// OFF/UNASSIGNED are neutral (grey); WORKING is teal; LEAVE/HOLIDAY/CANCELLED
+// are amber warnings. Red is reserved for serious errors elsewhere.
+@Composable
+private fun stateColor(state: TodayScheduleState): Color = when (state) {
+    TodayScheduleState.WORKING_DAY -> MaterialTheme.colorScheme.primary
+    TodayScheduleState.LEAVE, TodayScheduleState.HOLIDAY, TodayScheduleState.CANCELLED -> MaterialTheme.colorScheme.tertiary
+    TodayScheduleState.OFF_DAY, TodayScheduleState.UNASSIGNED -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+// "09:00:00" -> "9:00 AM"; leaves anything unparseable (or null) as a dash.
+private fun String?.toClock(): String = this?.let {
+    runCatching {
+        java.time.LocalTime.parse(it.take(8))
+            .format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))
+    }.getOrDefault(it)
+} ?: "--"
+
+private fun stateLabel(state: TodayScheduleState): String = when (state) {
+    TodayScheduleState.WORKING_DAY -> "WORKING"
+    TodayScheduleState.OFF_DAY -> "OFF"
+    TodayScheduleState.LEAVE -> "LEAVE"
+    TodayScheduleState.HOLIDAY -> "HOLIDAY"
+    TodayScheduleState.CANCELLED -> "CANCELLED"
+    TodayScheduleState.UNASSIGNED -> "UNASSIGNED"
+}
