@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -71,17 +72,28 @@ fun ProfileScreen(
 
         // ── Avatar ────────────────────────────────────────────────────────
         Surface(
-            modifier = Modifier.size(80.dp),
+            modifier = Modifier.size(84.dp),
             shape = CircleShape,
             color = MaterialTheme.colorScheme.primaryContainer,
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Filled.Person,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
+                val initials = uiState.displayName.trim().split(" ")
+                    .filter { it.isNotBlank() }.take(2)
+                    .joinToString("") { it.first().uppercase() }
+                if (initials.isNotBlank()) {
+                    Text(
+                        text = initials,
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(44.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
             }
         }
 
@@ -193,14 +205,17 @@ fun ProfileScreen(
         // ── Sign out ──────────────────────────────────────────────────────
         OutlinedButton(
             onClick = { showSignOutDialog = true },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = MaterialTheme.shapes.medium,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
         ) {
             Icon(
                 imageVector = Icons.Outlined.Logout,
                 contentDescription = null,
                 modifier = Modifier.padding(end = 8.dp),
             )
-            Text("Sign Out")
+            Text("Sign Out", fontWeight = FontWeight.Bold)
         }
     }
 }
