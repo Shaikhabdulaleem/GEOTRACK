@@ -48,6 +48,7 @@ jobs:
           set -euo pipefail
           for t in supabase/tests/rls_smoke.sql \
                    supabase/tests/recurring_schedule_resolver.sql \
+                   supabase/tests/auto_close_attendance.sql \
                    supabase/tests/e2e_workflow.sql; do
             echo "::group::$t"
             psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$t"
