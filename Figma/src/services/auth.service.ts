@@ -23,6 +23,18 @@ export interface EmployeeAccountCredentials {
   status: string;
 }
 
+/** supabase-js collapses every non-2xx Edge Function response to the opaque
+ * message "Edge Function returned a non-2xx status code". The reason we actually
+ * sent lives on error.context (the raw Response), so read it and surface it. */
+async function throwEdgeFunctionError(error: unknown, fallback: string): Promise<never> {
+  const context = (error as { context?: Response } | null)?.context;
+  if (context && typeof context.json === 'function') {
+    const body = (await context.json().catch(() => null)) as { error?: string } | null;
+    if (body?.error) throw toAppError({ message: body.error, status: context.status }, fallback);
+  }
+  throw toAppError(error, fallback);
+}
+
 export const authService = {
   async signInWithPassword(input: PasswordSignInInput): Promise<Session> {
     const { data, error } = await getSupabaseClient().auth.signInWithPassword(input);
@@ -85,7 +97,7 @@ export const authService = {
     const { data, error } = await getSupabaseClient().functions.invoke('provision-employee', {
       body: { employee_id: employeeId },
     });
-    if (error) throw toAppError(error, 'Unable to create the login account.');
+    if (error) await throwEdgeFunctionError(error, 'Unable to create the login account.');
     return data as EmployeeAccountCredentials;
   },
 
@@ -96,7 +108,7 @@ export const authService = {
     const { data, error } = await getSupabaseClient().functions.invoke('reset-employee-login', {
       body: { employee_id: employeeId },
     });
-    if (error) throw toAppError(error, 'Unable to reset the login password.');
+    if (error) await throwEdgeFunctionError(error, 'Unable to reset the login password.');
     return data as EmployeeAccountCredentials;
   },
 
