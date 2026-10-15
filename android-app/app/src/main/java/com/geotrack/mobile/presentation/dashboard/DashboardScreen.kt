@@ -87,7 +87,10 @@ fun DashboardScreen(
             // Surface any permission/system blockers for automatic attendance.
             AttendanceSetupBanner()
 
-            if (uiState.scheduleState == TodayScheduleState.WORKING_DAY) {
+            // Show the card on a working day, or whenever a session is open so the
+            // employee can always check out (e.g. a night shift spanning into an
+            // off day).
+            if (uiState.scheduleState == TodayScheduleState.WORKING_DAY || uiState.isCheckedIn) {
                 AttendanceCard(uiState, viewModel, reqPermissions, context)
             }
 
@@ -266,7 +269,7 @@ private fun AttendanceCard(
             }
 
             when {
-                !uiState.isAttendanceAllowed -> {
+                !uiState.isAttendanceAllowed && !uiState.isCheckedIn -> {
                     Text(
                         "No active shift is assigned for today.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

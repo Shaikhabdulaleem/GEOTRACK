@@ -144,7 +144,10 @@ class DashboardViewModel @Inject constructor(
 
             val activeShift = yesterdayActive ?: (schedResult as? AppResult.Success)?.value?.today
             val attendanceDate = activeShift?.date ?: today
-            val attResult = attendanceRepository.getAttendanceForDate(ctx.organization.id, profile.id, attendanceDate)
+            // Fetch a two-day window so an open session that began yesterday (a
+            // night shift, or a forgotten check-out) still surfaces today for a
+            // manual check-out, regardless of today's schedule state.
+            val attResult = attendanceRepository.getAttendanceWindow(ctx.organization.id, profile.id, yesterday, today)
 
             _internalState.update { current ->
                 var newState = current.copy(isLoading = false)
@@ -174,7 +177,12 @@ class DashboardViewModel @Inject constructor(
                 }
                 
                 if (attResult is AppResult.Success) {
-                    val data = attResult.value
+                    val rows = attResult.value
+                    // An open (checked-in, not yet checked-out) session takes
+                    // priority so CHECK OUT is always offered; otherwise fall back
+                    // to the active day's record for stats.
+                    val data = rows.firstOrNull { it.checkInAt != null && it.checkOutAt == null }
+                        ?: rows.firstOrNull { it.date == attendanceDate }
                     if (data != null) {
                         val isCheckedIn = data.checkInAt != null && data.checkOutAt == null
                         
@@ -230,7 +238,9 @@ class DashboardViewModel @Inject constructor(
                 return@launch
             }
             
-            if (state.scheduleState != TodayScheduleState.WORKING_DAY || !state.isAttendanceAllowed) {
+            // Only a check-IN needs an active shift today. A check-OUT must always
+            // be allowed to close an open session (e.g. one that began yesterday).
+            if (isCheckIn && (state.scheduleState != TodayScheduleState.WORKING_DAY || !state.isAttendanceAllowed)) {
                 _internalState.update { it.copy(errorMessage = "Attendance is unavailable because no active shift is assigned today.") }
                 return@launch
             }

@@ -1,5 +1,6 @@
 -- Self-check for private.auto_close_attendance_sessions().
--- Covers the two product cases: still-inside-at-shift-end and early departure.
+-- Still-inside-at-shift-end is LEFT OPEN for a manual check-out; only a departure
+-- (here, an early one) is auto-closed.
 BEGIN;
 
 DO $test$
@@ -89,15 +90,13 @@ BEGIN
 
   ---------------------------------------------------------
   v_closed := private.auto_close_attendance_sessions();
-  IF v_closed <> 2 THEN
-    RAISE EXCEPTION 'Expected 2 sessions auto-closed, got %', v_closed;
+  IF v_closed <> 1 THEN
+    RAISE EXCEPTION 'Expected 1 session auto-closed, got %', v_closed;
   END IF;
 
-  -- Emp A: closed at scheduled end, still inside, no early leaving.
+  -- Emp A: still inside at shift end -> left OPEN for a manual check-out.
   SELECT * INTO v_rec FROM public.attendance_records WHERE id = v_recA;
-  IF v_rec.check_out_at IS NULL THEN RAISE EXCEPTION 'Emp A not closed'; END IF;
-  IF v_rec.geofence_validated IS NOT TRUE THEN RAISE EXCEPTION 'Emp A should be inside/validated'; END IF;
-  IF v_rec.early_leaving_minutes <> 0 THEN RAISE EXCEPTION 'Emp A early_leaving should be 0, got %', v_rec.early_leaving_minutes; END IF;
+  IF v_rec.check_out_at IS NOT NULL THEN RAISE EXCEPTION 'Emp A (still inside) should stay open, not auto-closed'; END IF;
 
   -- Emp B: closed back-dated to the exit, flagged outside, distance recorded, left early.
   SELECT * INTO v_rec FROM public.attendance_records WHERE id = v_recB;
