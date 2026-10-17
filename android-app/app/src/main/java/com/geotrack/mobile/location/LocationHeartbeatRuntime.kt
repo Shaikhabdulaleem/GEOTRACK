@@ -13,9 +13,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.geotrack.mobile.core.common.AppResult
 import com.geotrack.mobile.core.session.WorkerSessionBootstrapper
-import com.geotrack.mobile.domain.model.TodayScheduleState
 import com.geotrack.mobile.domain.repository.AttendanceRepository
-import com.geotrack.mobile.domain.repository.ScheduleRepository
 import com.geotrack.mobile.domain.repository.SessionRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -62,7 +60,6 @@ class LocationHeartbeatWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted workerParams: WorkerParameters,
     private val sessionRepository: SessionRepository,
-    private val scheduleRepository: ScheduleRepository,
     private val attendanceRepository: AttendanceRepository,
     private val locationTracker: LocationTracker,
     private val sessionBootstrapper: WorkerSessionBootstrapper,
@@ -75,16 +72,15 @@ class LocationHeartbeatWorker @AssistedInject constructor(
         val zone = runCatching { ZoneId.of(orgCtx.organization.timezone) }.getOrDefault(ZoneId.of("UTC"))
         val today = LocalDate.now(zone)
 
-        // Only track on a working day with an open session (checked in, not out).
-        val scheduleResult = scheduleRepository.getTodaySchedule(orgCtx.organization.id, profile.id, today)
-        if (scheduleResult !is AppResult.Success) return Result.success()
-        if (scheduleResult.value.today.state != TodayScheduleState.WORKING_DAY) return Result.success()
-
-        val attendanceResult = attendanceRepository.getAttendanceForDate(orgCtx.organization.id, profile.id, today)
-        val checkedIn = attendanceResult is AppResult.Success &&
-            attendanceResult.value?.checkInAt != null &&
-            attendanceResult.value?.checkOutAt == null
-        if (!checkedIn) return Result.success()
+        // Ping only while a session is open (checked in, not out). An overnight
+        // shift's record is dated the START day, so after midnight it lives under
+        // yesterday, not `today` — look at both or the heartbeat (and with it the
+        // server's exit-based auto-close) goes dark for night shifts past midnight.
+        val hasOpenSession = listOf(today, today.minusDays(1)).any { date ->
+            val a = attendanceRepository.getAttendanceForDate(orgCtx.organization.id, profile.id, date)
+            a is AppResult.Success && a.value?.checkInAt != null && a.value?.checkOutAt == null
+        }
+        if (!hasOpenSession) return Result.success()
 
         // A missing fix this cycle is fine; the next heartbeat will try again.
         val location = locationTracker.getCurrentLocation() ?: return Result.success()

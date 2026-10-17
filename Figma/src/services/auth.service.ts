@@ -28,9 +28,17 @@ export interface EmployeeAccountCredentials {
  * sent lives on error.context (the raw Response), so read it and surface it. */
 async function throwEdgeFunctionError(error: unknown, fallback: string): Promise<never> {
   const context = (error as { context?: Response } | null)?.context;
-  if (context && typeof context.json === 'function') {
-    const body = (await context.json().catch(() => null)) as { error?: string } | null;
-    if (body?.error) throw toAppError({ message: body.error, status: context.status }, fallback);
+  if (context && typeof context.text === 'function') {
+    const raw = await context.text().catch(() => '');
+    let message = '';
+    try {
+      message = ((JSON.parse(raw) as { error?: string } | null)?.error) ?? '';
+    } catch {
+      // Not our JSON — a platform crash/gateway error. Surface status + body so
+      // it's diagnosable instead of the opaque "non-2xx status code" string.
+    }
+    if (!message) message = raw ? `${fallback} (HTTP ${context.status}): ${raw.slice(0, 200)}` : `${fallback} (HTTP ${context.status})`;
+    throw toAppError({ message, status: context.status }, fallback);
   }
   throw toAppError(error, fallback);
 }
