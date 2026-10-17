@@ -57,10 +57,12 @@ BEGIN
   -- A one-minute shift (used dated to yesterday so it is reliably past the
   -- grace regardless of the wall-clock time the test runs), and one that runs
   -- all of today.
-  INSERT INTO public.shifts (organization_id, code, name, start_time, end_time, crosses_midnight)
-  VALUES (v_org, 'PAST', 'Past Shift', '00:00:00', '00:01:00', false) RETURNING id INTO v_past_shift;
-  INSERT INTO public.shifts (organization_id, code, name, start_time, end_time, crosses_midnight)
-  VALUES (v_org, 'OPEN', 'Open Shift', '00:00:00', '23:59:00', false) RETURNING id INTO v_open_shift;
+  -- effective_from dated to yesterday so the pin-version trigger resolves a
+  -- shift version for the back-dated (overnight-style) assignments below.
+  INSERT INTO public.shifts (organization_id, code, name, start_time, end_time, crosses_midnight, effective_from)
+  VALUES (v_org, 'PAST', 'Past Shift', '00:00:00', '00:01:00', false, current_date - 1) RETURNING id INTO v_past_shift;
+  INSERT INTO public.shifts (organization_id, code, name, start_time, end_time, crosses_midnight, effective_from)
+  VALUES (v_org, 'OPEN', 'Open Shift', '00:00:00', '23:59:00', false, current_date - 1) RETURNING id INTO v_open_shift;
 
   INSERT INTO public.shift_assignments (organization_id, employee_id, shift_id, work_date, status)
   VALUES (v_org, v_empA, v_past_shift, current_date - 1, 'scheduled'),
