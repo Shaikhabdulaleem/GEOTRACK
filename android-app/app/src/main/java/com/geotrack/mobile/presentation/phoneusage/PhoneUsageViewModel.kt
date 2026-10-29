@@ -8,6 +8,7 @@ import com.geotrack.mobile.domain.model.PhoneUsageSummary
 import com.geotrack.mobile.domain.repository.PhoneUsageRepository
 import com.geotrack.mobile.domain.repository.SessionRepository
 import com.geotrack.mobile.phoneusage.PhoneUsageReader
+import com.geotrack.mobile.phoneusage.PhoneUsageScheduler
 import com.geotrack.mobile.notifications.AttendanceNotificationPoster
 import com.geotrack.mobile.notifications.AttendanceNotificationType
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -34,6 +35,7 @@ class PhoneUsageViewModel @Inject constructor(
     private val sessions: SessionRepository,
     private val repository: PhoneUsageRepository,
     private val reader: PhoneUsageReader,
+    private val scheduler: PhoneUsageScheduler,
     private val notificationPoster: AttendanceNotificationPoster,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PhoneUsageUiState())
@@ -56,6 +58,27 @@ class PhoneUsageViewModel @Inject constructor(
                 is AppResult.Success -> _uiState.update { it.copy(isLoading = false, today = result.value.firstOrNull { row -> row.date == today }, history = result.value) }
                 is AppResult.Failure -> _uiState.update { it.copy(isLoading = false, errorMessage = result.error.message) }
             }
+        }
+    }
+
+    fun syncAndRefresh() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            if (!reader.hasUsageAccess()) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        permission = PhoneUsageDataStatus.PERMISSION_NOT_GRANTED,
+                        errorMessage = "Enable Usage Access before synchronizing.",
+                    )
+                }
+                return@launch
+            }
+            if (!scheduler.syncNowAndWait()) {
+                _uiState.update { it.copy(isLoading = false, errorMessage = "Unable to synchronize phone usage.") }
+                return@launch
+            }
+            refresh()
         }
     }
 

@@ -40,6 +40,16 @@ export default function DeviceUsage() {
       const mapped = profilesResult.map(p => {
         const row = usageByEmployee.get(p.id);
         const workedMinutes = row?.worked_minutes ?? 0;
+        const source = row?.source ?? '';
+        const dataStatus = !row
+          ? 'unmanaged'
+          : source.endsWith('permission_not_granted')
+            ? 'permission_not_granted'
+            : source.endsWith('no_data')
+              ? 'no_data'
+              : source.endsWith('partial_data')
+                ? 'partial_data'
+                : 'available';
         return {
           id: p.id,
           name: p.full_name,
@@ -47,6 +57,7 @@ export default function DeviceUsage() {
           worked: `${Math.floor(workedMinutes / 60)}h ${workedMinutes % 60}m`,
           phone: row?.within_shift_minutes ?? 0,
           percent: row?.usage_percent ?? 0,
+          dataStatus,
         };
       });
 
@@ -67,7 +78,7 @@ export default function DeviceUsage() {
     return () => { mounted = false; };
   }, [activeMembership]);
 
-  const withUsage = employees.filter(e => e.phone > 0);
+  const withUsage = employees.filter(e => e.dataStatus === 'available' || e.dataStatus === 'partial_data');
   const avgUsage = withUsage.length > 0 ? Math.round(withUsage.reduce((s, e) => s + e.phone, 0) / withUsage.length) : 0;
 
   if (loading) return <div className="p-4 text-white">Loading...</div>;
@@ -119,9 +130,9 @@ export default function DeviceUsage() {
           <div className="font-semibold text-sm text-white mb-3">Usage Policy Distribution</div>
           <div className="space-y-3 mt-4">
             {[
-              { label: 'Normal (0–30 min)', count: employees.filter(e=>e.phone<=30).length, total: employees.length || 1, color: '#10b981' },
-              { label: 'Review (31–60 min)', count: employees.filter(e=>e.phone>30&&e.phone<=60).length, total: employees.length || 1, color: '#f59e0b' },
-              { label: 'High (60+ min)', count: employees.filter(e=>e.phone>60).length, total: employees.length || 1, color: '#ef4444' },
+              { label: 'Normal (0–30 min)', count: withUsage.filter(e=>e.phone<=30).length, total: withUsage.length || 1, color: '#10b981' },
+              { label: 'Review (31–60 min)', count: withUsage.filter(e=>e.phone>30&&e.phone<=60).length, total: withUsage.length || 1, color: '#f59e0b' },
+              { label: 'High (60+ min)', count: withUsage.filter(e=>e.phone>60).length, total: withUsage.length || 1, color: '#ef4444' },
             ].map(b => (
               <div key={b.label}>
                 <div className="flex justify-between text-xs mb-1">
@@ -163,13 +174,17 @@ export default function DeviceUsage() {
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: '#4b6a8a' }}>8h 00m</td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: '#94a3b8' }}>{emp.worked}</td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: emp.phone > 0 ? level.color : '#4b6a8a' }}>
-                    {emp.phone > 0 ? `${emp.phone}m` : <span style={{ color: '#4b6a8a', fontSize: 11 }}>Unmanaged device</span>}
+                    {emp.dataStatus === 'available' || emp.dataStatus === 'partial_data'
+                      ? `${emp.phone}m`
+                      : <span style={{ color: '#4b6a8a', fontSize: 11 }}>
+                          {emp.dataStatus === 'permission_not_granted' ? 'Permission required' : emp.dataStatus === 'no_data' ? 'No usage events' : 'Unmanaged device'}
+                        </span>}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs" style={{ color: emp.percent > 0 ? level.color : '#4b6a8a' }}>
-                    {emp.percent > 0 ? `${emp.percent.toFixed(1)}%` : '—'}
+                    {emp.dataStatus === 'available' || emp.dataStatus === 'partial_data' ? `${emp.percent.toFixed(1)}%` : '—'}
                   </td>
                   <td className="px-4 py-3">
-                    {emp.phone > 0 ? (
+                    {emp.dataStatus === 'available' || emp.dataStatus === 'partial_data' ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium" style={{ background: level.bg, color: level.color }}>
                         {level.label}
                       </span>

@@ -23,7 +23,9 @@ data class ProcessAttendanceArgs(
 @Serializable
 data class ProcessAttendanceResponse(
     val attendance_record_id: String?,
-    val event_id: String,
+    // Rejected attempts (for example, an unrecognized device) do not create an
+    // attendance event, so Postgres correctly returns NULL for this field.
+    val event_id: String?,
     val status: String,
     val inside_geofence: Boolean,
     val validation_status: String

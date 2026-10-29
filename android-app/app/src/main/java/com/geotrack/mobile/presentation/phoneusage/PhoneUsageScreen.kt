@@ -48,7 +48,7 @@ fun PhoneUsageScreen(viewModel: PhoneUsageViewModel = hiltViewModel()) {
                 PermissionCard(
                     status = state.permission,
                     onGrant = { context.startActivity(viewModel.usageAccessIntent()) },
-                    onRefresh = viewModel::refresh,
+                    onRefresh = viewModel::syncAndRefresh,
                 )
             }
             item { Text("Today's Usage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
@@ -101,7 +101,7 @@ private fun PermissionCard(status: PhoneUsageDataStatus, onGrant: () -> Unit, on
                 PhoneUsageDataStatus.NO_DATA -> Text("No Data. Android returned no usage events for the scheduled shift.")
                 PhoneUsageDataStatus.PARTIAL_DATA -> Text("Partial Data. Some of the scheduled shift is still in progress or usage events were incomplete.")
             }
-            OutlinedButton(onClick = onRefresh) { Text("Refresh") }
+            OutlinedButton(onClick = onRefresh) { Text("Sync now") }
         }
     }
 }

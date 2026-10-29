@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
+import androidx.work.WorkInfo
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -29,6 +30,8 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import com.geotrack.mobile.core.session.WorkerSessionBootstrapper
 
 @Singleton
@@ -39,6 +42,16 @@ class PhoneUsageScheduler @Inject constructor(
         val manager = WorkManager.getInstance(context)
         manager.enqueueUniqueWork("phone-usage-sync-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<PhoneUsageSyncWorker>().build())
         manager.enqueueUniquePeriodicWork("phone-usage-sync", ExistingPeriodicWorkPolicy.UPDATE, PeriodicWorkRequestBuilder<PhoneUsageSyncWorker>(6, TimeUnit.HOURS).build())
+    }
+
+    suspend fun syncNowAndWait(): Boolean {
+        val manager = WorkManager.getInstance(context)
+        val request = OneTimeWorkRequestBuilder<PhoneUsageSyncWorker>().build()
+        manager.enqueueUniqueWork("phone-usage-sync-now", ExistingWorkPolicy.REPLACE, request)
+        val workInfo = manager.getWorkInfoByIdFlow(request.id)
+            .filterNotNull()
+            .first { it.state.isFinished }
+        return workInfo.state == WorkInfo.State.SUCCEEDED
     }
 
     fun onSignedOut() {
@@ -71,7 +84,7 @@ class PhoneUsageSyncWorker @AssistedInject constructor(
                 applicationContext.getSharedPreferences("phone-usage", Context.MODE_PRIVATE).edit().putString("device_id", it).apply()
             }
         var hadFailure = false
-        scheduleList.filter { it.state == TodayScheduleState.WORKING_DAY && !it.shiftName.isNullOrBlank() && !it.startTime.isNullOrBlank() && !it.endTime.isNullOrBlank() }.forEach { schedule ->
+        scheduleList.filter { it.state == TodayScheduleState.WORKING_DAY && !it.startTime.isNullOrBlank() && !it.endTime.isNullOrBlank() }.forEach { schedule ->
             val start = parse(schedule.date, schedule.startTime!!, zone)
             var end = parse(schedule.date, schedule.endTime!!, zone)
             if (schedule.crossesMidnight || !end.isAfter(start)) end = end.plusDays(1)
