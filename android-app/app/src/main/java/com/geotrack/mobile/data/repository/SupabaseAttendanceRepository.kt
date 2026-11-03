@@ -9,6 +9,7 @@ import com.geotrack.mobile.database.GeoTrackDatabase
 import com.geotrack.mobile.database.OfflineAttendanceEventEntity
 import com.geotrack.mobile.database.CachedAttendanceEntity
 import com.geotrack.mobile.domain.model.DailyAttendance
+import com.geotrack.mobile.domain.model.AttendanceLocationResult
 import com.geotrack.mobile.domain.repository.AttendanceRepository
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
@@ -58,25 +59,93 @@ class SupabaseAttendanceRepository @Inject constructor(
         longitude: Double,
         accuracyMeters: Float,
         isMock: Boolean
-    ): AppResult<Boolean> {
+    ): AppResult<Boolean> = when (val result = recordAttendanceLocation(
+        organizationId = organizationId,
+        employeeId = employeeId,
+        latitude = latitude,
+        longitude = longitude,
+        accuracyMeters = accuracyMeters,
+        isMock = isMock,
+        observedAt = Instant.now(),
+        idempotencyKey = UUID.randomUUID().toString(),
+        sampleSource = "heartbeat",
+    )) {
+        is AppResult.Success -> AppResult.Success(result.value.outcome != "ignored_no_open_session")
+        is AppResult.Failure -> result
+    }
+
+    override suspend fun recordAttendanceLocation(
+        organizationId: String,
+        employeeId: String,
+        latitude: Double,
+        longitude: Double,
+        accuracyMeters: Float,
+        isMock: Boolean,
+        observedAt: Instant,
+        idempotencyKey: String,
+        sampleSource: String,
+    ): AppResult<AttendanceLocationResult> {
         val client = clientHolder.client
             ?: return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Configuration("Supabase not configured"))
-        // Presence pings are a best-effort live signal; drop silently when
-        // offline rather than queueing, since a stale sample has no value.
-        if (!appContext.hasNetworkConnection()) {
-            return AppResult.Success(false)
+        val online = appContext.hasNetworkConnection()
+        val geofenceId = resolveGeofenceId(client, organizationId, employeeId, online)
+            ?: return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("No active work location is assigned for this employee."))
+
+        if (!online) {
+            enqueueOfflineLocation(
+                organizationId, employeeId, idempotencyKey, observedAt,
+                latitude, longitude, accuracyMeters, isMock, geofenceId,
+            )
+            return AppResult.Success(AttendanceLocationResult(outcome = "queued_offline", reason = "offline"))
         }
+
         return try {
-            val response = client.postgrest.rpc("record_location_ping", buildJsonObject {
+            val response = client.postgrest.rpc("record_attendance_location", buildJsonObject {
                 put("p_employee_id", employeeId)
+                put("p_geofence_id", geofenceId)
                 put("p_latitude", latitude)
                 put("p_longitude", longitude)
                 put("p_accuracy_meters", accuracyMeters.toDouble())
                 put("p_is_mock", isMock)
-            }).decodeList<RecordLocationPingResponse>()
-            AppResult.Success(response.firstOrNull()?.recorded ?: false)
+                put("p_observed_at", observedAt.toString())
+                put("p_idempotency_key", idempotencyKey)
+                put("p_device_hash", deviceHash())
+                put("p_sample_source", sampleSource)
+            }).decodeList<RecordAttendanceLocationResponse>().firstOrNull()
+                ?: return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Network("Location server returned no result"))
+
+            when (response.outcome) {
+                "device_blocked" -> AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("This device isn't registered for your account. Ask your administrator to reset your device."))
+                "rejected" -> AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown(
+                    when (response.reason) {
+                        "mock_location" -> "Mock locations cannot be used for attendance."
+                        "low_accuracy" -> "Location accuracy is too low. Please try again."
+                        else -> response.reason ?: "Location was rejected."
+                    },
+                ))
+                else -> AppResult.Success(
+                    AttendanceLocationResult(
+                        locationEventId = response.locationEventId,
+                        attendanceRecordId = response.attendanceRecordId,
+                        insideGeofence = response.insideGeofence,
+                        position = response.position,
+                        outcome = response.outcome,
+                        checkoutAt = response.checkoutAt,
+                        overtimeMinutes = response.overtimeMinutes,
+                        reason = response.reason,
+                    ),
+                )
+            }
         } catch (e: Exception) {
-            AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown(e.message ?: "Unknown", e))
+            if (!appContext.hasNetworkConnection()) {
+                enqueueOfflineLocation(
+                    organizationId, employeeId, idempotencyKey, observedAt,
+                    latitude, longitude, accuracyMeters, isMock, geofenceId,
+                )
+                AppResult.Success(AttendanceLocationResult(outcome = "queued_offline", reason = "offline"))
+            } else {
+                AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown(e.message ?: "Unable to record location", e))
+            }
         }
     }
 
@@ -273,6 +342,44 @@ class SupabaseAttendanceRepository @Inject constructor(
         OfflineAttendanceSyncScheduler.enqueue(appContext)
     }
 
+    private suspend fun enqueueOfflineLocation(
+        organizationId: String,
+        employeeId: String,
+        idempotencyKey: String,
+        observedAt: Instant,
+        latitude: Double,
+        longitude: Double,
+        accuracyMeters: Float,
+        isMock: Boolean,
+        geofenceId: String,
+    ) {
+        // Keep one rolling offline precision sample. While the employee remains
+        // inside it is refreshed; once they leave, the latest outside point and
+        // its original timestamp are retained for authoritative server replay.
+        val pending = database.offlineAttendanceDao().pendingAction(employeeId, "geofence_exit")
+        val localEventId = pending?.localEventId ?: idempotencyKey
+        database.offlineAttendanceDao().upsert(
+            OfflineAttendanceEventEntity(
+                localEventId = localEventId,
+                organizationId = organizationId,
+                employeeId = employeeId,
+                actionType = "geofence_exit",
+                deviceTimestampEpochMillis = observedAt.toEpochMilli(),
+                originalEventTime = observedAt.toString(),
+                latitude = latitude,
+                longitude = longitude,
+                accuracyMeters = accuracyMeters,
+                isMockLocation = isMock,
+                geofenceId = geofenceId,
+                geofenceValidation = "pending_server_validation",
+                syncStatus = "PENDING_SYNC",
+                retryCount = pending?.retryCount ?: 0,
+                updatedAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+        OfflineAttendanceSyncScheduler.enqueue(appContext)
+    }
+
     private suspend fun resolveGeofenceId(
         client: io.github.jan.supabase.SupabaseClient,
         organizationId: String,
@@ -305,10 +412,15 @@ class SupabaseAttendanceRepository @Inject constructor(
 }
 
 @Serializable
-private data class RecordLocationPingResponse(
-    @SerialName("ping_id") val pingId: String? = null,
+private data class RecordAttendanceLocationResponse(
+    @SerialName("location_event_id") val locationEventId: String? = null,
+    @SerialName("attendance_record_id") val attendanceRecordId: String? = null,
     @SerialName("inside_geofence") val insideGeofence: Boolean? = null,
-    val recorded: Boolean = false,
+    @SerialName("classified_position") val position: String = "unknown",
+    val outcome: String,
+    @SerialName("checkout_at") val checkoutAt: String? = null,
+    @SerialName("overtime_minutes") val overtimeMinutes: Int = 0,
+    val reason: String? = null,
 )
 
 @Serializable

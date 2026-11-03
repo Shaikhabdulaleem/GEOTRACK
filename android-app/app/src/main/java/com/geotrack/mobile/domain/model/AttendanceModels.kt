@@ -13,3 +13,17 @@ data class DailyAttendance(
     val lateMinutes: Int,
     val geofenceValidated: Boolean
 )
+
+data class AttendanceLocationResult(
+    val locationEventId: String? = null,
+    val attendanceRecordId: String? = null,
+    val insideGeofence: Boolean? = null,
+    val position: String = "unknown",
+    val outcome: String,
+    val checkoutAt: String? = null,
+    val overtimeMinutes: Int = 0,
+    val reason: String? = null,
+) {
+    val checkoutCompleted: Boolean get() = outcome == "checkout_completed"
+    val queuedOffline: Boolean get() = outcome == "queued_offline"
+}

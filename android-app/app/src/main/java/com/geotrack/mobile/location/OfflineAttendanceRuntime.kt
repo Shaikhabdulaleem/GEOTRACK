@@ -63,8 +63,11 @@ fun Context.hasNetworkConnection(): Boolean {
 @Serializable
 private data class OfflineSyncResponse(
     val status: String? = null,
+    val outcome: String? = null,
     @SerialName("event_id") val eventId: String? = null,
+    @SerialName("location_event_id") val locationEventId: String? = null,
     @SerialName("validation_status") val validationStatus: String? = null,
+    val reason: String? = null,
     val error: String? = null,
 )
 
@@ -102,13 +105,14 @@ class OfflineAttendanceSyncWorker @AssistedInject constructor(
                     put("p_is_mock_location", event.isMockLocation)
                     put("p_geofence_validation", event.geofenceValidation)
                 }).decodeSingle<OfflineSyncResponse>()
-                val synced = response.status !in setOf("SYNC_FAILED", "rejected", "error", "failed")
+                val disposition = response.outcome ?: response.status
+                val synced = disposition !in setOf("SYNC_FAILED", "rejected", "device_blocked", "error", "failed")
                 database.offlineAttendanceDao().updateStatus(
                     event.localEventId,
                     if (synced) "SYNCED" else "SYNC_FAILED",
                     event.retryCount + 1,
-                    response.error,
-                    response.eventId,
+                    response.error ?: if (synced) null else response.reason,
+                    response.locationEventId ?: response.eventId,
                     System.currentTimeMillis(),
                 )
             } catch (error: Exception) {

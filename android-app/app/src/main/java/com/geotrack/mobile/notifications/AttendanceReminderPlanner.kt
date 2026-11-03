@@ -30,6 +30,7 @@ object AttendanceReminderPlanner {
         zone: ZoneId,
         schedules: List<DailySchedule>,
         horizonDays: Long = 3,
+        checkoutGraceMinutes: Long = 15,
     ): List<ScheduledNotification> {
         val today = LocalDate.now(zone)
         val horizonEnd = today.plusDays(horizonDays)
@@ -57,6 +58,11 @@ object AttendanceReminderPlanner {
                         AttendanceNotificationType.SHIFT_ENDING,
                         day,
                         end.minusSeconds(SHIFT_ENDING_MINUTES * 60),
+                    )
+                    out += ScheduledNotification(
+                        AttendanceNotificationType.CHECKOUT_MONITOR_START,
+                        day,
+                        end.minusSeconds(checkoutGraceMinutes.coerceIn(0, 120) * 60),
                     )
                     out += ScheduledNotification(
                         AttendanceNotificationType.FORGOT_CHECKOUT,

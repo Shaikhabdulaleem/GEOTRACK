@@ -7,7 +7,7 @@ import { ShiftEditorModal } from '../components/ShiftEditorModal';
 import { getErrorMessage } from '../lib/errors';
 import type { BranchRow, DepartmentRow, ShiftRow } from '../types/database';
 
-type Tab = 'sites' | 'departments' | 'shifts';
+type Tab = 'sites' | 'departments' | 'shifts' | 'attendance';
 const input = { width: '100%', marginTop: 5, padding: '8px 10px', borderRadius: 8, background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff', outline: 'none' } as const;
 const emptySite = (org: string): SiteInput => ({ organization_id: org, name: '', code: '', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', address: '', latitude: null, longitude: null, create_geofence: false, geofence_radius_meters: 30 });
 
@@ -15,10 +15,12 @@ export default function Settings() {
   const { activeMembership, hasAnyRole } = useAuth();
   const org = activeMembership?.organization_id;
   const canManage = hasAnyRole(['administrator', 'manager']);
+  const isAdministrator = hasAnyRole(['administrator']);
   const [tab, setTab] = useState<Tab>('sites');
   const [sites, setSites] = useState<BranchRow[]>([]);
   const [departments, setDepartments] = useState<DepartmentRow[]>([]);
   const [shifts, setShifts] = useState<ShiftRow[]>([]);
+  const [checkoutGraceMinutes, setCheckoutGraceMinutes] = useState(15);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [siteForm, setSiteForm] = useState<{ data: SiteInput; row: BranchRow | null } | null>(null);
@@ -28,10 +30,15 @@ export default function Settings() {
     if (!org) return;
     setBusy(true); setError('');
     try {
-      const result = await Promise.all([organizationService.listSites(org), organizationService.listDepartments(org), shiftService.listShifts(org)]);
-      setSites(result[0]); setDepartments(result[1]); setShifts(result[2]);
+      const result = await Promise.all([
+        organizationService.listSites(org),
+        organizationService.listDepartments(org),
+        shiftService.listShifts(org),
+        isAdministrator ? organizationService.getAttendancePolicy(org) : Promise.resolve(15),
+      ]);
+      setSites(result[0]); setDepartments(result[1]); setShifts(result[2]); setCheckoutGraceMinutes(result[3]);
     } catch (caught) { setError(getErrorMessage(caught)); } finally { setBusy(false); }
-  }, [org]);
+  }, [isAdministrator, org]);
   useEffect(() => { void load(); }, [load]);
   const siteNames = useMemo(() => new Map(sites.map(row => [row.id, row.name])), [sites]);
   if (!org) return <Empty message="No active organization is available." />;
@@ -45,19 +52,36 @@ export default function Settings() {
   };
   return <div className="space-y-4">
     <div><h1 className="text-xl font-bold text-white">Organization Setup</h1><p className="text-sm mt-1" style={{ color: '#4b6a8a' }}>Manage sites, site-specific departments, and versioned shift templates.</p></div>
-    <div className="flex gap-2">{([['sites','Sites',MapPin],['departments','Departments',Layers3],['shifts','Shift Templates',Timer]] as const).map(([id,label,Icon]) => <button key={id} onClick={() => setTab(id)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm" style={{ background: tab === id ? '#2563eb' : '#0d1b2e', color: tab === id ? '#fff' : '#94a3b8', border: '1px solid #1e3a5a' }}><Icon size={14} />{label}</button>)}</div>
+    <div className="flex flex-wrap gap-2">{([['sites','Sites',MapPin],['departments','Departments',Layers3],['shifts','Shift Templates',Timer], ...(isAdministrator ? [['attendance','Attendance Policy',Timer] as const] : [])] as const).map(([id,label,Icon]) => <button key={id} onClick={() => setTab(id)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm" style={{ background: tab === id ? '#2563eb' : '#0d1b2e', color: tab === id ? '#fff' : '#94a3b8', border: '1px solid #1e3a5a' }}><Icon size={14} />{label}</button>)}</div>
     {error && <div role="alert" className="p-3 rounded-xl text-sm" style={{ color: '#fca5a5', background: 'rgba(239,68,68,.1)' }}>{error}</div>}
     {busy ? <div className="p-16"><Loader2 className="mx-auto animate-spin" style={{ color: '#3b82f6' }} /></div> : tab === 'sites' ? <Panel title="Sites" icon={<Building2 size={16} />} add={canManage ? () => setSiteForm({ data: emptySite(org), row: null }) : undefined}>
       {sites.length ? sites.map(row => <Row key={row.id} title={row.name} detail={`${row.code} · ${row.timezone}${row.address ? ` · ${row.address}` : ''}`} status={row.status} edit={canManage ? () => setSiteForm({ data: { organization_id: row.organization_id, name: row.name, code: row.code, timezone: row.timezone, address: row.address ?? '', latitude: row.latitude ?? null, longitude: row.longitude ?? null }, row }) : undefined} toggle={canManage ? () => void toggle('sites', row) : undefined} />) : <Empty message="No sites yet. Add the first site to organize departments and geofences." />}
     </Panel> : tab === 'departments' ? <Panel title="Departments" icon={<Layers3 size={16} />} add={canManage && sites.some(row => row.status === 'active') ? () => setDepartmentForm({ organization_id: org, branch_id: sites.find(row => row.status === 'active')?.id, name: '', code: '', status: 'active' }) : undefined}>
       {!sites.length ? <Empty message="Create a site before adding departments." /> : departments.length ? departments.map(row => <Row key={row.id} title={row.name} detail={`${row.code} · ${siteNames.get(row.branch_id) ?? 'Unknown site'}`} status={row.status} edit={canManage ? () => setDepartmentForm(row) : undefined} toggle={canManage ? () => void toggle('departments', row) : undefined} />) : <Empty message="No departments yet." />}
-    </Panel> : <Panel title="Shift Templates" icon={<Timer size={16} />} add={canManage ? () => setShiftForm(null) : undefined}>
+    </Panel> : tab === 'shifts' ? <Panel title="Shift Templates" icon={<Timer size={16} />} add={canManage ? () => setShiftForm(null) : undefined}>
       {shifts.length ? shifts.map(row => <Row key={row.id} title={row.name} detail={`${row.code} · ${row.start_time.slice(0,5)}–${row.end_time.slice(0,5)}${row.crosses_midnight ? ' · overnight' : ''} · v${row.version_number}`} status={row.status} edit={canManage ? () => setShiftForm(row) : undefined} toggle={canManage ? () => void toggle('shifts', row) : undefined} />) : <Empty message="No active shifts. Morning, Afternoon, and Night are naming shortcuts; choose all times manually." />}
-    </Panel>}
+    </Panel> : <AttendancePolicy graceMinutes={checkoutGraceMinutes} save={async value => {
+      setError('');
+      try { setCheckoutGraceMinutes(await organizationService.updateAttendancePolicy(org, value)); }
+      catch (caught) { setError(getErrorMessage(caught)); }
+    }} />}
     {siteForm && <SiteDialog initial={siteForm.data} editing={siteForm.row} close={() => setSiteForm(null)} save={async value => { if (siteForm.row) await organizationService.updateSite(siteForm.row.id, { name: value.name, code: value.code, timezone: value.timezone, address: value.address || null, latitude: value.latitude, longitude: value.longitude, location_point: value.latitude == null ? null : { type: 'Point', coordinates: [value.longitude!, value.latitude] } }); else await organizationService.createSite(value); setSiteForm(null); await load(); }} />}
     {departmentForm && <DepartmentDialog initial={departmentForm} sites={sites.filter(row => row.status === 'active')} close={() => setDepartmentForm(null)} save={async value => { if (value.id) await organizationService.updateDepartment(value.id, { branch_id: value.branch_id, name: value.name, code: value.code }); else await organizationService.createDepartment({ organization_id: org, branch_id: value.branch_id!, name: value.name!, code: value.code! }); setDepartmentForm(null); await load(); }} />}
     {shiftForm !== undefined && <ShiftEditorModal initial={shiftForm} organizationId={org} onClose={() => setShiftForm(undefined)} onSaved={() => { setShiftForm(undefined); void load(); }} />}
   </div>;
+}
+
+function AttendancePolicy({ graceMinutes, save }: { graceMinutes: number; save: (value: number) => Promise<void> }) {
+  const [value, setValue] = useState(graceMinutes);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setValue(graceMinutes), [graceMinutes]);
+  return <Panel title="Automatic checkout" icon={<Timer size={16} />}>
+    <div className="p-5 max-w-xl space-y-4">
+      <div><div className="text-sm font-semibold text-white">Early-checkout grace</div><p className="text-xs mt-1 leading-5" style={{ color: '#94a3b8' }}>Accurate departures during this window before shift end are checked out immediately without early-leaving or missing-minute penalties. Departures after shift end preserve overtime.</p></div>
+      <Label text="Grace period (minutes)"><input type="number" min={0} max={120} step={1} style={input} value={value} onChange={event => setValue(Number(event.target.value))} /></Label>
+      <button disabled={saving || value < 0 || value > 120 || !Number.isInteger(value)} onClick={() => { setSaving(true); void save(value).finally(() => setSaving(false)); }} className="px-4 py-2 rounded-lg text-sm disabled:opacity-50" style={{ color: '#fff', background: '#2563eb' }}>{saving ? 'Saving…' : 'Save policy'}</button>
+    </div>
+  </Panel>;
 }
 
 function Panel({ title, icon, add, children }: { title: string; icon: ReactNode; add?: () => void; children: ReactNode }) { return <section className="rounded-xl overflow-hidden" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><header className="p-4 flex items-center gap-2" style={{ borderBottom: '1px solid #1e3a5a' }}>{icon}<h2 className="text-sm font-semibold text-white">{title}</h2>{add && <button onClick={add} className="ml-auto flex items-center gap-1 px-3 py-2 rounded-lg text-xs" style={{ color: '#fff', background: '#2563eb' }}><Plus size={13} />Add</button>}</header>{children}</section>; }

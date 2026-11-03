@@ -124,7 +124,7 @@ private fun buildSetupItems(status: DeviceStatus): List<SetupItem> = buildList {
         add(
             SetupItem(
                 title = "Allow location all the time",
-                detail = "Open Permissions → Location, then choose \"Allow all the time\" so check-in works in the background.",
+                detail = "Open Permissions → Location, then choose \"Allow all the time\" so automatic check-in and precise checkout monitoring work in the background.",
                 action = "Open location settings",
                 intent = ::appSettingsIntent,
             ),
@@ -172,7 +172,7 @@ private fun buildSetupItems(status: DeviceStatus): List<SetupItem> = buildList {
         add(
             SetupItem(
                 title = "Allow exact alarms",
-                detail = "Required so pre-shift and not-marked reminders arrive on time.",
+                detail = "Required so reminders and the checkout precision window start on time. Without it, passive geofence and server fallbacks remain active.",
                 action = "Allow exact alarms",
                 intent = { context ->
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

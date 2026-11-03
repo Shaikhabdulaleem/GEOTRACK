@@ -87,6 +87,7 @@ class AndroidAttendanceNotificationCoordinator @Inject constructor(@ApplicationC
     private val _state = MutableStateFlow(PushRegistrationState(false, false)); override val registrationState = _state.asStateFlow()
     override fun onAuthenticated() { AttendanceChannels.create(context); WorkManager.getInstance(context).enqueueUniqueWork("attendance-refresh-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<AttendanceRefreshWorker>().build()); WorkManager.getInstance(context).enqueueUniquePeriodicWork("attendance-refresh", ExistingPeriodicWorkPolicy.UPDATE, PeriodicWorkRequestBuilder<AttendanceRefreshWorker>(12, TimeUnit.HOURS).build()); FirebaseConfig.ensure(context); if (FirebaseConfig.isConfigured(context)) WorkManager.getInstance(context).enqueueUniqueWork("push-token", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<PushTokenWorker>().build()); phoneUsageScheduler.onAuthenticated(); OfflineAttendanceSyncScheduler.enqueue(context); WorkforceCacheScheduler.enqueue(context); LocationHeartbeatScheduler.enqueue(context); AutoAttendanceScheduler.enqueue(context) }
     override fun onSignedOut() {
+        com.geotrack.mobile.location.CheckoutMonitorService.stop(context)
         WorkManager.getInstance(context).apply {
             cancelUniqueWork("attendance-refresh-now")
             cancelUniqueWork("attendance-refresh")

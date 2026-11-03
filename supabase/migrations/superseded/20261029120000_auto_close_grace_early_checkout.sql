@@ -1,3 +1,5 @@
+-- SUPERSEDED by 20261103130402_reliable_auto_checkout_overtime.sql. Retained
+-- for audit history only; do not deploy independently.
 -- Grace early check-out. Previously, leaving the fence BEFORE shift end only
 -- auto-closed once the employee had been outside for the org breach threshold
 -- (default 30 min) and the close carried an early-leaving penalty — so an

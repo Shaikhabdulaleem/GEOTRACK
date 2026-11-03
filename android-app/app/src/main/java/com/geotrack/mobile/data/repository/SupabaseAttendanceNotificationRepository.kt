@@ -50,7 +50,10 @@ class SupabaseAttendanceNotificationRepository @Inject constructor(
         // after midnight — are queued ahead, not only today's events.
         val window = schedules.getScheduleWindow(context.organization.id, employee.id, today, today.plusDays(HORIZON_DAYS))
         val list = (window as? AppResult.Success)?.value ?: return AppResult.Success(emptyList())
-        AppResult.Success(AttendanceReminderPlanner.build(Instant.now(), zone, list, HORIZON_DAYS))
+        AppResult.Success(AttendanceReminderPlanner.build(
+            Instant.now(), zone, list, HORIZON_DAYS,
+            context.organization.autoCheckoutGraceMinutes.toLong(),
+        ))
       } catch (e: Exception) { failure(e) }
     }
 

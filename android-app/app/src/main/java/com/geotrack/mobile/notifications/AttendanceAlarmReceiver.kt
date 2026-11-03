@@ -14,6 +14,7 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.geotrack.mobile.location.AutoAttendanceWorker
 import com.geotrack.mobile.location.LocationHeartbeatWorker
+import com.geotrack.mobile.location.CheckoutMonitorService
 import java.time.Duration
 
 /**
@@ -33,6 +34,11 @@ class AttendanceAlarmReceiver : BroadcastReceiver() {
         if (intent.action != AttendanceAlarmScheduler.ACTION_FIRE) return
         val type = intent.getStringExtra(AttendanceAlarmScheduler.EXTRA_TYPE) ?: return
         val date = intent.getStringExtra(AttendanceAlarmScheduler.EXTRA_DATE) ?: return
+
+        if (type == AttendanceNotificationType.CHECKOUT_MONITOR_START.name) {
+            CheckoutMonitorService.start(context)
+            return
+        }
 
         val wm = WorkManager.getInstance(context)
         val reminder = OneTimeWorkRequestBuilder<AttendanceReminderWorker>()

@@ -2,6 +2,8 @@
 
 import com.geotrack.mobile.core.common.AppResult
 import com.geotrack.mobile.domain.model.DailyAttendance
+import com.geotrack.mobile.domain.model.AttendanceLocationResult
+import java.time.Instant
 import java.time.LocalDate
 
 interface AttendanceRepository {
@@ -46,4 +48,21 @@ interface AttendanceRepository {
         accuracyMeters: Float,
         isMock: Boolean
     ): AppResult<Boolean>
+
+    /**
+     * Records an authoritative in-shift location sample. Unlike manual checkout,
+     * an outside position is expected here and may complete checkout during the
+     * configured grace window or after shift end.
+     */
+    suspend fun recordAttendanceLocation(
+        organizationId: String,
+        employeeId: String,
+        latitude: Double,
+        longitude: Double,
+        accuracyMeters: Float,
+        isMock: Boolean,
+        observedAt: Instant,
+        idempotencyKey: String,
+        sampleSource: String,
+    ): AppResult<AttendanceLocationResult>
 }

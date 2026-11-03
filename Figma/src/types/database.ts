@@ -96,6 +96,7 @@ export interface OrganizationRow {
   slug: string;
   timezone: string;
   status: OrgStatus;
+  auto_checkout_grace_minutes: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -659,6 +660,37 @@ export interface Database {
           inside_geofence: boolean | null;
           recorded: boolean;
         }>;
+      };
+      record_attendance_location: {
+        Args: {
+          p_employee_id: string;
+          p_latitude: number;
+          p_longitude: number;
+          p_accuracy_meters: number;
+          p_is_mock: boolean;
+          p_observed_at: string;
+          p_geofence_id: string;
+          p_idempotency_key: string;
+          p_device_hash: string;
+          p_sample_source: string;
+        };
+        Returns: Array<{
+          location_event_id: string | null;
+          inside_geofence: boolean | null;
+          classified_position: 'inside' | 'outside' | 'unknown' | 'rejected';
+          outcome: string;
+          attendance_record_id: string | null;
+          checkout_at: string | null;
+          overtime_minutes: number;
+          reason: string;
+        }>;
+      };
+      update_attendance_policy: {
+        Args: {
+          p_organization_id: string;
+          p_auto_checkout_grace_minutes: number;
+        };
+        Returns: number;
       };
       get_active_geofence_breaches: {
         Args: { p_organization_id: string };

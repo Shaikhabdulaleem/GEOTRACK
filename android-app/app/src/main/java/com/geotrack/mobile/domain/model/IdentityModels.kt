@@ -38,6 +38,7 @@ data class OrganizationInfo(
     val name: String,
     val slug: String,
     val timezone: String,
+    val autoCheckoutGraceMinutes: Int = 15,
 )
 
 data class DepartmentInfo(

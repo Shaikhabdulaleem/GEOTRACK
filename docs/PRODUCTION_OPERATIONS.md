@@ -28,6 +28,44 @@
 - Review Supabase security and performance advisors after every schema change
   and at least monthly.
 
+### Automatic checkout health
+
+Run these checks after each mobile/database release and alert when any result is
+non-zero (except `last_cron_success`, which must be recent):
+
+```sql
+select count(*) as open_sessions_over_12h
+from public.attendance_records
+where check_in_at is not null and check_out_at is null
+  and check_in_at < clock_timestamp() - interval '12 hours';
+
+select count(*) as attendance_ot_without_approval
+from public.attendance_records ar
+where coalesce(ar.overtime_minutes, 0) > 0
+  and not exists (
+    select 1 from public.overtime_records ot
+    where ot.attendance_record_id = ar.id
+  );
+
+select max(end_time) as last_cron_success
+from cron.job_run_details
+where jobid = (select jobid from cron.job where jobname = 'geotrack-auto-close-attendance')
+  and status = 'succeeded';
+
+select count(*) as recent_rejected_exit_samples
+from public.employee_location_pings
+where event_at > clock_timestamp() - interval '1 hour'
+  and inside_geofence is null;
+```
+
+Also monitor Android diagnostics for checkout foreground-service start failures,
+missing background-location/exact-alarm access, and repeated offline replay
+failures. The setup banner must remain visible while precision is degraded.
+
+Historical sessions in `private.attendance_repair_audit` with
+`status = 'manual_review'` are deliberately excluded from automatic cleanup.
+Review them using approved attendance evidence; never infer a checkout time.
+
 ## Incident checklist
 
 1. Preserve relevant logs without copying secrets or unnecessary employee data.

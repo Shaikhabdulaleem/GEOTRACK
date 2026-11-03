@@ -88,6 +88,11 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+
+        <service
+            android:name=".location.CheckoutMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
     </application>
 
 </manifest>

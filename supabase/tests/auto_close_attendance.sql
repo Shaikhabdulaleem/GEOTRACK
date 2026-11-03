@@ -7,6 +7,8 @@
 --          OPEN so the manual check-out / overtime is preserved.
 --   Emp D: left the fence inside the 15-min grace window before shift end ->
 --          auto-closed at the exit with NO early-leaving/missing penalty.
+--   Emp E: left after shift end -> auto-closed at the observed exit with OT and
+--          exactly one pending overtime approval row.
 BEGIN;
 
 DO $test$
@@ -16,6 +18,7 @@ DECLARE
   v_empB uuid := gen_random_uuid();  -- left the fence early, shift still running
   v_empC uuid := gen_random_uuid();  -- shift ended, still pinging inside (overtime)
   v_empD uuid := gen_random_uuid();  -- left within the grace window before shift end
+  v_empE uuid := gen_random_uuid();  -- left after shift end with overtime
   v_org uuid;
   v_branch uuid;
   v_dept uuid;
@@ -27,8 +30,10 @@ DECLARE
   v_recB uuid;
   v_recC uuid;
   v_recD uuid;
+  v_recE uuid;
   v_rec public.attendance_records%rowtype;
   v_evt public.attendance_events%rowtype;
+  v_location_result record;
   v_closed integer;
   v_exit_at timestamptz := clock_timestamp() - interval '40 minutes';
   -- Yesterday's past-shift end, in the org timezone; always well over the grace.
@@ -43,7 +48,8 @@ BEGIN
     (v_empA, 'empA@autoclose.local'),
     (v_empB, 'empB@autoclose.local'),
     (v_empC, 'empC@autoclose.local'),
-    (v_empD, 'empD@autoclose.local');
+    (v_empD, 'empD@autoclose.local'),
+    (v_empE, 'empE@autoclose.local');
 
   INSERT INTO public.organizations (name, slug, timezone)
   VALUES ('AutoClose Org', 'autoclose-org', 'UTC') RETURNING id INTO v_org;
@@ -53,7 +59,8 @@ BEGIN
          (v_org, v_empA, 'employee', 'active'),
          (v_org, v_empB, 'employee', 'active'),
          (v_org, v_empC, 'employee', 'active'),
-         (v_org, v_empD, 'employee', 'active');
+         (v_org, v_empD, 'employee', 'active'),
+         (v_org, v_empE, 'employee', 'active');
 
   INSERT INTO public.branches (organization_id, code, name, timezone)
   VALUES (v_org, 'B1', 'Branch', 'UTC') RETURNING id INTO v_branch;
@@ -64,7 +71,8 @@ BEGIN
   VALUES (v_empA, v_empA, v_org, v_branch, v_dept, 'E01', '9100000001', 'Emp A'),
          (v_empB, v_empB, v_org, v_branch, v_dept, 'E02', '9100000002', 'Emp B'),
          (v_empC, v_empC, v_org, v_branch, v_dept, 'E03', '9100000003', 'Emp C'),
-         (v_empD, v_empD, v_org, v_branch, v_dept, 'E04', '9100000004', 'Emp D');
+         (v_empD, v_empD, v_org, v_branch, v_dept, 'E04', '9100000004', 'Emp D'),
+         (v_empE, v_empE, v_org, v_branch, v_dept, 'E05', '9100000005', 'Emp E');
 
   -- A one-minute shift (used dated to yesterday so it is reliably past the
   -- grace regardless of the wall-clock time the test runs), and one that runs
@@ -83,7 +91,8 @@ BEGIN
   VALUES (v_org, v_empA, v_past_shift, current_date - 1, 'scheduled'),
          (v_org, v_empB, v_open_shift, current_date, 'scheduled'),
          (v_org, v_empC, v_past_shift, current_date - 1, 'scheduled'),
-         (v_org, v_empD, v_grace_shift, v_graceD_end::date, 'scheduled');
+         (v_org, v_empD, v_grace_shift, v_graceD_end::date, 'scheduled'),
+         (v_org, v_empE, v_past_shift, current_date - 1, 'scheduled');
 
   INSERT INTO public.geofences (organization_id, branch_id, name, required_accuracy_meters, status, created_by)
   VALUES (v_org, v_branch, 'GF', 100, 'active', v_admin) RETURNING id INTO v_geofence;
@@ -93,7 +102,8 @@ BEGIN
   VALUES (v_org, v_geofence, v_empA, current_date - 1),
          (v_org, v_geofence, v_empB, current_date - 1),
          (v_org, v_geofence, v_empC, current_date - 1),
-         (v_org, v_geofence, v_empD, current_date - 1);
+         (v_org, v_geofence, v_empD, current_date - 1),
+         (v_org, v_geofence, v_empE, current_date - 1);
 
   -- Emp A: checked in at shift start yesterday, no pings since (phone quiet).
   INSERT INTO public.attendance_records (
@@ -148,14 +158,55 @@ BEGIN
   FROM public.shift_assignments sa WHERE sa.employee_id = v_empD
   RETURNING id INTO v_recD;
 
+  -- Exercise the public location engine: bad samples are retained as rejected
+  -- evidence, then an accurate grace-window point closes immediately.
+  PERFORM set_config('request.jwt.claims', format('{"sub": "%s"}', v_empD), true);
+  SELECT * INTO v_location_result FROM public.record_attendance_location(
+    v_empD, v_geofence, 50, 50, 1000, false,
+    v_graceD_exit - interval '4 minutes', 'emp-d-low-accuracy', 'device-emp-d', 'test'
+  );
+  IF v_location_result.outcome <> 'rejected' OR v_location_result.reason <> 'low_accuracy' THEN
+    RAISE EXCEPTION 'Low-accuracy point should be rejected'; END IF;
+
+  SELECT * INTO v_location_result FROM public.record_attendance_location(
+    v_empD, v_geofence, 50, 50, 5, true,
+    v_graceD_exit - interval '3 minutes', 'emp-d-mock', 'device-emp-d', 'test'
+  );
+  IF v_location_result.outcome <> 'rejected' OR v_location_result.reason <> 'mock_location' THEN
+    RAISE EXCEPTION 'Mock point should be rejected'; END IF;
+
+  SELECT * INTO v_location_result FROM public.record_attendance_location(
+    v_empD, v_geofence, 50, 50, 5, false,
+    v_graceD_exit, 'emp-d-valid-exit', 'device-emp-d', 'test'
+  );
+  IF v_location_result.outcome <> 'checkout_completed' OR v_location_result.classified_position <> 'outside' THEN
+    RAISE EXCEPTION 'Accurate grace-window exit should close immediately'; END IF;
+
+  SELECT * INTO v_location_result FROM public.record_attendance_location(
+    v_empD, v_geofence, 50, 50, 5, false,
+    v_graceD_exit, 'emp-d-valid-exit', 'device-emp-d', 'test'
+  );
+  IF v_location_result.outcome <> 'checkout_completed' OR v_location_result.reason <> 'duplicate' THEN
+    RAISE EXCEPTION 'Duplicate location event should return the existing checkout'; END IF;
+
+  -- Emp E: observed outside 30 minutes after the one-minute shift ended.
+  INSERT INTO public.attendance_records (
+    organization_id, employee_id, shift_assignment_id, attendance_date, session_number,
+    check_in_at, source, status, geofence_validated)
+  SELECT v_org, v_empE, sa.id, current_date - 1, 1,
+         ((current_date - 1) + time '00:00')::timestamp at time zone 'UTC',
+         'automatic_geofence', 'present', true
+  FROM public.shift_assignments sa WHERE sa.employee_id = v_empE
+  RETURNING id INTO v_recE;
+
   INSERT INTO public.employee_location_pings (organization_id, employee_id, attendance_record_id, event_at, location_point, inside_geofence)
-  VALUES (v_org, v_empD, v_recD, v_graceD_exit,
+  VALUES (v_org, v_empE, v_recE, v_shiftA_end + interval '30 minutes',
        '{"type":"Point","coordinates":[50,50]}', false);
 
   ---------------------------------------------------------
   v_closed := private.auto_close_attendance_sessions();
   IF v_closed <> 3 THEN
-    RAISE EXCEPTION 'Expected 3 sessions auto-closed, got %', v_closed;
+    RAISE EXCEPTION 'Expected 3 remaining sessions auto-closed, got %', v_closed;
   END IF;
 
   -- Emp A: shift ended + presence stale -> closed at shift end, inside/valid.
@@ -194,6 +245,18 @@ BEGIN
   IF v_rec.missing_minutes <> 0 THEN RAISE EXCEPTION 'Emp D within grace should have no missing minutes'; END IF;
   SELECT * INTO v_evt FROM public.attendance_events WHERE id = v_rec.check_out_event_id;
   IF (v_evt.metadata->>'reason') <> 'grace_exit' THEN RAISE EXCEPTION 'Emp D reason should be grace_exit'; END IF;
+
+  -- Emp E: late exit keeps the observed timestamp and creates pending OT once.
+  SELECT * INTO v_rec FROM public.attendance_records WHERE id = v_recE;
+  IF abs(extract(epoch from (v_rec.check_out_at - (v_shiftA_end + interval '30 minutes')))) > 1 THEN
+    RAISE EXCEPTION 'Emp E check-out should use the observed late exit'; END IF;
+  IF v_rec.overtime_minutes <= 0 THEN RAISE EXCEPTION 'Emp E should have calculated overtime'; END IF;
+  IF (SELECT count(*) FROM public.overtime_records WHERE attendance_record_id = v_recE AND status = 'pending') <> 1 THEN
+    RAISE EXCEPTION 'Emp E should have exactly one pending overtime row'; END IF;
+  SELECT * INTO v_evt FROM public.attendance_events WHERE id = v_rec.check_out_event_id;
+  IF (v_evt.metadata->>'reason') <> 'shift_exit' THEN RAISE EXCEPTION 'Emp E reason should be shift_exit'; END IF;
+  IF v_evt.inside_geofence IS NOT FALSE OR v_evt.geofence_validation <> 'valid' THEN
+    RAISE EXCEPTION 'Expected late exit must be factual outside evidence and remain valid'; END IF;
 
   -- Idempotent: a second run closes nothing more.
   v_closed := private.auto_close_attendance_sessions();

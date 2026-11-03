@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.firstOrNull
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.util.UUID
 import com.geotrack.mobile.notifications.NotificationCoordinator
 import com.geotrack.mobile.core.session.WorkerSessionBootstrapper
 
@@ -71,10 +72,57 @@ class GeofenceWorker @AssistedInject constructor(
             return retryIfPossible()
         }
 
-        val resolved = if (isEnter) {
-            AutoAttendance.resolveShiftForInstant(now, zone, windowResult.value)
-        } else {
-            AutoAttendance.resolveOpenShiftForInstant(now, zone, windowResult.value)
+        val resolved = if (isEnter) AutoAttendance.resolveShiftForInstant(now, zone, windowResult.value) else null
+        // EXIT is deliberately not constrained to the nominal shift window.
+        // The server owns grace/late/overnight resolution against the open
+        // attendance record, including departures after scheduled end.
+        if (!isEnter) {
+            val transitionLocation = if (inputData.keyValueMap.containsKey("latitude")) {
+                LocationData(
+                    latitude = inputData.getDouble("latitude", 0.0),
+                    longitude = inputData.getDouble("longitude", 0.0),
+                    accuracyMeters = inputData.getFloat("accuracyMeters", Float.MAX_VALUE),
+                    isMock = inputData.getBoolean("isMock", false),
+                )
+            } else null
+            val location = transitionLocation ?: locationTracker.getCurrentLocation()
+            if (location == null) {
+                diagnostics.record(GeofenceDiagnostics.Stage.WORKER, ok = false, message = "No GPS fix for EXIT; will retry.")
+                return retryIfPossible()
+            }
+            val result = attendanceRepository.recordAttendanceLocation(
+                organizationId = orgCtx.organization.id,
+                employeeId = profile.id,
+                latitude = location.latitude,
+                longitude = location.longitude,
+                accuracyMeters = location.accuracyMeters,
+                isMock = location.isMock,
+                observedAt = Instant.ofEpochMilli(inputData.getLong("transitionAt", System.currentTimeMillis())),
+                idempotencyKey = inputData.getString("transitionEventId") ?: UUID.randomUUID().toString(),
+                sampleSource = "geofence_exit",
+            )
+            return when (result) {
+                is AppResult.Success -> {
+                    diagnostics.record(GeofenceDiagnostics.Stage.SERVER, ok = true, message = "EXIT processed: ${result.value.outcome} (${result.value.reason}).")
+                    if (result.value.checkoutCompleted) {
+                        notificationCoordinator.showAttendanceRecorded()
+                        CheckoutMonitorService.stop(applicationContext)
+                    } else if (result.value.queuedOffline && !location.isMock && location.accuracyMeters <= 50f) {
+                        // Android's EXIT boundary fully encloses the cached polygon.
+                        // An accurate, non-mock point outside that circle is therefore
+                        // confidently outside even while the server is unreachable.
+                        CheckoutMonitorService.stop(applicationContext)
+                    }
+                    Result.success()
+                }
+                is AppResult.Failure -> when (AutoAttendance.classifyFailure(result.error)) {
+                    AutoAttendance.RetryDecision.DONE -> {
+                        diagnostics.record(GeofenceDiagnostics.Stage.SERVER, ok = false, message = "EXIT rejected: ${result.error.message}")
+                        Result.success()
+                    }
+                    AutoAttendance.RetryDecision.RETRY -> retryIfPossible()
+                }
+            }
         }
         if (resolved == null) {
             diagnostics.record(
@@ -95,10 +143,6 @@ class GeofenceWorker @AssistedInject constructor(
             diagnostics.record(GeofenceDiagnostics.Stage.WORKER, ok = true, message = "Already checked in for $workDate; ENTER ignored.")
             return Result.success()
         }
-        if (!isEnter && !isCheckedIn) {
-            diagnostics.record(GeofenceDiagnostics.Stage.WORKER, ok = true, message = "No open session for $workDate; EXIT ignored.")
-            return Result.success()
-        }
 
         val location = locationTracker.getCurrentLocation()
         if (location == null) {
@@ -106,28 +150,16 @@ class GeofenceWorker @AssistedInject constructor(
             return retryIfPossible()
         }
 
-        val actionType = if (isEnter) "check_in" else "check_out"
-        val result = if (isEnter) {
-            attendanceRepository.checkIn(
-                organizationId = orgCtx.organization.id,
-                employeeId = profile.id,
-                latitude = location.latitude,
-                longitude = location.longitude,
-                accuracyMeters = location.accuracyMeters,
-                isMock = location.isMock,
-                isAuto = true,
-            )
-        } else {
-            attendanceRepository.checkOut(
-                organizationId = orgCtx.organization.id,
-                employeeId = profile.id,
-                latitude = location.latitude,
-                longitude = location.longitude,
-                accuracyMeters = location.accuracyMeters,
-                isMock = location.isMock,
-                isAuto = true,
-            )
-        }
+        val actionType = "check_in"
+        val result = attendanceRepository.checkIn(
+            organizationId = orgCtx.organization.id,
+            employeeId = profile.id,
+            latitude = location.latitude,
+            longitude = location.longitude,
+            accuracyMeters = location.accuracyMeters,
+            isMock = location.isMock,
+            isAuto = true,
+        )
 
         return when (result) {
             is AppResult.Success -> {

@@ -13,6 +13,7 @@ import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.GeofencingEvent
 import java.time.Duration
+import java.util.UUID
 
 class GeofenceBroadcastReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -49,6 +50,19 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // retried with exponential backoff for transient failures.
             val inputData = Data.Builder()
                 .putInt("transitionType", geofenceTransition)
+                .putString("transitionEventId", UUID.randomUUID().toString())
+                .putLong("transitionAt", geofencingEvent.triggeringLocation?.time ?: System.currentTimeMillis())
+                .apply {
+                    geofencingEvent.triggeringLocation?.let { location ->
+                        putDouble("latitude", location.latitude)
+                        putDouble("longitude", location.longitude)
+                        putFloat("accuracyMeters", location.accuracy)
+                        putBoolean("isMock", if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) location.isMock else {
+                            @Suppress("DEPRECATION")
+                            location.isFromMockProvider
+                        })
+                    }
+                }
                 .build()
 
             val workRequest = OneTimeWorkRequestBuilder<GeofenceWorker>()

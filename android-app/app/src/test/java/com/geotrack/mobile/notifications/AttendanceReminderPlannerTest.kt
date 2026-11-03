@@ -57,6 +57,17 @@ class AttendanceReminderPlannerTest {
     }
 
     @Test
+    fun `checkout monitor starts at organization grace window`() {
+        val today = LocalDate.now(zone)
+        val schedules = listOf(workingDay(today, "09:00:00", "17:00:00"))
+
+        val plans = AttendanceReminderPlanner.build(at(today, 1), zone, schedules, checkoutGraceMinutes = 20)
+        val monitor = plans.first { it.type == AttendanceNotificationType.CHECKOUT_MONITOR_START }
+
+        assertEquals(at(today, 16, 40), monitor.at)
+    }
+
+    @Test
     fun `tomorrow's shift that starts after midnight is queued today`() {
         val today = LocalDate.now(zone)
         val tomorrow = today.plusDays(1)
@@ -91,6 +102,7 @@ class AttendanceReminderPlannerTest {
                     AttendanceNotificationType.SHIFT_START,
                     AttendanceNotificationType.NOT_CHECKED_IN,
                     AttendanceNotificationType.SHIFT_ENDING,
+                    AttendanceNotificationType.CHECKOUT_MONITOR_START,
                     AttendanceNotificationType.FORGOT_CHECKOUT,
                 )
             },

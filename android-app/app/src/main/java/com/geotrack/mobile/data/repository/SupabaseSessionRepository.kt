@@ -181,6 +181,7 @@ class SupabaseSessionRepository @Inject constructor(
                     name = organization.name,
                     slug = organization.slug,
                     timezone = organization.timezone,
+                    autoCheckoutGraceMinutes = organization.autoCheckoutGraceMinutes,
                 ),
                 department = department?.let {
                     DepartmentInfo(id = it.id, name = it.name, branchId = it.branchId)

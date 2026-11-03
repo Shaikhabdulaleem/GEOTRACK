@@ -59,6 +59,7 @@ data class OrganizationDto(
     val slug: String,
     val timezone: String,
     val status: String,
+    @SerialName("auto_checkout_grace_minutes") val autoCheckoutGraceMinutes: Int = 15,
     @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String,
 )

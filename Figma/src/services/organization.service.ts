@@ -1,6 +1,6 @@
 import { getSupabaseClient } from '../lib/supabase';
 import { executeQuery } from './database.service';
-import type { BranchRow, DepartmentRow, TablesInsert, TablesUpdate } from '../types/database';
+import type { BranchRow, DepartmentRow, OrganizationRow, TablesInsert, TablesUpdate } from '../types/database';
 
 export interface SiteInput {
   organization_id: string;
@@ -17,6 +17,19 @@ export interface SiteInput {
 export const organizationService = {
   async listSites(organizationId: string): Promise<BranchRow[]> {
     return executeQuery(getSupabaseClient().from('branches').select('*').eq('organization_id', organizationId).order('name'), 'Unable to load sites.');
+  },
+  async getAttendancePolicy(organizationId: string): Promise<number> {
+    const row = await executeQuery<OrganizationRow>(
+      getSupabaseClient().from('organizations').select('*').eq('id', organizationId).single(),
+      'Unable to load the attendance policy.',
+    );
+    return row.auto_checkout_grace_minutes;
+  },
+  async updateAttendancePolicy(organizationId: string, graceMinutes: number): Promise<number> {
+    return executeQuery<number>(getSupabaseClient().rpc('update_attendance_policy', {
+      p_organization_id: organizationId,
+      p_auto_checkout_grace_minutes: graceMinutes,
+    }), 'Unable to update the attendance policy.');
   },
   async createSite(input: SiteInput): Promise<BranchRow> {
     return executeQuery(getSupabaseClient().rpc('create_site', {
