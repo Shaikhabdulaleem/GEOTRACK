@@ -41,6 +41,14 @@ class AttendanceAlarmReceiver : BroadcastReceiver() {
         }
 
         val wm = WorkManager.getInstance(context)
+        if (type == AttendanceNotificationType.AUTO_CHECK_IN.name) {
+            wm.enqueueUniqueWork(
+                "auto-attendance-alarm-$date", ExistingWorkPolicy.REPLACE,
+                reconcile<AutoAttendanceWorker>(),
+            )
+            return
+        }
+
         val reminder = OneTimeWorkRequestBuilder<AttendanceReminderWorker>()
             .setInputData(workDataOf("type" to type, "date" to date))
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
@@ -49,7 +57,6 @@ class AttendanceAlarmReceiver : BroadcastReceiver() {
         wm.enqueueUniqueWork("attendance-reminder-$type-$date", ExistingWorkPolicy.REPLACE, reminder)
 
         when (type) {
-            AttendanceNotificationType.SHIFT_START.name,
             AttendanceNotificationType.NOT_CHECKED_IN.name ->
                 wm.enqueueUniqueWork(
                     "auto-attendance-alarm", ExistingWorkPolicy.REPLACE,

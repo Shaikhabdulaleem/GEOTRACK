@@ -13,7 +13,7 @@ import androidx.room.RoomDatabase
         CachedAttendanceEntity::class,
         CachedNotificationEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class GeoTrackDatabase : RoomDatabase() {

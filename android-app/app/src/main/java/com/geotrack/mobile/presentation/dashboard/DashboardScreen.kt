@@ -31,6 +31,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.geotrack.mobile.core.designsystem.GeoBrandMark
 import com.geotrack.mobile.domain.model.TodayScheduleState
+import com.geotrack.mobile.location.AutoAttendanceScheduler
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -51,6 +52,10 @@ fun DashboardScreen(
     // first resume is skipped because init already loaded.
     var firstResume by remember { mutableStateOf(true) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        // Reconcile immediately whenever the employee brings the app to the
+        // foreground. This covers a missed alarm/geofence transition without
+        // requiring them to press CHECK IN manually.
+        AutoAttendanceScheduler.enqueue(context)
         if (firstResume) firstResume = false else viewModel.refresh()
     }
 

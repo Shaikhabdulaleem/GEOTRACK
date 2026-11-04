@@ -132,6 +132,10 @@ class AutoAttendanceTest {
             AutoAttendance.RetryDecision.RETRY,
             AutoAttendance.classifyFailure(AppError.Unknown("Something odd happened")),
         )
+        assertEquals(
+            AutoAttendance.RetryDecision.RETRY,
+            AutoAttendance.classifyFailure(AppError.Unknown("Location accuracy is 100 m; 50 m or better is required.")),
+        )
 
         // Permanent
         assertEquals(

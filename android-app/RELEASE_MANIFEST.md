@@ -1,11 +1,11 @@
 # Current release artifact
 
-- Version code: 5
-- Version name: 0.2.3
-- Build date: 2026-11-03
+- Version code: 6
+- Version name: 0.2.4
+- Build date: 2026-11-04
 - Artifact: app/build/outputs/apk/release/app-release.apk
-- Size: 3,896,823 bytes
-- APK SHA-256: 0D660875EAE3CA91805D2410397CF0E724312659ABBDA317DA0D5FCC3ACB7F03
+- Size: 3,913,207 bytes
+- APK SHA-256: 6CB262E9373E9991EDF154D80F4EDD81AA6F9157BD45BFDB72796BC16F2D2F24
 - Signature: APK Signature Scheme v2
 - Signer certificate SHA-256:
   B482D46B368210E100645E751CA04D600548A2D59C8E15047DDE8298F8BEF153

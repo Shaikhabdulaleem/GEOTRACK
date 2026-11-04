@@ -85,7 +85,7 @@ class AutoAttendanceWorker @AssistedInject constructor(
         val windowResult = scheduleRepository.getScheduleWindow(
             orgCtx.organization.id, profile.id, today.minusDays(1), today.plusDays(1),
         )
-        if (windowResult !is AppResult.Success) return Result.success()
+        if (windowResult !is AppResult.Success) return retryIfPossible()
 
         val resolved = AutoAttendance.resolveShiftForInstant(now, zone, windowResult.value) ?: return Result.success()
         // Only reconcile once the shift has actually started; before then the
@@ -97,7 +97,7 @@ class AutoAttendanceWorker @AssistedInject constructor(
         val record = (attendance as? AppResult.Success)?.value
         if (record?.checkInAt != null) return Result.success() // already checked in (or completed)
 
-        val location = locationTracker.getCurrentLocation() ?: return Result.success()
+        val location = locationTracker.getCurrentLocation() ?: return retryIfPossible()
         val result = attendanceRepository.checkIn(
             organizationId = orgCtx.organization.id,
             employeeId = profile.id,
@@ -112,11 +112,23 @@ class AutoAttendanceWorker @AssistedInject constructor(
                 diagnostics.record(GeofenceDiagnostics.Stage.SERVER, ok = true, message = "Reconciled auto check-in for $workDate (already inside).")
                 notificationCoordinator.showAttendanceRecorded()
             }
-            is AppResult.Failure ->
-                // An "outside geofence" rejection here is expected and benign:
-                // the employee simply isn't on site yet. Record quietly.
+            is AppResult.Failure -> {
+                // An outside-geofence result is final for this run. A weak GPS
+                // fix or transport failure is transient and should use
+                // WorkManager backoff instead of being silently discarded.
                 diagnostics.record(GeofenceDiagnostics.Stage.SERVER, ok = false, message = "Reconcile check-in not applied: ${result.error.message}")
+                if (AutoAttendance.classifyFailure(result.error) == AutoAttendance.RetryDecision.RETRY) {
+                    return retryIfPossible()
+                }
+            }
         }
         return Result.success()
+    }
+
+    private fun retryIfPossible(): Result =
+        if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.success()
+
+    private companion object {
+        const val MAX_ATTEMPTS = 5
     }
 }

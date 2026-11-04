@@ -53,7 +53,11 @@ object WorkforceCacheScheduler {
     @SerialName("effective_from") val effectiveFrom: String? = null,
     @SerialName("effective_to") val effectiveTo: String? = null,
 )
-@Serializable private data class GeofenceCacheDto(val id: String, val name: String)
+@Serializable private data class GeofenceCacheDto(
+    val id: String,
+    val name: String,
+    @SerialName("required_accuracy_meters") val requiredAccuracyMeters: Int = 50,
+)
 @Serializable private data class PolygonCacheDto(@SerialName("polygon") val polygon: JsonElement)
 
 @HiltWorker
@@ -97,7 +101,18 @@ class WorkforceCacheSyncWorker @AssistedInject constructor(
                 val fence = client.postgrest["geofences"].select { filter { eq("id", assignment.geofenceId) } }.decodeList<GeofenceCacheDto>().firstOrNull() ?: return@forEach
                 val polygon = client.postgrest["geofence_polygons"].select(columns = Columns.raw("polygon")) { filter { eq("geofence_id", assignment.geofenceId); eq("is_active", true) } }.decodeList<PolygonCacheDto>().firstOrNull()
                 val polygonJson = polygon?.polygon?.toString() ?: "{}"
-                cache.upsertGeofence(CachedGeofenceEntity(employee.id, fence.id, fence.name, polygonJson, assignment.effectiveFrom, assignment.effectiveTo, now))
+                cache.upsertGeofence(
+                    CachedGeofenceEntity(
+                        employeeId = employee.id,
+                        geofenceId = fence.id,
+                        name = fence.name,
+                        polygonJson = polygonJson,
+                        effectiveFrom = assignment.effectiveFrom,
+                        effectiveTo = assignment.effectiveTo,
+                        requiredAccuracyMeters = fence.requiredAccuracyMeters,
+                        cachedAt = now,
+                    ),
+                )
                 if (polygon != null) {
                     runCatching { geofenceManager.addGeofenceFromGeoJson(fence.id, polygon.polygon, fence.name) }
                 }

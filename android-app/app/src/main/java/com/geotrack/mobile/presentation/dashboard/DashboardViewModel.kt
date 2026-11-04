@@ -264,11 +264,8 @@ class DashboardViewModel @Inject constructor(
                 return@launch
             }
             
-            if (loc.accuracyMeters > 100) {
-                _internalState.update { it.copy(isCheckingIn = false, errorMessage = "Location accuracy is too low. Please try again.") }
-                return@launch
-            }
-            
+            // The repository applies the assigned geofence's configured
+            // required_accuracy_meters for both online and offline actions.
             val result = if (isCheckIn) {
                 attendanceRepository.checkIn(ctx.organization.id, profile.id, loc.latitude, loc.longitude, loc.accuracyMeters, loc.isMock)
             } else {

@@ -88,13 +88,14 @@ class SupabaseAttendanceRepository @Inject constructor(
         val client = clientHolder.client
             ?: return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Configuration("Supabase not configured"))
         val online = appContext.hasNetworkConnection()
-        val geofenceId = resolveGeofenceId(client, organizationId, employeeId, online)
+        val geofence = resolveGeofence(client, organizationId, employeeId, online)
             ?: return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("No active work location is assigned for this employee."))
+        accuracyFailure(accuracyMeters, geofence.requiredAccuracyMeters)?.let { return it }
 
         if (!online) {
             enqueueOfflineLocation(
                 organizationId, employeeId, idempotencyKey, observedAt,
-                latitude, longitude, accuracyMeters, isMock, geofenceId,
+                latitude, longitude, accuracyMeters, isMock, geofence.id,
             )
             return AppResult.Success(AttendanceLocationResult(outcome = "queued_offline", reason = "offline"))
         }
@@ -102,7 +103,7 @@ class SupabaseAttendanceRepository @Inject constructor(
         return try {
             val response = client.postgrest.rpc("record_attendance_location", buildJsonObject {
                 put("p_employee_id", employeeId)
-                put("p_geofence_id", geofenceId)
+                put("p_geofence_id", geofence.id)
                 put("p_latitude", latitude)
                 put("p_longitude", longitude)
                 put("p_accuracy_meters", accuracyMeters.toDouble())
@@ -140,7 +141,7 @@ class SupabaseAttendanceRepository @Inject constructor(
             if (!appContext.hasNetworkConnection()) {
                 enqueueOfflineLocation(
                     organizationId, employeeId, idempotencyKey, observedAt,
-                    latitude, longitude, accuracyMeters, isMock, geofenceId,
+                    latitude, longitude, accuracyMeters, isMock, geofence.id,
                 )
                 AppResult.Success(AttendanceLocationResult(outcome = "queued_offline", reason = "offline"))
             } else {
@@ -249,22 +250,23 @@ class SupabaseAttendanceRepository @Inject constructor(
         // The server validates the polygon identified by p_geofence_id. Passing
         // null makes the RPC deterministically reject every attendance attempt;
         // resolve the employee's active assignment before calling it.
-        val geofenceId = resolveGeofenceId(client, organizationId, employeeId, online)
-        if (geofenceId == null) {
+        val geofence = resolveGeofence(client, organizationId, employeeId, online)
+        if (geofence == null) {
             if (!online) {
                 return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Network("Offline attendance is unavailable until a work location has been synced."))
             }
             return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("No active work location is assigned for this employee."))
         }
+        accuracyFailure(accuracyMeters, geofence.requiredAccuracyMeters)?.let { return it }
         if (!online) {
             if (database.offlineAttendanceDao().pendingAction(employeeId, actionType) != null) return AppResult.Success(Unit)
-            enqueueOffline(organizationId, employeeId, actionType, localEventId, eventTime, latitude, longitude, accuracyMeters, isMock, geofenceId)
+            enqueueOffline(organizationId, employeeId, actionType, localEventId, eventTime, latitude, longitude, accuracyMeters, isMock, geofence.id)
             return AppResult.Success(Unit)
         }
         return try {
             val args = ProcessAttendanceArgs(
                 p_employee_id = employeeId,
-                p_geofence_id = geofenceId,
+                p_geofence_id = geofence.id,
                 p_action_type = actionType,
                 p_is_auto = isAuto,
                 p_latitude = latitude,
@@ -291,11 +293,11 @@ class SupabaseAttendanceRepository @Inject constructor(
             if (first?.inside_geofence == false) {
                  return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("You are outside your assigned work location."))
             }
-            database.offlineAttendanceDao().upsert(OfflineAttendanceEventEntity(localEventId.toString(), organizationId, employeeId, actionType, eventTime.toEpochMilli(), eventTime.toString(), latitude, longitude, accuracyMeters, isMock, geofenceId, first.validation_status, "SYNCED", 0, null, first.event_id, System.currentTimeMillis()))
+            database.offlineAttendanceDao().upsert(OfflineAttendanceEventEntity(localEventId.toString(), organizationId, employeeId, actionType, eventTime.toEpochMilli(), eventTime.toString(), latitude, longitude, accuracyMeters, isMock, geofence.id, first.validation_status, "SYNCED", 0, null, first.event_id, System.currentTimeMillis()))
             AppResult.Success(Unit)
         } catch (e: Exception) {
             if (!appContext.hasNetworkConnection()) {
-                enqueueOffline(organizationId, employeeId, actionType, localEventId, eventTime, latitude, longitude, accuracyMeters, isMock, geofenceId)
+                enqueueOffline(organizationId, employeeId, actionType, localEventId, eventTime, latitude, longitude, accuracyMeters, isMock, geofence.id)
                 return AppResult.Success(Unit)
             }
             val msg = e.message ?: "Unknown"
@@ -380,13 +382,13 @@ class SupabaseAttendanceRepository @Inject constructor(
         OfflineAttendanceSyncScheduler.enqueue(appContext)
     }
 
-    private suspend fun resolveGeofenceId(
+    private suspend fun resolveGeofence(
         client: io.github.jan.supabase.SupabaseClient,
         organizationId: String,
         employeeId: String,
         allowRemote: Boolean,
-    ): String? {
-        val remote = if (allowRemote) runCatching {
+    ): ActiveGeofence? {
+        val remoteId = if (allowRemote) runCatching {
             client.postgrest["geofence_assignments"].select {
                 filter {
                     eq("organization_id", organizationId)
@@ -401,13 +403,37 @@ class SupabaseAttendanceRepository @Inject constructor(
                 .maxByOrNull { it.effectiveFrom ?: "0000-01-01" }
                 ?.geofenceId
         }.getOrNull() else null
-        if (remote != null) return remote
+        if (remoteId != null) {
+            val settings = runCatching {
+                client.postgrest["geofences"].select {
+                    filter {
+                        eq("organization_id", organizationId)
+                        eq("id", remoteId)
+                    }
+                }.decodeList<GeofenceSettingsDto>().firstOrNull()
+            }.getOrNull()
+            if (settings != null) {
+                if (settings.status != "active") return null
+                return ActiveGeofence(settings.id, settings.requiredAccuracyMeters.coerceAtLeast(1))
+            }
+        }
 
         val today = LocalDate.now().toString()
         return database.workforceCacheDao().geofences(employeeId)
             .filter { (it.effectiveFrom == null || it.effectiveFrom <= today) && (it.effectiveTo == null || it.effectiveTo >= today) }
             .maxByOrNull { it.effectiveFrom ?: "0000-01-01" }
-            ?.geofenceId
+            ?.let { ActiveGeofence(it.geofenceId, it.requiredAccuracyMeters.coerceAtLeast(1)) }
+    }
+
+    private fun accuracyFailure(actualMeters: Float, requiredMeters: Int): AppResult.Failure? {
+        if (actualMeters.isFinite() && actualMeters <= requiredMeters) return null
+        val actual = if (actualMeters.isFinite()) actualMeters.toInt().coerceAtLeast(0).toString() else "unknown"
+        return AppResult.Failure(
+            com.geotrack.mobile.core.common.AppError.Unknown(
+                "Location accuracy is $actual m; $requiredMeters m or better is required. " +
+                    "Wait for a stronger GPS signal and try again.",
+            ),
+        )
     }
 }
 
@@ -428,4 +454,16 @@ private data class GeofenceAssignmentDto(
     @SerialName("geofence_id") val geofenceId: String,
     @SerialName("effective_from") val effectiveFrom: String? = null,
     @SerialName("effective_to") val effectiveTo: String? = null,
+)
+
+private data class ActiveGeofence(
+    val id: String,
+    val requiredAccuracyMeters: Int,
+)
+
+@Serializable
+private data class GeofenceSettingsDto(
+    val id: String,
+    val status: String,
+    @SerialName("required_accuracy_meters") val requiredAccuracyMeters: Int = 50,
 )

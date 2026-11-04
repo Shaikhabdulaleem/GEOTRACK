@@ -57,6 +57,17 @@ class AttendanceReminderPlannerTest {
     }
 
     @Test
+    fun `automatic check-in reconciliation is scheduled at shift start`() {
+        val today = LocalDate.now(zone)
+        val schedules = listOf(workingDay(today, "23:00:00", "23:59:00"))
+
+        val plans = plansFor(at(today, 1), schedules)
+        val autoCheckIn = plans.first { it.type == AttendanceNotificationType.AUTO_CHECK_IN }
+
+        assertEquals(at(today, 23), autoCheckIn.at)
+    }
+
+    @Test
     fun `checkout monitor starts at organization grace window`() {
         val today = LocalDate.now(zone)
         val schedules = listOf(workingDay(today, "09:00:00", "17:00:00"))
@@ -100,6 +111,7 @@ class AttendanceReminderPlannerTest {
             plans.none {
                 it.type in setOf(
                     AttendanceNotificationType.SHIFT_START,
+                    AttendanceNotificationType.AUTO_CHECK_IN,
                     AttendanceNotificationType.NOT_CHECKED_IN,
                     AttendanceNotificationType.SHIFT_ENDING,
                     AttendanceNotificationType.CHECKOUT_MONITOR_START,

@@ -49,6 +49,14 @@ object AttendanceReminderPlanner {
                         day,
                         start.minusSeconds(PRE_SHIFT_MINUTES * 60),
                     )
+                    // A dedicated exact alarm at the real shift start. The
+                    // pre-shift reminder must not launch auto attendance: the
+                    // worker correctly refuses to check in before the shift.
+                    out += ScheduledNotification(
+                        AttendanceNotificationType.AUTO_CHECK_IN,
+                        day,
+                        start,
+                    )
                     out += ScheduledNotification(
                         AttendanceNotificationType.NOT_CHECKED_IN,
                         day,

@@ -48,6 +48,13 @@ object AppModule {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE offline_attendance_events ADD COLUMN geofenceId TEXT")
             }
+        }).addMigrations(object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Existing releases enforced 50 m on the server. Preserve that
+                // safe default until the next cache refresh stores each
+                // geofence's configured value.
+                db.execSQL("ALTER TABLE cached_geofences ADD COLUMN requiredAccuracyMeters INTEGER NOT NULL DEFAULT 50")
+            }
         }).fallbackToDestructiveMigrationOnDowngrade().build()
         
     @Provides
