@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -26,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -46,19 +48,59 @@ fun AttendanceSetupBanner(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val tracker = remember { DeviceStatusTracker(context) }
     var status by remember { mutableStateOf(tracker.getCurrentStatus()) }
+    var showSetupDialog by rememberSaveable { mutableStateOf(!status.isFullyConfigured) }
 
     // Re-check whenever the screen resumes (the user may have just changed a
     // setting in system Settings and come back).
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { status = tracker.getCurrentStatus() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        val refreshed = tracker.getCurrentStatus()
+        status = refreshed
+        showSetupDialog = !refreshed.isFullyConfigured
+    }
 
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { status = tracker.getCurrentStatus() }
+    ) {
+        val refreshed = tracker.getCurrentStatus()
+        status = refreshed
+        showSetupDialog = !refreshed.isFullyConfigured
+    }
 
     if (status.isFullyConfigured) return
 
     val items = buildSetupItems(status)
     if (items.isEmpty()) return
+
+    val openItem: (SetupItem) -> Unit = { item ->
+        showSetupDialog = false
+        if (item.isNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            runCatching { context.startActivity(item.intent(context)) }
+        }
+    }
+
+    if (showSetupDialog) {
+        AlertDialog(
+            onDismissRequest = { showSetupDialog = false },
+            icon = { Icon(Icons.Outlined.WarningAmber, contentDescription = null) },
+            title = { Text("Automatic attendance needs setup") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("GeoTrack found these missing permissions or device settings:")
+                    items.forEach { item -> Text("• ${item.title}") }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { openItem(items.first()) }) {
+                    Text(items.first().action)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSetupDialog = false }) { Text("Later") }
+            },
+        )
+    }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -93,13 +135,7 @@ fun AttendanceSetupBanner(modifier: Modifier = Modifier) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onTertiaryContainer,
                     )
-                    TextButton(onClick = {
-                        if (item.isNotificationPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            notificationLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                        } else {
-                            runCatching { context.startActivity(item.intent(context)) }
-                        }
-                    }) {
+                    TextButton(onClick = { openItem(item) }) {
                         Text(item.action)
                     }
                 }

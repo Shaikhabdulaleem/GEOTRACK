@@ -1,11 +1,11 @@
 # Current release artifact
 
-- Version code: 7
-- Version name: 0.2.5
+- Version code: 8
+- Version name: 0.2.6
 - Build date: 2026-11-04
-- Artifact: app/build/outputs/apk/release/geotrack-0.2.5-employee-update.apk
+- Artifact: app/build/outputs/apk/release/geotrack-0.2.6-employee-update.apk
 - Size: 3,921,806 bytes
-- APK SHA-256: A9BE443E272D74EDA5548E0CF89B2FB5E80716C6B718CDBCF410329F238401CF
+- APK SHA-256: 6C7DDEA2304B9338F1A88985A1D6412E59D93D7DB202592F375C4718EE7D82C5
 - Signature: APK Signature Schemes v2 and v3
 - Signer certificate SHA-256:
   C80D1408BAAE76E58723B7FF172DF9B590C147A7ABB4559C51767CD8F690718F
