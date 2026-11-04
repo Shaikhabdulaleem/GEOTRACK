@@ -14,18 +14,13 @@ Keep release.keystore and keystore.properties outside source control and back
 them up in the approved secrets vault. Losing the signing key prevents trusted
 updates to the installed application.
 
-> **Rotate the signing credentials before first production release.** The
-> development keystore ships with a weak, well-known password. Because the app
-> has not been distributed yet (versionCode 1), generate a fresh release
-> keystore with a strong, vault-stored passphrase now — changing it after the
-> first public/Play release is impossible without an app-signing key reset:
->
->     keytool -genkeypair -v -keystore release.keystore -alias geotrack \
->       -keyalg RSA -keysize 4096 -validity 10000
->
-> Then update keystore.properties with the new store/key passwords (store the
-> real values only in the secrets vault, never in git) and re-verify the signer
-> certificate SHA-256 in the release gate below.
+> **Current compatibility constraint:** deployed employee builds through v0.2.3
+> use the legacy certificate with SHA-256 fingerprint
+> `C80D1408BAAE76E58723B7FF172DF9B590C147A7ABB4559C51767CD8F690718F`.
+> Every broadly distributed in-place update must use that same signer until a
+> planned signing-key migration is completed. Back up this keystore securely;
+> losing it would prevent updates to existing installations. Continue shipping
+> a minified, non-debuggable release variant—do not distribute a debug build.
 
 Release builds are minified and resource-shrunk (R8). Keep rules live in
 app/proguard-rules.pro; after any dependency change, build a signed release and
@@ -36,7 +31,9 @@ From android-app:
     .\gradlew.bat clean assembleRelease
 
 The signed APK is generated at
-app/build/outputs/apk/release/app-release.apk.
+app/build/outputs/apk/release/app-release.apk. Before distribution, confirm its
+certificate matches the deployed signer fingerprint above. A different signer
+will produce Android's generic "App not installed" error during an update.
 
 ## Release gate
 
