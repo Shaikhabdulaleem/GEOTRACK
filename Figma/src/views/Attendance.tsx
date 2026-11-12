@@ -1,19 +1,19 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Search, CheckCircle, XCircle, AlertCircle, RefreshCw, Clock } from 'lucide-react';
+import { Search, CheckCircle, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import Avatar from '../components/Avatar';
 import { useAuth } from '../auth/AuthContext';
 import { attendanceService } from '../services/attendance.service';
 import { employeeService } from '../services/employee.service';
+import { organizationService } from '../services/organization.service';
 import { shiftService } from '../services/shift.service';
-import { overtimeService } from '../services/overtime.service';
 import { correctionService } from '../services/correction.service';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { employees as mockEmployees } from '../data/mockData';
 import { todayInTimezone } from '../lib/dates';
-import type { AttendanceRecordRow, EmployeeProfileRow, ShiftAssignmentRow, ShiftRow, OvertimeRecordRow, ManualAttendanceRequestRow } from '../types/database';
+import type { AttendanceRecordRow, DepartmentRow, EmployeeProfileRow, ShiftAssignmentRow, ShiftRow, ManualAttendanceRequestRow } from '../types/database';
 
-const tabs = ['Today', 'Overtime', 'Corrections'];
+const tabs = ['Today', 'Corrections'];
 
 // Helper to format ISO strings to HH:MM AM/PM
 function formatTime(isoString: string | null) {
@@ -41,12 +41,13 @@ export default function Attendance() {
 
   const [tab, setTab] = useState('Today');
   const [search, setSearch] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
   
   // Real data state
   const [records, setRecords] = useState<AttendanceRecordRow[]>([]);
   const [emps, setEmps] = useState<EmployeeProfileRow[]>([]);
+  const [departments, setDepartments] = useState<DepartmentRow[]>([]);
   const [assignments, setAssignments] = useState<(ShiftAssignmentRow & { shift: ShiftRow | null })[]>([]);
-  const [overtimeRecords, setOvertimeRecords] = useState<OvertimeRecordRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -86,18 +87,18 @@ export default function Attendance() {
     try {
       const today = todayInTimezone('Asia/Riyadh');
       
-      const [recData, empData, assignData, otData, corrData] = await Promise.all([
+      const [recData, empData, departmentData, assignData, corrData] = await Promise.all([
         attendanceService.list({ organizationId, fromDate: today, toDate: today }),
         employeeService.listAll({ organizationId }),
+        organizationService.listDepartments(organizationId),
         shiftService.listAssignments({ organization_id: organizationId, from_date: today, to_date: today }),
-        overtimeService.list({ organizationId }),
         correctionService.list({ organizationId })
       ]);
       
       setRecords(recData);
       setEmps(empData);
+      setDepartments(departmentData.filter(department => department.status === 'active'));
       setAssignments(assignData);
-      setOvertimeRecords(otData);
       setCorrections(corrData);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load attendance.');
@@ -111,20 +112,9 @@ export default function Attendance() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabaseReady, organizationId]);
 
-  const handleReviewOvertime = async (otId: string, status: 'approved' | 'rejected', requestedMins: number) => {
-    if (!user) return;
-    setLoading(true);
-    try {
-      await overtimeService.reviewOvertime(otId, status, requestedMins, user.id, status === 'approved' ? 'Manager approved' : 'Manager rejected');
-      await loadData();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to review overtime.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Combine data for display
+  const departmentNames = useMemo(() => new Map(departments.map(department => [department.id, department.name])), [departments]);
+
   const displayData = useMemo(() => {
     if (!supabaseReady) {
       // Fallback to mock if no supabase
@@ -133,6 +123,7 @@ export default function Attendance() {
         name: e.name,
         photo: e.photo,
         dept: e.dept,
+        deptId: e.dept,
         shiftName: e.shift,
         checkin: e.checkin,
         checkout: e.checkout,
@@ -167,7 +158,8 @@ export default function Attendance() {
       return {
         id: emp.employee_code || emp.id.substring(0, 8),
         name: emp.full_name,
-        dept: 'General',
+        dept: departmentNames.get(emp.department_id) ?? 'Unassigned',
+        deptId: emp.department_id,
         shiftName: assignment?.shift?.name || 'Off / Unassigned',
         checkin: formatTime(rec?.check_in_at ?? null),
         checkout: formatTime(rec?.check_out_at ?? null),
@@ -180,22 +172,35 @@ export default function Attendance() {
         source: sourceStr,
       };
     });
-  }, [supabaseReady, emps, records, assignments]);
+  }, [supabaseReady, emps, records, assignments, departmentNames]);
 
-  const filtered = displayData.filter(e =>
+  const departmentDisplayData = useMemo(
+    () => departmentId ? displayData.filter(employee => employee.deptId === departmentId) : displayData,
+    [departmentId, displayData],
+  );
+
+  const filtered = departmentDisplayData.filter(e =>
     !search || e.name.toLowerCase().includes(search.toLowerCase()) || e.id.toLowerCase().includes(search.toLowerCase())
   );
 
   const stats = useMemo(() => {
     return {
-      present: displayData.filter(e => e.attendanceStatus === 'Present' || e.attendanceStatus === 'Late').length,
-      late: displayData.filter(e => e.attendanceStatus === 'Late').length,
-      absent: displayData.filter(e => e.attendanceStatus === 'Absent').length,
-      missing: displayData.filter(e => e.attendanceStatus === 'Missing').length,
+      present: departmentDisplayData.filter(e => e.attendanceStatus === 'Present' || e.attendanceStatus === 'Late').length,
+      late: departmentDisplayData.filter(e => e.attendanceStatus === 'Late').length,
+      absent: departmentDisplayData.filter(e => e.attendanceStatus === 'Absent').length,
+      missing: departmentDisplayData.filter(e => e.attendanceStatus === 'Missing').length,
     };
-  }, [displayData]);
+  }, [departmentDisplayData]);
 
-  const pendingOvertimeCount = overtimeRecords.filter(r => r.status === 'pending').length;
+  const departmentEmployeeIds = useMemo(
+    () => new Set((departmentId ? emps.filter(employee => employee.department_id === departmentId) : emps).map(employee => employee.id)),
+    [departmentId, emps],
+  );
+  const filteredCorrections = useMemo(
+    () => departmentId ? corrections.filter(record => departmentEmployeeIds.has(record.employee_id)) : corrections,
+    [corrections, departmentEmployeeIds, departmentId],
+  );
+  const pendingCorrectionCount = filteredCorrections.filter(r => r.status === 'pending').length;
 
   const todayStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
@@ -206,6 +211,17 @@ export default function Attendance() {
           <h1 className="text-xl font-bold text-white">Attendance & Timesheets</h1>
           <p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>{todayStr}</p>
         </div>
+        <div className="flex items-center gap-2">
+          <select
+            aria-label="Filter attendance by department"
+            value={departmentId}
+            onChange={event => setDepartmentId(event.target.value)}
+            className="px-3 py-2 rounded-lg text-xs outline-none"
+            style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#94a3b8' }}
+          >
+            <option value="">All Departments</option>
+            {departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}
+          </select>
         {supabaseReady && (
           <button 
             onClick={() => void loadData()}
@@ -216,6 +232,7 @@ export default function Attendance() {
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         )}
+        </div>
       </div>
 
       {error && (
@@ -230,14 +247,9 @@ export default function Attendance() {
           <button key={t} onClick={() => setTab(t)} className="px-4 py-2.5 text-sm font-medium transition-all"
             style={{ color: tab === t ? '#f0f6ff' : '#4b6a8a', borderBottom: tab === t ? '2px solid #2563eb' : '2px solid transparent', marginBottom: '-1px' }}>
             {t}
-            {t === 'Overtime' && pendingOvertimeCount > 0 && (
-              <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs font-mono" style={{ background: '#f59e0b', color: '#fff', fontSize: 10 }}>
-                {pendingOvertimeCount}
-              </span>
-            )}
-            {t === 'Corrections' && corrections.filter(r=>r.status==='pending').length > 0 && (
+            {t === 'Corrections' && pendingCorrectionCount > 0 && (
               <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-xs font-mono" style={{ background: '#f97316', color: '#fff', fontSize: 10 }}>
-                {corrections.filter(r=>r.status==='pending').length}
+                {pendingCorrectionCount}
               </span>
             )}
           </button>
@@ -325,76 +337,16 @@ export default function Attendance() {
         </>
       )}
 
-      {tab === 'Overtime' && (
-        <div className="space-y-3">
-          {pendingOvertimeCount > 0 && (
-            <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)', color: '#f59e0b' }}>
-              <Clock size={14} />
-              {pendingOvertimeCount} overtime request(s) pending review
-            </div>
-          )}
-
-          {overtimeRecords.map(req => {
-            const emp = emps.find(e => e.id === req.employee_id);
-            return (
-              <div key={req.id} className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="font-semibold text-sm text-white">{emp?.full_name || 'Unknown Employee'}</div>
-                      <StatusBadge status={req.status === 'pending' ? 'Pending' : req.status === 'approved' ? 'Approved' : 'Rejected'} />
-                    </div>
-                    <div className="text-xs" style={{ color: '#94a3b8' }}>
-                      <span className="font-medium" style={{ color: '#f0f6ff' }}>Requested Overtime:</span> {formatDuration(req.requested_minutes)}
-                    </div>
-                    {req.status === 'approved' && (
-                      <div className="text-xs mt-1" style={{ color: '#10b981' }}>
-                        Approved for: {formatDuration(req.approved_minutes)}
-                      </div>
-                    )}
-                    <div className="text-xs mt-1" style={{ color: '#4b6a8a' }}>Reason: {req.reason || 'None provided'}</div>
-                  </div>
-                  {req.status === 'pending' && (
-                    <div className="flex gap-2 flex-shrink-0 ml-4">
-                      <button
-                        onClick={() => handleReviewOvertime(req.id, 'approved', req.requested_minutes)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-opacity hover:opacity-80"
-                        style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)' }}
-                      >
-                        <CheckCircle size={12} /> Approve All
-                      </button>
-                      <button
-                        onClick={() => handleReviewOvertime(req.id, 'rejected', req.requested_minutes)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-opacity hover:opacity-80"
-                        style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}
-                      >
-                        <XCircle size={12} /> Reject
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          
-          {overtimeRecords.length === 0 && !loading && (
-            <div className="p-8 text-center text-sm" style={{ color: '#4b6a8a', border: '1px solid #1e3a5a', borderRadius: '12px' }}>
-              No overtime requests found.
-            </div>
-          )}
-        </div>
-      )}
-
       {tab === 'Corrections' && (
         <div className="space-y-3">
-          {corrections.filter(r=>r.status==='pending').length > 0 && (
+          {pendingCorrectionCount > 0 && (
             <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)', color: '#f59e0b' }}>
               <AlertCircle size={14} />
-              {corrections.filter(r=>r.status==='pending').length} correction request(s) pending approval
+              {pendingCorrectionCount} correction request(s) pending approval
             </div>
           )}
 
-          {corrections.map(req => {
+          {filteredCorrections.map(req => {
             const emp = emps.find(e => e.id === req.employee_id);
             return (
               <div key={req.id} className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>

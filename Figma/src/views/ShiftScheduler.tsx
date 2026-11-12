@@ -32,7 +32,8 @@ import {
   type ShiftSummary,
 } from '../services/shift.service';
 import { employeeService } from '../services/employee.service';
-import type { ShiftRow, ShiftAssignmentRow, EmployeeProfileRow, ResolvedScheduleRow } from '../types/database';
+import { organizationService } from '../services/organization.service';
+import type { ShiftRow, ShiftAssignmentRow, EmployeeProfileRow, ResolvedScheduleRow, DepartmentRow } from '../types/database';
 import { scheduleData } from '../data/mockData';
 import { ShiftEditorModal as ShiftModal } from '../components/ShiftEditorModal';
 
@@ -416,6 +417,8 @@ interface MockAssignments {
   [empName: string]: string[];
 }
 
+const MOCK_DEPARTMENTS = ['Mailroom', 'Warehouse', 'Mailroom', 'Operations', 'Warehouse', 'Mailroom', 'Operations', 'Warehouse'];
+
 export default function ShiftScheduler() {
   const { activeMembership, user } = useAuth();
   const supabaseReady = isSupabaseConfigured();
@@ -425,10 +428,12 @@ export default function ShiftScheduler() {
   const [view, setView] = useState<ViewMode>('weekly');
   const [weekStart, setWeekStart] = useState<Date>(() => getMondayOfWeek(new Date()));
   const [rightPanel, setRightPanel] = useState<RightPanel>(null);
+  const [departmentId, setDepartmentId] = useState('');
 
   // ── Data ────────────────────────────────────
   const [shifts, setShifts] = useState<ShiftRow[]>(MOCK_SHIFTS);
   const [employees, setEmployees] = useState<EmployeeProfileRow[]>([]);
+  const [departments, setDepartments] = useState<DepartmentRow[]>([]);
   const [assignments, setAssignments] = useState<ShiftAssignmentRow[]>([]);
   // Resolved schedule (recurring patterns, weekly offs, holidays, leave) keyed by
   // `${employeeId}_${workDate}`. Used to display shifts that come from a recurring
@@ -466,8 +471,9 @@ export default function ShiftScheduler() {
     setLoading(true);
     setError('');
     try {
-      const [empResult, shiftList, rawAssignments, offs, summary] = await Promise.all([
+      const [empResult, departmentList, shiftList, rawAssignments, offs, summary] = await Promise.all([
         employeeService.listAll({ organizationId }),
+        organizationService.listDepartments(organizationId),
         shiftService.listShifts(organizationId),
         shiftService.listAssignments({ organization_id: organizationId, from_date: fromDate, to_date: toDate }),
         shiftService.listWeeklyOffs(organizationId),
@@ -475,6 +481,7 @@ export default function ShiftScheduler() {
       ]);
 
       setEmployees(empResult);
+      setDepartments(departmentList.filter(department => department.status === 'active'));
       setShifts(shiftList);
       setAssignments(rawAssignments);
       setSummaries(summary);
@@ -592,17 +599,35 @@ export default function ShiftScheduler() {
     return days;
   }, [weekStart]);
 
+  const visibleEmployees = useMemo(
+    () => departmentId ? employees.filter(employee => employee.department_id === departmentId) : employees,
+    [departmentId, employees],
+  );
+  const visibleEmployeeIds = useMemo(() => new Set(visibleEmployees.map(employee => employee.id)), [visibleEmployees]);
+  const visibleConflicts = useMemo(
+    () => departmentId ? conflicts.filter(conflict => visibleEmployeeIds.has(conflict.employeeId)) : conflicts,
+    [conflicts, departmentId, visibleEmployeeIds],
+  );
+  const visibleMockAssignments = useMemo(
+    () => Object.entries(mockAssignments).filter((_, index) => !departmentId || MOCK_DEPARTMENTS[index] === departmentId),
+    [departmentId, mockAssignments],
+  );
+
   // ─────────────────────────────────────────────
   // Render
   // ─────────────────────────────────────────────
 
   const dayCount = supabaseReady
-    ? summaries.find(s => !s.shift.crosses_midnight)?.employeeCount ?? 0
-    : Object.values(mockAssignments).flat().filter(v => v === 'Day').length;
+    ? departmentId
+      ? assignments.filter(assignment => assignment.status === 'scheduled' && visibleEmployeeIds.has(assignment.employee_id) && !getShift(assignment.shift_id)?.crosses_midnight).length
+      : summaries.find(s => !s.shift.crosses_midnight)?.employeeCount ?? 0
+    : visibleMockAssignments.flatMap(([, days]) => days).filter(value => value === 'Day').length;
 
   const nightCount = supabaseReady
-    ? summaries.find(s => s.shift.crosses_midnight)?.employeeCount ?? 0
-    : Object.values(mockAssignments).flat().filter(v => v === 'Night').length;
+    ? departmentId
+      ? assignments.filter(assignment => assignment.status === 'scheduled' && visibleEmployeeIds.has(assignment.employee_id) && getShift(assignment.shift_id)?.crosses_midnight).length
+      : summaries.find(s => s.shift.crosses_midnight)?.employeeCount ?? 0
+    : visibleMockAssignments.flatMap(([, days]) => days).filter(value => value === 'Night').length;
 
   return (
     <div className="space-y-4">
@@ -617,6 +642,18 @@ export default function ShiftScheduler() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <select
+            aria-label="Filter shifts by department"
+            value={departmentId}
+            onChange={event => setDepartmentId(event.target.value)}
+            className="px-3 py-2 rounded-lg text-xs outline-none"
+            style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#94a3b8' }}
+          >
+            <option value="">All Departments</option>
+            {supabaseReady
+              ? departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)
+              : [...new Set(MOCK_DEPARTMENTS)].map(department => <option key={department} value={department}>{department}</option>)}
+          </select>
           {/* View toggle */}
           <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: '#1e3a5a' }}>
             {(['daily', 'weekly', 'monthly'] as const).map(v => (
@@ -648,12 +685,12 @@ export default function ShiftScheduler() {
             className="px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 transition-all"
             style={{
               background: rightPanel === 'conflicts' ? 'rgba(245,158,11,0.1)' : '#0d1b2e',
-              color: conflicts.length ? '#f59e0b' : '#4b6a8a',
-              border: `1px solid ${conflicts.length ? 'rgba(245,158,11,0.4)' : '#1e3a5a'}`,
+              color: visibleConflicts.length ? '#f59e0b' : '#4b6a8a',
+              border: `1px solid ${visibleConflicts.length ? 'rgba(245,158,11,0.4)' : '#1e3a5a'}`,
             }}
           >
-            {conflicts.length > 0 && <AlertTriangle size={12} />}
-            Conflicts {conflicts.length > 0 ? `(${conflicts.length})` : ''}
+            {visibleConflicts.length > 0 && <AlertTriangle size={12} />}
+            Conflicts {visibleConflicts.length > 0 ? `(${visibleConflicts.length})` : ''}
           </button>
 
           <button
@@ -670,7 +707,7 @@ export default function ShiftScheduler() {
       {error && <ErrorBanner message={error} onRetry={() => void loadData()} />}
 
       {/* Conflicts */}
-      {supabaseReady && <ConflictsBanner conflicts={conflicts} />}
+      {supabaseReady && <ConflictsBanner conflicts={visibleConflicts} />}
 
       {/* Legend */}
       <div className="flex items-center gap-4 flex-wrap">
@@ -744,7 +781,7 @@ export default function ShiftScheduler() {
                     </thead>
                     <tbody>
                       {supabaseReady
-                        ? employees.map((emp, i) => (
+                        ? visibleEmployees.map((emp, i) => (
                             <tr key={emp.id} className="border-t" style={{ borderColor: '#1e3a5a', background: i % 2 === 0 ? 'transparent' : 'rgba(18,35,56,0.3)' }}>
                               <td className="px-4 py-2">
                                 <div className="text-xs font-medium text-white">{emp.full_name}</div>
@@ -772,12 +809,12 @@ export default function ShiftScheduler() {
                               })}
                             </tr>
                           ))
-                        : Object.entries(mockAssignments).map(([name, days], i) => (
+                        : visibleMockAssignments.map(([name, days], i) => (
                             <tr key={name} className="border-t" style={{ borderColor: '#1e3a5a', background: i % 2 === 0 ? 'transparent' : 'rgba(18,35,56,0.3)' }}>
                               <td className="px-4 py-2">
                                 <div className="text-xs font-medium text-white">{name}</div>
                                 <div className="text-xs" style={{ color: '#4b6a8a' }}>
-                                  {['Mailroom', 'Warehouse', 'Mailroom', 'Operations', 'Warehouse', 'Mailroom', 'Operations', 'Warehouse'][i]}
+                                  {departmentId || MOCK_DEPARTMENTS[i]}
                                 </div>
                               </td>
                               {days.map((shift, j) => {
@@ -815,7 +852,7 @@ export default function ShiftScheduler() {
               ) : (
                 <div className="space-y-2">
                   {supabaseReady
-                    ? employees.map(emp => {
+                    ? visibleEmployees.map(emp => {
                         const today = toISODate(new Date());
                         const cell = getCellDisplay(emp.id, today);
                         return (
@@ -839,7 +876,7 @@ export default function ShiftScheduler() {
                           </div>
                         );
                       })
-                    : Object.entries(mockAssignments).map(([name, days]) => {
+                    : visibleMockAssignments.map(([name, days]) => {
                         const shift = days[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
                         const s = SHIFT_COLORS[shift] ?? SHIFT_COLORS.OFF;
                         return (
@@ -868,7 +905,7 @@ export default function ShiftScheduler() {
               ) : (
                 <div className="grid grid-cols-4 gap-3">
                   {supabaseReady
-                    ? employees.map(emp => {
+                    ? visibleEmployees.map(emp => {
                         const empAssignments = assignments.filter(a => a.employee_id === emp.id);
                         const dc = empAssignments.filter(a => a.status === 'scheduled' && !getShift(a.shift_id)?.crosses_midnight).length;
                         const nc = empAssignments.filter(a => a.status === 'scheduled' && getShift(a.shift_id)?.crosses_midnight).length;
@@ -886,7 +923,7 @@ export default function ShiftScheduler() {
                           </div>
                         );
                       })
-                    : Object.entries(mockAssignments).map(([name, days]) => {
+                    : visibleMockAssignments.map(([name, days]) => {
                         const dc = days.filter(d => d === 'Day').length;
                         const nc = days.filter(d => d === 'Night').length;
                         const oc = days.filter(d => d === 'OFF').length;
@@ -966,13 +1003,13 @@ export default function ShiftScheduler() {
             {/* Conflicts Panel */}
             {rightPanel === 'conflicts' && (
               <div className="space-y-2">
-                {conflicts.length === 0 ? (
+                {visibleConflicts.length === 0 ? (
                   <div className="flex flex-col items-center py-8 gap-2" style={{ color: '#4b6a8a' }}>
                     <CheckCircle size={24} style={{ color: '#10b981' }} />
                     <div className="text-sm text-center">No conflicts detected for this week</div>
                   </div>
                 ) : (
-                  conflicts.map((c, i) => (
+                  visibleConflicts.map((c, i) => (
                     <div
                       key={i}
                       className="p-3 rounded-xl"

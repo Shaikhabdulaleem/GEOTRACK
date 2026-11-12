@@ -1,214 +1,95 @@
-import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, AlertCircle, Clock } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, CalendarDays, CheckCircle, ChevronLeft, ChevronRight, Edit3, Filter, Loader2, Search, ShieldAlert, Smartphone, UserRound, X, XCircle } from 'lucide-react';
+import Avatar from '../components/Avatar';
 import StatusBadge from '../components/StatusBadge';
-import { overtimeService } from '../services/overtime.service';
 import { useAuth } from '../auth/AuthContext';
+import { employeeService, type EmployeeLookups } from '../services/employee.service';
+import { overtimeService, type ManagerAttendanceCorrection, type OvertimeDecision, type OvertimeEmployeeSummary, type OvertimeReviewDay } from '../services/overtime.service';
 import { toAppError } from '../lib/errors';
-import { logger } from '../lib/logger';
-import type { EmployeeProfileRow, OvertimeRecordRow } from '../types/database';
 
-const INITIAL_POLICY = { minThreshold: '15', autoApprove: '30', defaultApprover: 'Sarah Johnson (Admin)' };
+const inputStyle = { background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#f0f6ff' };
 
-interface ExtendedOvertimeRecord extends OvertimeRecordRow {
-  employee_name?: string;
-}
+function isoDate(date: Date) { return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date); }
+function daysInclusive(from: string, to: string) { return !from || !to ? 0 : Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1; }
+function duration(minutes: number) { if (!minutes) return '0m'; const hours = Math.floor(minutes / 60); const remainder = minutes % 60; return hours ? `${hours}h${remainder ? ` ${remainder}m` : ''}` : `${remainder}m`; }
+function time(value: string | null) { return value ? new Date(value).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'; }
+function localDateTimeValue(value: string | null, date: string, fallbackTime: string) { if (!value) return `${date}T${fallbackTime.slice(0, 5)}`; const parsed = new Date(value); const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000); return local.toISOString().slice(0, 16); }
+function nextIsoDate(date: string) { const value = new Date(`${date}T00:00:00Z`); value.setUTCDate(value.getUTCDate() + 1); return value.toISOString().slice(0, 10); }
+function deviceLabel(percent: number | null) { if (percent == null) return { label: 'Unavailable', color: '#4b6a8a' }; if (percent <= 30) return { label: 'Normal', color: '#10b981' }; if (percent <= 60) return { label: 'Review', color: '#f59e0b' }; return { label: 'High', color: '#ef4444' }; }
+function datePreset(kind: 'week' | 'month') { const today = new Date(); const from = new Date(today); if (kind === 'week') { const weekday = today.getDay() || 7; from.setDate(today.getDate() - weekday + 1); } else from.setDate(1); return { from: isoDate(from), to: isoDate(today) }; }
 
 export default function Overtime() {
-  const { activeMembership, session } = useAuth();
-  const [records, setRecords] = useState<ExtendedOvertimeRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  
-  const [policy, setPolicy] = useState(INITIAL_POLICY);
+  const { activeMembership } = useAuth();
+  const organizationId = activeMembership?.organization_id ?? '';
+  const [fromDate, setFromDate] = useState(''); const [toDate, setToDate] = useState('');
+  const [search, setSearch] = useState(''); const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [branchId, setBranchId] = useState(''); const [departmentId, setDepartmentId] = useState('');
+  const [overtimeStatus, setOvertimeStatus] = useState(''); const [attendanceIssue, setAttendanceIssue] = useState('');
+  const [deviceStatus, setDeviceStatus] = useState(''); const [actionRequired, setActionRequired] = useState('');
+  const [page, setPage] = useState(1); const [rows, setRows] = useState<OvertimeEmployeeSummary[]>([]); const [count, setCount] = useState(0);
+  const [lookups, setLookups] = useState<EmployeeLookups>({ branches: [], departments: [], shifts: [], managers: [] });
+  const [loading, setLoading] = useState(false); const [error, setError] = useState('');
+  const [selected, setSelected] = useState<OvertimeEmployeeSummary | null>(null); const pageSize = 25;
 
-  useEffect(() => {
-    if (!activeMembership) return;
-    
-    let mounted = true;
-    setLoading(true);
-    
-    overtimeService.list({ organizationId: activeMembership.organization_id })
-      .then(async (data) => {
-        if (!mounted) return;
-        const { getSupabaseClient } = await import('../lib/supabase');
-        const empIds = [...new Set(data.map(d => d.employee_id))];
-        let profiles: Pick<EmployeeProfileRow, 'id' | 'full_name'>[] = [];
-        if (empIds.length > 0) {
-          const { data: pData } = await getSupabaseClient()
-            .from('employee_profiles')
-            .select('id, full_name')
-            .in('id', empIds);
-          profiles = pData || [];
-        }
-        
-        const nameMap = Object.fromEntries(profiles.map(p => [p.id, p.full_name]));
-        
-        setRecords(data.map(d => ({ ...d, employee_name: nameMap[d.employee_id] || 'Unknown' })));
-      })
-      .catch(err => {
-        if (mounted) setError(toAppError(err).message);
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
-      
-    return () => { mounted = false; };
-  }, [activeMembership]);
+  const rangeError = useMemo(() => { if (!fromDate || !toDate) return ''; const span = daysInclusive(fromDate, toDate); if (span < 1) return 'The end date must be on or after the start date.'; if (span > 90) return 'Select a date range of 90 days or less.'; return ''; }, [fromDate, toDate]);
+  useEffect(() => { const timer = window.setTimeout(() => setDebouncedSearch(search), 250); return () => window.clearTimeout(timer); }, [search]);
+  useEffect(() => { if (!organizationId) return; employeeService.getLookups(organizationId).then(setLookups).catch(caught => setError(toAppError(caught).message)); }, [organizationId]);
 
-  const approve = async (id: string, requestedMinutes: number) => {
-    if (!session?.user.id) return;
+  const load = useCallback(async () => {
+    if (!organizationId || !fromDate || !toDate || rangeError) { setRows([]); setCount(0); return; }
+    setLoading(true); setError('');
     try {
-      await overtimeService.reviewOvertime(id, 'approved', requestedMinutes, session.user.id);
-      setRecords(r => r.map(rec => rec.id === id ? { ...rec, status: 'approved', approved_minutes: requestedMinutes } : rec));
-    } catch (e) {
-      logger.error('Failed to approve overtime.', e);
-    }
-  };
-  
-  const reject = async (id: string) => {
-    if (!session?.user.id) return;
-    try {
-      await overtimeService.reviewOvertime(id, 'rejected', 0, session.user.id);
-      setRecords(r => r.map(rec => rec.id === id ? { ...rec, status: 'rejected', approved_minutes: 0 } : rec));
-    } catch (e) {
-      logger.error('Failed to reject overtime.', e);
-    }
-  };
+      const result = await overtimeService.listEmployeeReviewSummaries({ organizationId, fromDate, toDate, search: debouncedSearch, branchId, departmentId, overtimeStatus, attendanceIssue, deviceStatus, actionRequired: actionRequired === '' ? undefined : actionRequired === 'true', page, pageSize });
+      setRows(result.rows); setCount(result.count);
+    } catch (caught) { setError(toAppError(caught).message); } finally { setLoading(false); }
+  }, [actionRequired, attendanceIssue, branchId, debouncedSearch, departmentId, deviceStatus, fromDate, organizationId, overtimeStatus, page, rangeError, toDate]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setPage(1); }, [actionRequired, attendanceIssue, branchId, debouncedSearch, departmentId, deviceStatus, fromDate, overtimeStatus, toDate]);
 
-  const setP = (key: keyof typeof INITIAL_POLICY, val: string) => {
-    setPolicy(p => ({ ...p, [key]: val }));
-  };
+  const setPreset = (kind: 'week' | 'month') => { const preset = datePreset(kind); setFromDate(preset.from); setToDate(preset.to); };
+  const totals = useMemo(() => ({ pendingEmployees: rows.filter(row => row.pending_count > 0).length, pendingMinutes: rows.reduce((sum, row) => sum + row.pending_minutes, 0), attendanceIssues: rows.reduce((sum, row) => sum + row.attendance_issue_count, 0), highUsage: rows.filter(row => (row.average_device_usage_percent ?? 0) > 60).length }), [rows]);
+  const totalPages = Math.max(1, Math.ceil(count / pageSize));
+  const departments = branchId ? lookups.departments.filter(item => item.branch_id === branchId) : lookups.departments;
 
-  const pending = records.filter(r => r.status === 'pending').length;
-
-  if (loading) return <div className="p-4 text-white">Loading...</div>;
-  if (error) return <div className="p-4 text-red-500">{error}</div>;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-white">Overtime Management</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>Review and approve overtime requests</p>
-        </div>
-      </div>
-
-      {pending > 0 && (
-        <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', color: '#c4b5fd' }}>
-          <AlertCircle size={14} />
-          {pending} overtime request(s) awaiting approval
-        </div>
-      )}
-
-      <div className="grid grid-cols-4 gap-3">
-        {[
-          { label: 'Total OT Today', value: '0h', color: '#8b5cf6' },
-          { label: 'Pending Approval', value: pending, color: '#f97316' },
-          { label: 'Approved This Week', value: records.filter(r=>r.status==='approved').length, color: '#10b981' },
-          { label: 'Avg OT per Employee', value: '0h', color: '#3b82f6' },
-        ].map(s => (
-          <div key={s.label} className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
-            <div className="text-xs" style={{ color: '#4b6a8a' }}>{s.label}</div>
-            <div className="text-2xl font-bold font-mono mt-1" style={{ color: s.color }}>{s.value}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #1e3a5a' }}>
-        <table className="w-full">
-          <thead>
-            <tr style={{ background: '#122338' }}>
-              {['Employee', 'Date', 'OT Requested', 'OT Approved', 'Status', 'Actions'].map(h => (
-                <th key={h} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider" style={{ color: '#4b6a8a' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {records.length === 0 ? (
-               <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500">No overtime records found.</td></tr>
-            ) : records.map((rec) => (
-              <tr key={rec.id} className="border-t hover:bg-white/5" style={{ borderColor: '#1e3a5a' }}>
-                <td className="px-4 py-3 text-xs font-medium text-white">{rec.employee_name}</td>
-                <td className="px-4 py-3 font-mono text-xs" style={{ color: '#94a3b8' }}>{new Date(rec.created_at).toLocaleDateString()}</td>
-                <td className="px-4 py-3 font-mono text-xs" style={{ color: '#8b5cf6' }}>{rec.requested_minutes}m</td>
-                <td className="px-4 py-3 font-mono text-xs" style={{ color: rec.approved_minutes ? '#10b981' : '#4b6a8a' }}>{rec.approved_minutes ? `${rec.approved_minutes}m` : '—'}</td>
-                <td className="px-4 py-3"><StatusBadge status={rec.status.charAt(0).toUpperCase() + rec.status.slice(1)} /></td>
-                <td className="px-4 py-3">
-                  {rec.status === 'pending' && (
-                    <div className="flex gap-1.5">
-                      <button onClick={() => approve(rec.id, rec.requested_minutes)} className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-opacity hover:opacity-80" style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)' }}>
-                        <CheckCircle size={11} /> Approve
-                      </button>
-                      <button onClick={() => reject(rec.id)} className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-opacity hover:opacity-80" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
-                        <XCircle size={11} /> Reject
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
-        <div className="font-semibold text-sm text-white mb-3 flex items-center gap-2">
-          <Clock size={14} style={{ color: '#8b5cf6' }} />
-          Overtime Policy Configuration
-        </div>
-        <p className="text-xs mb-3" style={{ color: '#f59e0b' }} role="status">
-          Draft values only: policy persistence is not connected, so these settings do not change server-side overtime calculations.
-        </p>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <div className="text-xs mb-1.5" style={{ color: '#4b6a8a' }}>Minimum OT Threshold</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min="0"
-                className="w-16 px-2 py-1.5 rounded text-xs text-center font-mono outline-none"
-                style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                value={policy.minThreshold}
-                onChange={e => setP('minThreshold', e.target.value)}
-              />
-              <span className="text-xs" style={{ color: '#4b6a8a' }}>minutes</span>
-            </div>
-          </div>
-          <div>
-            <div className="text-xs mb-1.5" style={{ color: '#4b6a8a' }}>Auto-Approve Below</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min="0"
-                className="w-16 px-2 py-1.5 rounded text-xs text-center font-mono outline-none"
-                style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-                value={policy.autoApprove}
-                onChange={e => setP('autoApprove', e.target.value)}
-              />
-              <span className="text-xs" style={{ color: '#4b6a8a' }}>minutes</span>
-            </div>
-          </div>
-          <div>
-            <div className="text-xs mb-1.5" style={{ color: '#4b6a8a' }}>Default Approver</div>
-            <select
-              className="px-2 py-1.5 rounded text-xs outline-none"
-              style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
-              value={policy.defaultApprover}
-              onChange={e => setP('defaultApprover', e.target.value)}
-            >
-              <option>Sarah Johnson (Admin)</option>
-              <option>Mohammed Al-Rashid (Supervisor)</option>
-            </select>
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-3 mt-3">
-          <button type="button" disabled title="Overtime policy storage is not configured"
-            className="px-4 py-2 rounded-lg text-xs font-semibold transition-opacity hover:opacity-90"
-            style={{ background: '#1e3a5a', color: '#94a3b8', cursor: 'not-allowed' }}>
-            Save unavailable
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  return <div className="space-y-4">
+    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between"><div><h1 className="text-xl font-bold text-white">Overtime Management</h1><p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>Review attendance evidence and approve overtime by employee</p></div><div className="flex flex-wrap items-center gap-2"><button onClick={() => setPreset('week')} className="px-3 py-2 rounded-lg text-xs" style={inputStyle}>This week</button><button onClick={() => setPreset('month')} className="px-3 py-2 rounded-lg text-xs" style={inputStyle}>This month</button><label className="flex items-center gap-2 text-xs" style={{ color: '#94a3b8' }}>From <input aria-label="Overtime review from date" type="date" value={fromDate} onChange={event => setFromDate(event.target.value)} className="px-2 py-1.5 rounded-lg outline-none" style={inputStyle} /></label><label className="flex items-center gap-2 text-xs" style={{ color: '#94a3b8' }}>To <input aria-label="Overtime review to date" type="date" value={toDate} onChange={event => setToDate(event.target.value)} className="px-2 py-1.5 rounded-lg outline-none" style={inputStyle} /></label></div></div>
+    {rangeError && <Banner message={rangeError} />}{error && <Banner message={error} />}
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3"><Metric label="Employees Pending" value={totals.pendingEmployees} color="#f59e0b" loading={loading} /><Metric label="Pending Overtime" value={duration(totals.pendingMinutes)} color="#8b5cf6" loading={loading} /><Metric label="Attendance Issues" value={totals.attendanceIssues} color="#ef4444" loading={loading} /><Metric label="High Device Usage" value={totals.highUsage} color="#f97316" loading={loading} /></div>
+    <div className="rounded-xl p-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-2" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><div className="relative xl:col-span-2"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#4b6a8a' }} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search employee or ID…" className="w-full pl-9 pr-3 py-2 rounded-lg text-xs outline-none" style={inputStyle} /></div><Select label="Site" value={branchId} onChange={value => { setBranchId(value); setDepartmentId(''); }} options={lookups.branches.map(item => ({ value: item.id, label: item.name }))} /><Select label="Department" value={departmentId} onChange={setDepartmentId} options={departments.map(item => ({ value: item.id, label: item.name }))} /><Select label="Overtime" value={overtimeStatus} onChange={setOvertimeStatus} options={['pending', 'approved', 'rejected', 'not_required'].map(value => ({ value, label: value.replace('_', ' ') }))} /><Select label="Attendance" value={attendanceIssue} onChange={setAttendanceIssue} options={[{ value: 'issues', label: 'Has issues' }, { value: 'clear', label: 'Clear' }]} /><Select label="Device usage" value={deviceStatus} onChange={setDeviceStatus} options={[{ value: 'normal', label: 'Normal' }, { value: 'review', label: 'Review' }, { value: 'high', label: 'High' }, { value: 'unavailable', label: 'Unavailable' }]} /><Select label="Action" value={actionRequired} onChange={setActionRequired} options={[{ value: 'true', label: 'Needs action' }, { value: 'false', label: 'No action' }]} /></div>
+    {!fromDate || !toDate ? <Empty icon={<CalendarDays size={30} />} title="Select a review period" detail="Choose a custom range or use a quick selection to load the employee overtime workspace." /> : <EmployeeTable rows={rows} loading={loading} count={count} page={page} totalPages={totalPages} select={setSelected} previous={() => setPage(value => value - 1)} next={() => setPage(value => value + 1)} />}
+    {selected && <EmployeeReviewDrawer employee={selected} organizationId={organizationId} fromDate={fromDate} toDate={toDate} close={() => setSelected(null)} refreshed={() => void load()} />}
+  </div>;
 }
+
+function EmployeeTable({ rows, loading, count, page, totalPages, select, previous, next }: { rows: OvertimeEmployeeSummary[]; loading: boolean; count: number; page: number; totalPages: number; select: (employee: OvertimeEmployeeSummary) => void; previous: () => void; next: () => void }) {
+  return <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #1e3a5a' }}><div className="overflow-x-auto"><table className="w-full min-w-[1050px]"><thead><tr style={{ background: '#122338' }}>{['Employee', 'Worked', 'Pending OT', 'Approved OT', 'Attendance', 'Device Usage', 'Productivity', ''].map(heading => <th key={heading} className="text-left px-4 py-3 text-xs uppercase tracking-wider" style={{ color: '#4b6a8a' }}>{heading}</th>)}</tr></thead><tbody>{loading ? <tr><td colSpan={8} className="p-10 text-center"><Loader2 className="animate-spin mx-auto" style={{ color: '#3b82f6' }} /></td></tr> : rows.length === 0 ? <tr><td colSpan={8}><Empty icon={<UserRound size={28} />} title="No employees found" detail="Adjust the filters or choose a different date range." compact /></td></tr> : rows.map(row => { const device = deviceLabel(row.average_device_usage_percent); return <tr key={row.employee_id} className="border-t hover:bg-white/[0.03]" style={{ borderColor: '#1e3a5a' }}><td className="px-4 py-3"><button onClick={() => select(row)} className="flex items-center gap-3 text-left"><Avatar name={row.full_name} size="sm" /><div><div className="text-sm font-semibold text-white">{row.full_name}</div><div className="text-xs" style={{ color: '#4b6a8a' }}>{row.employee_code} · {row.department_name}</div></div></button></td><td className="px-4 py-3 text-xs"><div className="text-white font-mono">{duration(row.worked_minutes)}</div><div style={{ color: '#4b6a8a' }}>{row.worked_days} days</div></td><td className="px-4 py-3"><div className="font-mono text-sm" style={{ color: row.pending_minutes ? '#c4b5fd' : '#4b6a8a' }}>{duration(row.pending_minutes)}</div><div className="text-xs" style={{ color: '#4b6a8a' }}>{row.pending_count} requests</div></td><td className="px-4 py-3 font-mono text-xs" style={{ color: row.approved_minutes ? '#10b981' : '#4b6a8a' }}>{duration(row.approved_minutes)}</td><td className="px-4 py-3">{row.attendance_issue_count ? <span className="inline-flex items-center gap-1 text-xs" style={{ color: '#fca5a5' }}><AlertCircle size={12} />{row.attendance_issue_count} issues</span> : <span className="text-xs" style={{ color: '#10b981' }}>Complete</span>}</td><td className="px-4 py-3 text-xs"><span style={{ color: device.color }}>{device.label}</span><div className="font-mono" style={{ color: '#4b6a8a' }}>{row.average_device_usage_percent == null ? '—' : `${Math.round(row.average_device_usage_percent)}%`}</div></td><td className="px-4 py-3 font-mono text-xs" style={{ color: row.average_productivity_percent == null ? '#4b6a8a' : '#93c5fd' }}>{row.average_productivity_percent == null ? 'No data' : `${Math.round(row.average_productivity_percent)}%`}</td><td className="px-4 py-3"><button onClick={() => select(row)} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: row.action_required ? '#2563eb' : '#122338', color: row.action_required ? '#fff' : '#93c5fd', border: '1px solid #1e3a5a' }}>Review</button></td></tr>; })}</tbody></table></div><div className="flex items-center justify-between px-4 py-3" style={{ background: '#0d1b2e', borderTop: '1px solid #1e3a5a' }}><div className="text-xs" style={{ color: '#4b6a8a' }}>{count} employees · Page {page} of {totalPages}</div><div className="flex gap-2"><button disabled={page === 1} onClick={previous} className="p-1.5 rounded disabled:opacity-30" style={inputStyle}><ChevronLeft size={14} /></button><button disabled={page >= totalPages} onClick={next} className="p-1.5 rounded disabled:opacity-30" style={inputStyle}><ChevronRight size={14} /></button></div></div></div>;
+}
+
+function EmployeeReviewDrawer({ employee, organizationId, fromDate, toDate, close, refreshed }: { employee: OvertimeEmployeeSummary; organizationId: string; fromDate: string; toDate: string; close: () => void; refreshed: () => void }) {
+  const [days, setDays] = useState<OvertimeReviewDay[]>([]); const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set()); const [minutes, setMinutes] = useState<Record<string, number>>({}); const [note, setNote] = useState(''); const [correction, setCorrection] = useState<OvertimeReviewDay | null>(null);
+  const loadDetail = useCallback(async () => { setLoading(true); setError(''); try { const result = await overtimeService.getEmployeeReviewDetail({ organizationId, employeeId: employee.employee_id, fromDate, toDate }); setDays(result); setMinutes(Object.fromEntries(result.filter(day => day.overtime_record_id).map(day => [day.overtime_record_id!, day.requested_minutes]))); setSelectedIds(new Set()); } catch (caught) { setError(toAppError(caught).message); } finally { setLoading(false); } }, [employee.employee_id, fromDate, organizationId, toDate]);
+  useEffect(() => { void loadDetail(); }, [loadDetail]);
+  const eligible = days.filter(day => day.overtime_status === 'pending' && day.overtime_record_id && !day.attendance_issue && !day.reconciliation_issue);
+  const summary = useMemo(() => { const device = days.filter(day => day.device_usage_percent != null).map(day => day.device_usage_percent!); const productivity = days.filter(day => day.productivity_percent != null).map(day => day.productivity_percent!); return { complete: days.filter(day => day.schedule_state === 'working' && !day.attendance_issue).length, issues: days.filter(day => day.attendance_issue).length, worked: days.reduce((sum, day) => sum + day.worked_minutes, 0), overtime: days.reduce((sum, day) => sum + day.requested_minutes, 0), device: device.length ? Math.round(device.reduce((sum, value) => sum + value, 0) / device.length) : null, productivity: productivity.length ? Math.round(productivity.reduce((sum, value) => sum + value, 0) / productivity.length) : null }; }, [days]);
+  const toggleAll = () => setSelectedIds(current => current.size === eligible.length ? new Set() : new Set(eligible.map(day => day.overtime_record_id!)));
+  const toggle = (id: string) => setSelectedIds(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const review = async (status: 'approved' | 'rejected') => { const selectedDays = days.filter(day => day.overtime_record_id && selectedIds.has(day.overtime_record_id)); if (!selectedDays.length) return; const needsNote = status === 'rejected' || selectedDays.some(day => minutes[day.overtime_record_id!] !== day.requested_minutes); if (needsNote && note.trim().length < 3) { setError('Add a review note for rejected or adjusted overtime.'); return; } if (!window.confirm(`${status === 'approved' ? 'Approve' : 'Reject'} ${selectedDays.length} overtime record(s)? This affects payroll decisions.`)) return; const decisions: OvertimeDecision[] = selectedDays.map(day => ({ id: day.overtime_record_id!, status, approved_minutes: status === 'approved' ? minutes[day.overtime_record_id!] : 0, review_note: note.trim() || null })); setSaving(true); setError(''); try { await overtimeService.reviewBatch(decisions); setNote(''); await loadDetail(); refreshed(); } catch (caught) { setError(toAppError(caught).message); } finally { setSaving(false); } };
+  return <div className="fixed inset-0 z-40 flex justify-end" style={{ background: 'rgba(6,13,26,0.72)' }}><div className="w-full xl:w-[min(1120px,92vw)] h-full overflow-y-auto" style={{ background: '#081424', borderLeft: '1px solid #1e3a5a' }}><div className="sticky top-0 z-10 flex items-start justify-between p-5" style={{ background: 'rgba(8,20,36,.96)', borderBottom: '1px solid #1e3a5a', backdropFilter: 'blur(12px)' }}><div className="flex items-center gap-3"><Avatar name={employee.full_name} /><div><h2 className="font-bold text-white">{employee.full_name}</h2><div className="text-xs" style={{ color: '#4b6a8a' }}>{employee.employee_code} · {employee.department_name} · {fromDate} to {toDate}</div></div></div><button onClick={close} aria-label="Close employee overtime review" className="p-2 rounded-lg" style={inputStyle}><X size={16} /></button></div><div className="p-4 lg:p-6 space-y-4">{error && <Banner message={error} />}<div className="grid grid-cols-2 lg:grid-cols-6 gap-3"><Metric label="Complete Days" value={summary.complete} color="#10b981" /><Metric label="Attendance Issues" value={summary.issues} color="#ef4444" /><Metric label="Worked" value={duration(summary.worked)} color="#3b82f6" /><Metric label="Requested OT" value={duration(summary.overtime)} color="#8b5cf6" /><Metric label="Device Usage" value={summary.device == null ? 'No data' : `${summary.device}%`} color={deviceLabel(summary.device).color} /><Metric label="Productivity" value={summary.productivity == null ? 'No data' : `${summary.productivity}%`} color="#93c5fd" /></div><div className="flex items-start gap-2 p-3 rounded-xl text-xs" style={{ background: 'rgba(37,99,235,.08)', border: '1px solid rgba(37,99,235,.2)', color: '#93c5fd' }}><ShieldAlert size={14} className="mt-0.5 flex-shrink-0" /><span>Device usage and productivity are supporting evidence only. They do not automatically approve or deny overtime. Days with incomplete attendance stay blocked until corrected.</span></div>{loading ? <div className="py-16"><Loader2 className="animate-spin mx-auto" style={{ color: '#3b82f6' }} /></div> : <><DayTable days={days} eligible={eligible} selectedIds={selectedIds} minutes={minutes} toggleAll={toggleAll} toggle={toggle} setMinutes={setMinutes} correct={setCorrection} /><div className="sticky bottom-0 rounded-xl p-3 flex flex-col lg:flex-row lg:items-center gap-3" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><div className="flex items-center gap-2 text-xs" style={{ color: '#94a3b8' }}><Filter size={13} />{selectedIds.size} selected · {eligible.length} eligible</div><input value={note} onChange={event => setNote(event.target.value)} placeholder="Review note (required for rejection or adjusted minutes)" className="flex-1 px-3 py-2 rounded-lg text-xs outline-none" style={inputStyle} /><div className="flex gap-2"><button disabled={!selectedIds.size || saving} onClick={() => void review('rejected')} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: 'rgba(239,68,68,.12)', color: '#fca5a5' }}>{saving ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />}Reject</button><button disabled={!selectedIds.size || saving} onClick={() => void review('approved')} className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: '#2563eb', color: '#fff' }}>{saving ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}Approve selected</button></div></div></>}</div>{correction && <CorrectionDialog day={correction} organizationId={organizationId} employeeId={employee.employee_id} close={() => setCorrection(null)} saved={async () => { setCorrection(null); await loadDetail(); refreshed(); }} />}</div></div>;
+}
+
+function DayTable({ days, eligible, selectedIds, minutes, toggleAll, toggle, setMinutes, correct }: { days: OvertimeReviewDay[]; eligible: OvertimeReviewDay[]; selectedIds: Set<string>; minutes: Record<string, number>; toggleAll: () => void; toggle: (id: string) => void; setMinutes: React.Dispatch<React.SetStateAction<Record<string, number>>>; correct: (day: OvertimeReviewDay) => void }) {
+  return <div className="rounded-xl overflow-x-auto" style={{ border: '1px solid #1e3a5a' }}><table className="w-full min-w-[1180px]"><thead><tr style={{ background: '#122338' }}><th className="px-3 py-3 text-left"><input aria-label="Select all eligible overtime" type="checkbox" checked={eligible.length > 0 && selectedIds.size === eligible.length} onChange={toggleAll} /></th>{['Date / Shift', 'Attendance', 'Worked', 'Missing', 'Overtime', 'Device', 'Productivity', 'Status', 'Action'].map(heading => <th key={heading} className="px-3 py-3 text-left text-xs uppercase" style={{ color: '#4b6a8a' }}>{heading}</th>)}</tr></thead><tbody>{days.map(day => { const isEligible = day.overtime_status === 'pending' && !!day.overtime_record_id && !day.attendance_issue && !day.reconciliation_issue; const device = deviceLabel(day.device_usage_percent); return <tr key={day.work_date} className="border-t align-top" style={{ borderColor: '#1e3a5a', background: day.attendance_issue ? 'rgba(239,68,68,.035)' : 'transparent' }}><td className="px-3 py-3"><input aria-label={`Select overtime for ${day.work_date}`} type="checkbox" disabled={!isEligible} checked={!!day.overtime_record_id && selectedIds.has(day.overtime_record_id)} onChange={() => day.overtime_record_id && toggle(day.overtime_record_id)} /></td><td className="px-3 py-3 text-xs"><div className="font-medium text-white">{new Date(`${day.work_date}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', weekday: 'short' })}</div><div style={{ color: '#4b6a8a' }}>{day.shift_name || day.schedule_state}</div></td><td className="px-3 py-3 text-xs"><div style={{ color: day.attendance_issue ? '#fca5a5' : '#10b981' }}>{time(day.check_in_at)} – {time(day.check_out_at)}</div><div style={{ color: '#4b6a8a' }}>{day.attendance_status || (day.schedule_state === 'working' ? 'Missing record' : day.schedule_state)}</div></td><td className="px-3 py-3 text-xs font-mono text-white">{duration(day.worked_minutes)}</td><td className="px-3 py-3 text-xs font-mono" style={{ color: day.missing_minutes ? '#f59e0b' : '#4b6a8a' }}>{duration(day.missing_minutes)}</td><td className="px-3 py-3 text-xs"><div className="flex items-center gap-1"><input aria-label={`Approved overtime minutes for ${day.work_date}`} type="number" min={0} max={day.requested_minutes} disabled={!isEligible} value={day.overtime_record_id ? minutes[day.overtime_record_id] ?? day.requested_minutes : 0} onChange={event => day.overtime_record_id && setMinutes(current => ({ ...current, [day.overtime_record_id!]: Number(event.target.value) }))} className="w-16 px-2 py-1 rounded font-mono outline-none disabled:opacity-50" style={inputStyle} /><span style={{ color: '#4b6a8a' }}>/ {day.requested_minutes}m</span></div></td><td className="px-3 py-3 text-xs"><div className="flex items-center gap-1" style={{ color: device.color }}><Smartphone size={12} />{device.label}</div><div className="font-mono" style={{ color: '#4b6a8a' }}>{day.device_usage_percent == null ? '—' : `${Math.round(day.device_usage_percent)}% · ${day.device_minutes}m`}</div></td><td className="px-3 py-3 text-xs font-mono" style={{ color: day.productivity_percent == null ? '#4b6a8a' : '#93c5fd' }}>{day.productivity_percent == null ? 'No data' : `${Math.round(day.productivity_percent)}%`}</td><td className="px-3 py-3">{day.reconciliation_issue ? <span className="text-xs" style={{ color: '#f59e0b' }}>Reconcile decision</span> : day.overtime_status ? <StatusBadge status={day.overtime_status.charAt(0).toUpperCase() + day.overtime_status.slice(1).replace('_', ' ')} /> : <span className="text-xs" style={{ color: '#4b6a8a' }}>No overtime</span>}</td><td className="px-3 py-3">{day.attendance_issue && day.schedule_state === 'working' ? <button onClick={() => correct(day)} className="flex items-center gap-1 px-2 py-1 rounded text-xs" style={{ background: 'rgba(245,158,11,.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,.25)' }}><Edit3 size={11} />Correct</button> : <span className="text-xs" style={{ color: '#4b6a8a' }}>—</span>}</td></tr>; })}</tbody></table></div>;
+}
+
+function CorrectionDialog({ day, organizationId, employeeId, close, saved }: { day: OvertimeReviewDay; organizationId: string; employeeId: string; close: () => void; saved: () => Promise<void> }) {
+  const checkoutDate = day.shift_start && day.shift_end && day.shift_end <= day.shift_start ? nextIsoDate(day.work_date) : day.work_date;
+  const [checkIn, setCheckIn] = useState(localDateTimeValue(day.check_in_at, day.work_date, day.shift_start || '09:00')); const [checkOut, setCheckOut] = useState(localDateTimeValue(day.check_out_at, checkoutDate, day.shift_end || '17:00')); const [reason, setReason] = useState(''); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
+  const submit = async () => { if (!checkIn || !checkOut || reason.trim().length < 3) { setError('Check-in, check-out, and a correction reason are required.'); return; } if (Date.parse(checkOut) <= Date.parse(checkIn)) { setError('Check-out must be after check-in.'); return; } setSaving(true); setError(''); const input: ManagerAttendanceCorrection = { organizationId, employeeId, workDate: day.work_date, attendanceRecordId: day.attendance_record_id, checkInAt: new Date(checkIn).toISOString(), checkOutAt: new Date(checkOut).toISOString(), reason: reason.trim() }; try { await overtimeService.correctAttendance(input); await saved(); } catch (caught) { setError(toAppError(caught).message); setSaving(false); } };
+  return <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(6,13,26,.84)' }}><div className="w-full max-w-md rounded-2xl p-5" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><div className="flex items-center justify-between"><div><h3 className="font-semibold text-white">Correct Attendance</h3><div className="text-xs mt-1" style={{ color: '#4b6a8a' }}>{day.work_date} · {day.shift_name || 'Scheduled shift'}</div></div><button onClick={close} aria-label="Close attendance correction"><X size={15} style={{ color: '#4b6a8a' }} /></button></div><div className="mt-4 space-y-3">{error && <Banner message={error} />}<label className="block text-xs" style={{ color: '#94a3b8' }}>Check-in<input type="datetime-local" value={checkIn} onChange={event => setCheckIn(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg outline-none" style={inputStyle} /></label><label className="block text-xs" style={{ color: '#94a3b8' }}>Check-out<input type="datetime-local" value={checkOut} onChange={event => setCheckOut(event.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg outline-none" style={inputStyle} /></label><label className="block text-xs" style={{ color: '#94a3b8' }}>Correction reason<textarea value={reason} onChange={event => setReason(event.target.value)} rows={3} placeholder="Explain why attendance is being corrected…" className="mt-1 w-full px-3 py-2 rounded-lg outline-none resize-none" style={inputStyle} /></label><div className="flex justify-end gap-2 pt-2"><button onClick={close} className="px-3 py-2 rounded-lg text-xs" style={inputStyle}>Cancel</button><button disabled={saving} onClick={() => void submit()} className="px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 disabled:opacity-50" style={{ background: '#2563eb', color: '#fff' }}>{saving && <Loader2 size={12} className="animate-spin" />}Save & recalculate</button></div></div></div></div>;
+}
+
+function Metric({ label, value, color, loading = false }: { label: string; value: string | number; color: string; loading?: boolean }) { return <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><div className="text-xs" style={{ color: '#4b6a8a' }}>{label}</div><div className="text-xl lg:text-2xl font-bold font-mono mt-1" style={{ color }}>{loading ? '—' : value}</div></div>; }
+function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) { return <select aria-label={`Filter by ${label.toLowerCase()}`} value={value} onChange={event => onChange(event.target.value)} className="w-full px-3 py-2 rounded-lg text-xs capitalize outline-none" style={inputStyle}><option value="">All {label.toLowerCase()}</option>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>; }
+function Banner({ message }: { message: string }) { return <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={{ background: 'rgba(239,68,68,.1)', border: '1px solid rgba(239,68,68,.25)', color: '#fca5a5' }}><AlertCircle size={14} />{message}</div>; }
+function Empty({ icon, title, detail, compact = false }: { icon: React.ReactNode; title: string; detail: string; compact?: boolean }) { return <div className={`text-center ${compact ? 'py-8' : 'py-20'} px-4`}><div className="flex justify-center mb-3" style={{ color: '#1e3a5a' }}>{icon}</div><div className="font-semibold text-white">{title}</div><div className="text-xs mt-1" style={{ color: '#4b6a8a' }}>{detail}</div></div>; }

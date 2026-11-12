@@ -35,3 +35,14 @@ test('RLS hardening is present and does not grant anonymous access', async () =>
   assert.match(sql, /to authenticated/i)
   assert.doesNotMatch(sql, /grant .* to anon/i)
 })
+
+test('overtime review RPCs enforce authentication, scope, and least privilege', async () => {
+  const sql = await read('../supabase/migrations/20261112120000_employee_overtime_review.sql')
+  assert.match(sql, /p_to_date - p_from_date > 89/i)
+  assert.match(sql, /private\.can_access_employee/i)
+  assert.match(sql, /set search_path = ''/i)
+  assert.match(sql, /revoke all on function public\.review_overtime_batch\(jsonb\) from public, anon/i)
+  assert.match(sql, /grant execute on function public\.review_overtime_batch\(jsonb\) to authenticated/i)
+  assert.match(sql, /attendance_manager_corrected/i)
+  assert.match(sql, /for update/i)
+})

@@ -84,23 +84,25 @@ export const deviceService = {
     return aggregated.sort((a, b) => b.within_shift_minutes - a.within_shift_minutes);
   },
 
-  async getWeeklyAverages(organizationId: string, endDate: string): Promise<Array<{ day: string; avg: number }>> {
+  async getWeeklyAverages(organizationId: string, endDate: string, employeeIds?: string[]): Promise<Array<{ day: string; avg: number }>> {
     const end = new Date(`${endDate}T00:00:00Z`);
     const start = new Date(end);
     start.setUTCDate(start.getUTCDate() - 6);
     const fromDate = start.toISOString().slice(0, 10);
 
-    const { data, error } = await getSupabaseClient()
+    let query = getSupabaseClient()
       .from('phone_usage_records')
       .select('work_date, within_shift_minutes, usage_percentage')
       .eq('organization_id', organizationId)
       .gte('work_date', fromDate)
       .lte('work_date', endDate)
       .order('work_date');
-    if (error) throw error;
+    if (employeeIds?.length) query = query.in('employee_id', employeeIds);
+    const result = employeeIds && employeeIds.length === 0 ? { data: [], error: null } : await query;
+    if (result.error) throw result.error;
 
     const byDate = new Map<string, number[]>();
-    for (const row of data ?? []) {
+    for (const row of result.data ?? []) {
       const values = byDate.get(row.work_date) ?? [];
       if (row.usage_percentage !== null && row.usage_percentage !== undefined) {
         values.push(row.usage_percentage);

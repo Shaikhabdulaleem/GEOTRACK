@@ -639,6 +639,87 @@ export interface Database {
         };
         Returns: OvertimeRecordRow[];
       };
+      list_overtime_review_employees: {
+        Args: {
+          p_organization_id: string;
+          p_from_date: string;
+          p_to_date: string;
+          p_search?: string | null;
+          p_branch_id?: string | null;
+          p_department_id?: string | null;
+          p_overtime_status?: string | null;
+          p_attendance_issue?: string | null;
+          p_device_status?: string | null;
+          p_action_required?: boolean | null;
+          p_limit?: number;
+          p_offset?: number;
+        };
+        Returns: Array<{
+          employee_id: string;
+          employee_code: string;
+          full_name: string;
+          job_title: string | null;
+          branch_id: string;
+          branch_name: string;
+          department_id: string;
+          department_name: string;
+          worked_days: number;
+          worked_minutes: number;
+          pending_count: number;
+          pending_minutes: number;
+          approved_minutes: number;
+          attendance_issue_count: number;
+          average_device_usage_percent: number | null;
+          average_productivity_percent: number | null;
+          action_required: boolean;
+          total_count: number;
+        }>;
+      };
+      get_overtime_review_detail: {
+        Args: { p_organization_id: string; p_employee_id: string; p_from_date: string; p_to_date: string };
+        Returns: Array<{
+          work_date: string;
+          schedule_state: string;
+          shift_name: string | null;
+          shift_start: string | null;
+          shift_end: string | null;
+          attendance_record_id: string | null;
+          check_in_at: string | null;
+          check_out_at: string | null;
+          attendance_status: string | null;
+          worked_minutes: number;
+          missing_minutes: number;
+          late_minutes: number;
+          early_leaving_minutes: number;
+          calculated_overtime_minutes: number;
+          overtime_record_id: string | null;
+          requested_minutes: number;
+          approved_minutes: number | null;
+          overtime_status: ApprovalStatus | null;
+          device_minutes: number;
+          device_usage_percent: number | null;
+          device_data_status: string;
+          productivity_percent: number | null;
+          attendance_issue: boolean;
+          reconciliation_issue: boolean;
+        }>;
+      };
+      review_overtime_batch: {
+        Args: { p_decisions: Json };
+        Returns: OvertimeRecordRow[];
+      };
+      manager_correct_attendance: {
+        Args: {
+          p_organization_id: string;
+          p_employee_id: string;
+          p_work_date: string;
+          p_attendance_record_id: string | null;
+          p_check_in_at: string;
+          p_check_out_at: string;
+          p_reason: string;
+        };
+        Returns: AttendanceRecordRow[];
+      };
       mark_notification_read: {
         Args: { p_notification_id: string };
         Returns: NotificationRow[];

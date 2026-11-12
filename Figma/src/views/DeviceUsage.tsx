@@ -6,6 +6,8 @@ import { toAppError } from '../lib/errors';
 import Avatar from '../components/Avatar';
 import { deviceService } from '../services/device.service';
 import { employeeService } from '../services/employee.service';
+import { organizationService } from '../services/organization.service';
+import type { DepartmentRow } from '../types/database';
 
 const POLICY_LIMIT = 30; // minutes
 
@@ -15,9 +17,22 @@ function usageLevel(min: number) {
   return { label: 'High', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' };
 }
 
+interface DeviceUsageEmployee {
+  id: string;
+  name: string;
+  departmentId: string;
+  shift: string;
+  worked: string;
+  phone: number;
+  percent: number;
+  dataStatus: 'unmanaged' | 'permission_not_granted' | 'no_data' | 'partial_data' | 'available';
+}
+
 export default function DeviceUsage() {
   const { activeMembership } = useAuth();
-  const [employees, setEmployees] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<DeviceUsageEmployee[]>([]);
+  const [departments, setDepartments] = useState<DepartmentRow[]>([]);
+  const [departmentId, setDepartmentId] = useState('');
   const [weeklyUsage, setWeeklyUsage] = useState<Array<{ day: string; avg: number }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,17 +46,25 @@ export default function DeviceUsage() {
       const workDate = new Intl.DateTimeFormat('en-CA', {
         year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(new Date());
-      const [profilesResult, usage, weekly] = await Promise.all([
+      const [allProfiles, usage, departmentData] = await Promise.all([
         employeeService.listAll({ organizationId: activeMembership.organization_id }),
         deviceService.getDashboardUsage(activeMembership.organization_id, workDate),
-        deviceService.getWeeklyAverages(activeMembership.organization_id, workDate),
+        organizationService.listDepartments(activeMembership.organization_id),
       ]);
+      const profilesResult = departmentId
+        ? allProfiles.filter(profile => profile.department_id === departmentId)
+        : allProfiles;
+      const weekly = await deviceService.getWeeklyAverages(
+        activeMembership.organization_id,
+        workDate,
+        departmentId ? profilesResult.map(profile => profile.id) : undefined,
+      );
       const usageByEmployee = new Map(usage.map(row => [row.employee_id, row]));
       const mapped = profilesResult.map(p => {
         const row = usageByEmployee.get(p.id);
         const workedMinutes = row?.worked_minutes ?? 0;
         const source = row?.source ?? '';
-        const dataStatus = !row
+        const dataStatus: DeviceUsageEmployee['dataStatus'] = !row
           ? 'unmanaged'
           : source.endsWith('permission_not_granted')
             ? 'permission_not_granted'
@@ -53,6 +76,7 @@ export default function DeviceUsage() {
         return {
           id: p.id,
           name: p.full_name,
+          departmentId: p.department_id,
           shift: '—',
           worked: `${Math.floor(workedMinutes / 60)}h ${workedMinutes % 60}m`,
           phone: row?.within_shift_minutes ?? 0,
@@ -63,6 +87,7 @@ export default function DeviceUsage() {
 
       if (mounted) {
         setEmployees(mapped);
+        setDepartments(departmentData.filter(department => department.status === 'active'));
         setWeeklyUsage(weekly);
       }
     };
@@ -76,7 +101,7 @@ export default function DeviceUsage() {
       });
 
     return () => { mounted = false; };
-  }, [activeMembership]);
+  }, [activeMembership, departmentId]);
 
   const withUsage = employees.filter(e => e.dataStatus === 'available' || e.dataStatus === 'partial_data');
   const avgUsage = withUsage.length > 0 ? Math.round(withUsage.reduce((s, e) => s + e.phone, 0) / withUsage.length) : 0;
@@ -91,6 +116,16 @@ export default function DeviceUsage() {
           <h1 className="text-xl font-bold text-white">Device Usage During Shift</h1>
           <p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>Company-managed devices only · Active shift hours</p>
         </div>
+        <select
+          aria-label="Filter device usage by department"
+          value={departmentId}
+          onChange={event => setDepartmentId(event.target.value)}
+          className="px-3 py-2 rounded-lg text-xs outline-none"
+          style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#94a3b8' }}
+        >
+          <option value="">All Departments</option>
+          {departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}
+        </select>
       </div>
 
       <div className="flex items-start gap-2 p-3 rounded-lg text-xs" style={{ background: 'rgba(37,99,235,0.08)', border: '1px solid rgba(37,99,235,0.2)', color: '#93c5fd' }}>
