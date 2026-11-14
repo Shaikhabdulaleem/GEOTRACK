@@ -23,4 +23,7 @@ data class OfflineAttendanceEventEntity(
     val lastError: String? = null,
     val serverEventId: String? = null,
     val updatedAtEpochMillis: Long,
+    val nextAttemptAtEpochMillis: Long = 0,
+    val lastAttemptAtEpochMillis: Long? = null,
+    val failureClass: String? = null,
 )

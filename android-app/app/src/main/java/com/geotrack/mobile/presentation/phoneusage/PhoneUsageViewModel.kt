@@ -84,5 +84,7 @@ class PhoneUsageViewModel @Inject constructor(
 
     fun usageAccessIntent() = reader.usageAccessSettingsIntent()
 
+    fun appDetailsIntent() = reader.appDetailsSettingsIntent()
+
     fun testNotification(type: AttendanceNotificationType) = notificationPoster.postTest(type)
 }

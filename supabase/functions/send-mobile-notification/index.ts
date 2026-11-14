@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.2';
+import { createClient } from 'npm:@supabase/supabase-js@2.57.2';
 import { importPKCS8, SignJWT } from 'npm:jose@6.1.0';
 
 // Allow the app's own origins. The Vercel project is served from several hosts

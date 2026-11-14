@@ -1,0 +1,64 @@
+name: Deployment smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected GitHub environment containing the matching public Supabase key
+        required: true
+        type: choice
+        options: [staging, production]
+      web_url:
+        description: Exact HTTPS deployment origin to test
+        required: true
+        type: string
+      supabase_url:
+        description: Exact HTTPS Supabase project origin to test
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-smoke:
+    name: Read-only ${{ inputs.environment }} smoke
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Validate HTTPS targets
+        env:
+          WEB_URL: ${{ inputs.web_url }}
+          SUPABASE_URL: ${{ inputs.supabase_url }}
+        run: |
+          set -euo pipefail
+          [[ "$WEB_URL" == https://* ]]
+          [[ "$SUPABASE_URL" == https://* ]]
+      - name: Verify web shell and security headers
+        env:
+          WEB_URL: ${{ inputs.web_url }}
+        run: |
+          set -euo pipefail
+          headers="$(mktemp)"
+          body="$(mktemp)"
+          curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 \
+            --dump-header "$headers" --output "$body" "$WEB_URL/"
+          grep -qi '<div id="root"' "$body"
+          grep -qi '^x-content-type-options: *nosniff' "$headers"
+          grep -qi '^content-security-policy:' "$headers"
+      - name: Verify Supabase Auth and REST availability
+        env:
+          SUPABASE_URL: ${{ inputs.supabase_url }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_PUBLISHABLE_KEY"
+          curl --fail --silent --show-error \
+            --connect-timeout 10 --max-time 30 \
+            "$SUPABASE_URL/auth/v1/health" >/dev/null
+          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            -H "apikey: $SUPABASE_PUBLISHABLE_KEY" \
+            "$SUPABASE_URL/rest/v1/")"
+          test "$status" = 200

@@ -148,7 +148,10 @@ fun HomeScreen(
     FirstRunPermissionPrompt()
     val innerNavController = rememberNavController()
     val tabs = when (role) {
-        AppRole.EMPLOYEE -> listOf(HomeTab.DASHBOARD, HomeTab.SCHEDULE, HomeTab.NOTIFICATIONS, HomeTab.PROFILE)
+        // Employee-only tools (including Device Usage Access) live under More.
+        // Keeping Profile here made the existing More route unreachable, which
+        // meant employees had no in-app path to the Usage Access settings.
+        AppRole.EMPLOYEE -> listOf(HomeTab.DASHBOARD, HomeTab.SCHEDULE, HomeTab.NOTIFICATIONS, HomeTab.MORE)
         AppRole.MANAGER -> listOf(HomeTab.DASHBOARD, HomeTab.TEAM, HomeTab.NOTIFICATIONS, HomeTab.PROFILE)
         AppRole.ADMINISTRATOR -> listOf(HomeTab.DASHBOARD, HomeTab.NOTIFICATIONS, HomeTab.PROFILE)
     }
@@ -233,7 +236,7 @@ private fun EmployeeMoreScreen(onNavigate: (String) -> Unit) {
     val destinations = listOf(
         Triple("Overtime", HomeTab.OVERTIME, Icons.Outlined.Timer),
         Triple("Productivity", HomeTab.PRODUCTIVITY, Icons.Outlined.TrendingUp),
-        Triple("Phone Usage", HomeTab.PHONE_USAGE, Icons.Outlined.Smartphone),
+        Triple("Device Usage Access", HomeTab.PHONE_USAGE, Icons.Outlined.Smartphone),
         Triple("Profile & Sign Out", HomeTab.PROFILE, Icons.Outlined.Person),
     )
 

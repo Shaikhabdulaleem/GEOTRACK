@@ -11,5 +11,6 @@ data class PhoneUsageMeasurement(
 interface PhoneUsageReader {
     fun hasUsageAccess(): Boolean
     fun usageAccessSettingsIntent(): android.content.Intent
+    fun appDetailsSettingsIntent(): android.content.Intent
     fun measure(shiftStart: Instant, shiftEnd: Instant): PhoneUsageMeasurement
 }

@@ -5,6 +5,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Process
 import android.provider.Settings
@@ -30,7 +31,22 @@ class AndroidPhoneUsageReader @Inject constructor(
         ) == AppOpsManager.MODE_ALLOWED
     }
 
-    override fun usageAccessSettingsIntent(): Intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+    override fun usageAccessSettingsIntent(): Intent {
+        val appSettings = Intent(
+            Settings.ACTION_USAGE_ACCESS_SETTINGS,
+            Uri.parse("package:${context.packageName}"),
+        )
+        return if (appSettings.resolveActivity(context.packageManager) != null) {
+            appSettings
+        } else {
+            Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+        }
+    }
+
+    override fun appDetailsSettingsIntent(): Intent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:${context.packageName}"),
+    )
 
     override fun measure(shiftStart: Instant, shiftEnd: Instant): PhoneUsageMeasurement {
         if (!hasUsageAccess()) return PhoneUsageMeasurement(PhoneUsageDataStatus.PERMISSION_NOT_GRANTED, null)

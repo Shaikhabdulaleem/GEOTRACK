@@ -25,7 +25,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
-import java.util.UUID
+import com.geotrack.mobile.core.security.DeviceIdentity
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -79,10 +79,7 @@ class PhoneUsageSyncWorker @AssistedInject constructor(
         val today = LocalDate.now(zone)
         val scheduleResult = schedules.getScheduleWindow(context.organization.id, employee.id, today.minusDays(1), today)
         val scheduleList = (scheduleResult as? AppResult.Success)?.value ?: return Result.retry()
-        val deviceId = applicationContext.getSharedPreferences("phone-usage", Context.MODE_PRIVATE)
-            .getString("device_id", null) ?: UUID.randomUUID().toString().also {
-                applicationContext.getSharedPreferences("phone-usage", Context.MODE_PRIVATE).edit().putString("device_id", it).apply()
-            }
+        val deviceId = DeviceIdentity.hash(applicationContext)
         var hadFailure = false
         scheduleList.filter { it.state == TodayScheduleState.WORKING_DAY && !it.startTime.isNullOrBlank() && !it.endTime.isNullOrBlank() }.forEach { schedule ->
             val start = parse(schedule.date, schedule.startTime!!, zone)

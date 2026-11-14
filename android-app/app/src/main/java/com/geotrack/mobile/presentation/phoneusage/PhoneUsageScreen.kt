@@ -1,6 +1,7 @@
 package com.geotrack.mobile.presentation.phoneusage
 
-import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,8 +38,18 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun PhoneUsageScreen(viewModel: PhoneUsageViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    Scaffold(topBar = { TopAppBar(title = { Text("Phone Usage") }) }) { padding ->
+    val usageAccessLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        // Android does not return the permission result. Re-read AppOps and
+        // sync immediately when the employee comes back so the admin view no
+        // longer shows the previous permission-not-granted server record.
+        viewModel.syncAndRefresh()
+    }
+    val appDetailsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { viewModel.refresh() }
+    Scaffold(topBar = { TopAppBar(title = { Text("Device Usage") }) }) { padding ->
         if (state.isLoading) {
             Column(Modifier.fillMaxSize().padding(padding), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { CircularProgressIndicator() }
             return@Scaffold
@@ -47,7 +58,8 @@ fun PhoneUsageScreen(viewModel: PhoneUsageViewModel = hiltViewModel()) {
             item {
                 PermissionCard(
                     status = state.permission,
-                    onGrant = { context.startActivity(viewModel.usageAccessIntent()) },
+                    onGrant = { usageAccessLauncher.launch(viewModel.usageAccessIntent()) },
+                    onOpenAppSettings = { appDetailsLauncher.launch(viewModel.appDetailsIntent()) },
                     onRefresh = viewModel::syncAndRefresh,
                 )
             }
@@ -88,14 +100,27 @@ private fun NotificationTestCard(onTest: (AttendanceNotificationType) -> Unit) {
 }
 
 @Composable
-private fun PermissionCard(status: PhoneUsageDataStatus, onGrant: () -> Unit, onRefresh: () -> Unit) {
+private fun PermissionCard(
+    status: PhoneUsageDataStatus,
+    onGrant: () -> Unit,
+    onOpenAppSettings: () -> Unit,
+    onRefresh: () -> Unit,
+) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Usage Access", fontWeight = FontWeight.Bold)
+            Text("Device Usage Permission", fontWeight = FontWeight.Bold)
             when (status) {
                 PhoneUsageDataStatus.PERMISSION_NOT_GRANTED -> {
-                    Text("Permission Not Granted. Android requires you to enable Usage Access in Settings before usage can be measured.")
-                    Button(onClick = onGrant) { Text("Open Usage Access Settings") }
+                    Text("Permission required. Tap Access, then enable usage access for GeoTrack on the screen that opens.")
+                    Button(onClick = onGrant, modifier = Modifier.fillMaxWidth()) { Text("Access") }
+                    Text(
+                        "If Access is disabled as a restricted setting, tap App settings, open the three-dot menu, choose Allow restricted settings, then return here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = onOpenAppSettings, modifier = Modifier.fillMaxWidth()) {
+                        Text("App settings")
+                    }
                 }
                 PhoneUsageDataStatus.PERMISSION_GRANTED -> Text("Permission Granted. Only summarized foreground time overlapping scheduled shifts is measured.")
                 PhoneUsageDataStatus.NO_DATA -> Text("No Data. Android returned no usage events for the scheduled shift.")

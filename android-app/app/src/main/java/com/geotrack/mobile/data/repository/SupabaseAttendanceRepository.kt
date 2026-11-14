@@ -17,8 +17,7 @@ import java.time.LocalDate
 import java.util.UUID
 import java.time.Instant
 import android.content.Context
-import android.provider.Settings
-import java.security.MessageDigest
+import com.geotrack.mobile.core.security.DeviceIdentity
 import com.geotrack.mobile.location.OfflineAttendanceSyncScheduler
 import com.geotrack.mobile.location.hasNetworkConnection
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -41,13 +40,7 @@ class SupabaseAttendanceRepository @Inject constructor(
      * binding: SHA-256 of the app-scoped ANDROID_ID (survives app reinstall on
      * the same device, unlike a random UUID). The server stores only this hash.
      */
-    @Suppress("HardwareIds")
-    private fun deviceHash(): String {
-        val androidId = Settings.Secure.getString(appContext.contentResolver, Settings.Secure.ANDROID_ID)
-            ?: "unknown"
-        val digest = MessageDigest.getInstance("SHA-256").digest("geotrack-device:$androidId".toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
-    }
+    private fun deviceHash(): String = DeviceIdentity.hash(appContext)
 
     override suspend fun latestLocalSyncStatus(employeeId: String): String? =
         database.offlineAttendanceDao().forEmployee(employeeId).firstOrNull()?.syncStatus

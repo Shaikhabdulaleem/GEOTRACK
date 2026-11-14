@@ -8,7 +8,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  dependency-review:
+    name: Dependency vulnerability review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
   web:
     name: Web checks
     runs-on: ubuntu-latest
@@ -37,7 +51,7 @@ jobs:
         with:
           # Pinned, not "latest": resolving "latest" calls the GitHub API and
           # flakily fails with "rate limit exceeded" on shared CI runners.
-          version: 2.120.0
+          version: 3.1.0
       - name: Start local Supabase stack (applies all migrations)
         run: supabase start -x studio,realtime,storage-api,imgproxy,inbucket,edge-runtime,logflare,vector,pgbouncer
       - name: Run transactional SQL tests (each rolls back)
@@ -49,7 +63,11 @@ jobs:
           for t in supabase/tests/rls_smoke.sql \
                    supabase/tests/recurring_schedule_resolver.sql \
                    supabase/tests/auto_close_attendance.sql \
-                   supabase/tests/e2e_workflow.sql; do
+                   supabase/tests/e2e_workflow.sql \
+                   supabase/tests/device_authorization.sql \
+                   supabase/tests/dashboard_reporting.sql \
+                   supabase/tests/geofence_breach_detection.sql \
+                   supabase/tests/overtime_review.sql; do
             echo "::group::$t"
             psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$t"
             echo "::endgroup::"

@@ -15,8 +15,8 @@ data class ProcessAttendanceArgs(
     val p_is_mock_location: Boolean,
     val p_idempotency_key: String,
     val p_device_info: JsonElement,
-    // Hashed device identifier for anti-fraud device binding. The server enrolls
-    // the first device and rejects attendance from any other device.
+    // Hashed device identifier for server-controlled enrollment. Unknown or
+    // revoked devices are rejected until an administrator approves them.
     val p_device_hash: String? = null
 )
 

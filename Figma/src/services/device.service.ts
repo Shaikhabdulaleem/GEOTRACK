@@ -1,6 +1,5 @@
 import { getSupabaseClient } from '../lib/supabase';
-import { executeQuery } from './database.service';
-import type { PhoneUsageRecordRow, TablesInsert } from '../types/database';
+import type { PhoneUsageRecordRow } from '../types/database';
 
 export interface DeviceTelemetryPayload {
   organizationId: string;
@@ -18,25 +17,9 @@ export const deviceService = {
    * to securely push phone usage telemetry to the backend.
    */
   async ingestTelemetry(payload: DeviceTelemetryPayload): Promise<PhoneUsageRecordRow> {
-    const record: TablesInsert<'phone_usage_records'> = {
-      organization_id: payload.organizationId,
-      employee_id: payload.employeeId,
-      device_id: payload.deviceId,
-      work_date: payload.workDate,
-      active_minutes: payload.totalActiveMinutes,
-      within_shift_minutes: payload.inShiftActiveMinutes,
-      consent_version: payload.consentVersion,
-      source: 'native_mobile_agent'
-    };
-
-    // Upsert telemetry per employee per date
-    return executeQuery(
-      getSupabaseClient()
-        .from('phone_usage_records')
-        .upsert(record, { onConflict: 'employee_id,work_date' })
-        .select('*')
-        .single(),
-      'Unable to ingest device telemetry.'
+    void payload;
+    throw new Error(
+      'Direct browser telemetry ingestion is disabled. Approved native devices must use upsert_phone_usage_summary.',
     );
   },
 
@@ -50,7 +33,7 @@ export const deviceService = {
     // 1. Get phone usage records
     const { data: usageData, error: usageErr } = await client
       .from('phone_usage_records')
-      .select('*, total_shift_minutes, usage_percentage, synced_at, shift_assignment_id')
+      .select('*, total_shift_minutes, usage_percentage, synced_at, shift_assignment_id, data_status')
       .eq('organization_id', organizationId)
       .eq('work_date', workDate);
       
@@ -69,14 +52,20 @@ export const deviceService = {
 
     const aggregated = (usageData || []).map(usage => {
       const workedMins = attendanceMap.get(usage.employee_id) || 0;
-      const usagePercent = usage.usage_percentage ?? (workedMins > 0
-        ? Math.min(100, Math.round((usage.within_shift_minutes / workedMins) * 100))
-        : 0);
+      const hasMeasuredData = usage.data_status === 'available' || usage.data_status === 'partial';
+      const usagePercent = hasMeasuredData
+        ? (usage.usage_percentage ?? (workedMins > 0
+          ? Math.min(100, Math.round((usage.within_shift_minutes / workedMins) * 100))
+          : null))
+        : null;
 
       return {
         ...usage,
         worked_minutes: workedMins,
-        usage_percent: usagePercent
+        usage_percent: usagePercent,
+        telemetry_available: hasMeasuredData,
+        telemetry_status: usage.data_status,
+        evidence_classification: 'employee_device_reported',
       };
     });
 

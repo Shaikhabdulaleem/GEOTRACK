@@ -304,6 +304,31 @@ function LoginSessionsPanel() {
   );
 }
 
+function UnavailableModuleCard({
+  title,
+  detail,
+  onNav,
+}: {
+  title: string;
+  detail: string;
+  onNav?: () => void;
+}) {
+  return (
+    <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+      <div className="flex items-start gap-3">
+        <AlertTriangle size={16} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 2 }} />
+        <div className="flex-1">
+          <div className="font-semibold text-sm text-white">{title}</div>
+          <div className="text-xs mt-1" style={{ color: '#94a3b8' }}>{detail}</div>
+        </div>
+        {onNav && (
+          <button onClick={onNav} className="text-xs" style={{ color: '#3b82f6' }}>Details →</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const { activeMembership } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
@@ -503,15 +528,15 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   }, [supabaseReady, organizationId]);
 
   // Aggregate values
-  const totalStaff = metrics ? metrics.totalEmployees : employees.length;
-  const present = metrics ? metrics.presentCount : employees.filter(e => e.status === 'Present' || e.status === 'Late').length;
-  const absent = metrics ? metrics.absentCount : employees.filter(e => e.status === 'Absent').length;
-  const late = metrics ? metrics.lateCount : employees.filter(e => e.status === 'Late').length;
-  const missing = metrics ? metrics.missingCount : employees.filter(e => e.status === 'Missing').length;
-  const currentlyWorking = metrics ? metrics.currentlyWorkingCount : employees.filter(e => e.status === 'Present').length;
+  const totalStaff = metrics ? metrics.totalEmployees : (supabaseReady ? 0 : employees.length);
+  const present = metrics ? metrics.presentCount : (supabaseReady ? 0 : employees.filter(e => e.status === 'Present' || e.status === 'Late').length);
+  const absent = metrics ? metrics.absentCount : (supabaseReady ? 0 : employees.filter(e => e.status === 'Absent').length);
+  const late = metrics ? metrics.lateCount : (supabaseReady ? 0 : employees.filter(e => e.status === 'Late').length);
+  const missing = metrics ? metrics.missingCount : (supabaseReady ? 0 : employees.filter(e => e.status === 'Missing').length);
+  const currentlyWorking = metrics ? metrics.currentlyWorkingCount : (supabaseReady ? 0 : employees.filter(e => e.status === 'Present').length);
   
-  const dayShift = metrics ? metrics.dayShiftCount : employees.filter(e => e.shift === 'Day').length;
-  const nightShift = metrics ? metrics.nightShiftCount : employees.filter(e => e.shift === 'Night').length;
+  const dayShift = metrics ? metrics.dayShiftCount : (supabaseReady ? 0 : employees.filter(e => e.shift === 'Day').length);
+  const nightShift = metrics ? metrics.nightShiftCount : (supabaseReady ? 0 : employees.filter(e => e.shift === 'Night').length);
 
   const totalWorkingHours = metrics ? metrics.totalWorkingHours : 0;
   const totalOvertimeHours = metrics ? metrics.totalOvertimeHours : 0;
@@ -537,11 +562,15 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
       id: u.employee_id,
       name: e?.full_name || 'Unknown',
       phone: u.within_shift_minutes || 0,
-      percent: u.usage_percent || 0
+      percent: u.usage_percent,
+      available: u.telemetry_available,
+      status: u.telemetry_status,
     };
   }) : filteredEmps.filter(e => e.phone > 0).map(e => ({
     ...e,
-    percent: Math.min(e.phone/90*100, 100)
+    percent: Math.min(e.phone/90*100, 100),
+    available: true,
+    status: 'demo',
   }));
 
   const attendanceTrend = supabaseReady && metrics ? metrics.attendanceTrend : [];
@@ -728,11 +757,11 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
                   <div className="flex justify-between mb-1">
                     <span className="text-xs text-white">{e.name}</span>
                     <span className="text-xs font-mono" style={{ color: e.phone > 60 ? '#ef4444' : e.phone > 30 ? '#f59e0b' : '#10b981' }}>
-                      {e.phone}m {e.percent > 0 ? `(${e.percent}%)` : ''}
+                      {e.available ? `${e.phone}m (${e.percent ?? 0}%)` : `Unavailable (${e.status})`}
                     </span>
                   </div>
                   <div className="h-1.5 rounded-full" style={{ background: '#122338' }}>
-                    <div className="h-1.5 rounded-full" style={{ width: `${e.percent}%`, background: e.phone > 60 ? '#ef4444' : e.phone > 30 ? '#f59e0b' : '#10b981' }}></div>
+                    <div className="h-1.5 rounded-full" style={{ width: `${e.percent ?? 0}%`, background: e.available ? (e.phone > 60 ? '#ef4444' : e.phone > 30 ? '#f59e0b' : '#10b981') : '#4b6a8a' }}></div>
                   </div>
                 </div>
               </div>
@@ -792,9 +821,20 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
       </div>
 
       {/* Login Sessions */}
-      <LeaveWidget onNav={onNav} />
+      {supabaseReady ? (
+        <UnavailableModuleCard
+          title="Leave Management is not connected"
+          detail="No leave totals are shown because the production leave workflow has not been integrated with the backend."
+          onNav={() => onNav('leave')}
+        />
+      ) : <LeaveWidget onNav={onNav} />}
 
-      <LoginSessionsPanel />
+      {supabaseReady ? (
+        <UnavailableModuleCard
+          title="Login session inventory is unavailable"
+          detail="Supabase Auth does not expose a production session inventory to this dashboard. No sample session records are displayed."
+        />
+      ) : <LoginSessionsPanel />}
 
       {/* Action Required */}
       <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>

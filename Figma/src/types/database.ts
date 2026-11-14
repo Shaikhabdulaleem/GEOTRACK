@@ -444,6 +444,7 @@ export interface PhoneUsageRecordRow {
   policy_limit_minutes: number | null;
   source: string | null;
   consent_version: string | null;
+  data_status: 'available' | 'partial' | 'permission_not_granted' | 'no_data';
   created_at: string;
   updated_at: string;
 }
@@ -707,6 +708,19 @@ export interface Database {
       review_overtime_batch: {
         Args: { p_decisions: Json };
         Returns: OvertimeRecordRow[];
+      };
+      get_dashboard_trends: {
+        Args: {
+          p_organization_id: string;
+          p_end_date: string;
+          p_days?: number;
+          p_branch_id?: string | null;
+          p_department_id?: string | null;
+          p_shift_id?: string | null;
+          p_manager_id?: string | null;
+          p_employee_id?: string | null;
+        };
+        Returns: Json;
       };
       manager_correct_attendance: {
         Args: {
