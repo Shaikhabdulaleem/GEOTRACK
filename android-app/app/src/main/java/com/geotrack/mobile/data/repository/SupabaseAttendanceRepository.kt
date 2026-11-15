@@ -43,7 +43,7 @@ class SupabaseAttendanceRepository @Inject constructor(
     private fun deviceHash(): String = DeviceIdentity.hash(appContext)
 
     override suspend fun latestLocalSyncStatus(employeeId: String): String? =
-        database.offlineAttendanceDao().forEmployee(employeeId).firstOrNull()?.syncStatus
+        database.offlineAttendanceDao().displayStatus(employeeId)
 
     override suspend fun recordLocationPing(
         organizationId: String,

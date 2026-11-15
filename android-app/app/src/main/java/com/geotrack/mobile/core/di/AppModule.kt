@@ -8,6 +8,7 @@ import com.geotrack.mobile.core.config.SupabaseConfig
 import com.geotrack.mobile.data.repository.SupabaseAuthRepository
 import com.geotrack.mobile.data.repository.SupabaseSessionRepository
 import com.geotrack.mobile.database.GeoTrackDatabase
+import com.geotrack.mobile.database.DatabaseMigrations
 import com.geotrack.mobile.domain.repository.AuthRepository
 import com.geotrack.mobile.domain.repository.SessionRepository
 import dagger.Binds
@@ -55,15 +56,9 @@ object AppModule {
                 // geofence's configured value.
                 db.execSQL("ALTER TABLE cached_geofences ADD COLUMN requiredAccuracyMeters INTEGER NOT NULL DEFAULT 50")
             }
-        }).addMigrations(object : Migration(4, 5) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                // Preserve every payroll-relevant outbox event while separating
-                // bounded transport retries from permanent/reviewable failures.
-                db.execSQL("ALTER TABLE offline_attendance_events ADD COLUMN nextAttemptAtEpochMillis INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("ALTER TABLE offline_attendance_events ADD COLUMN lastAttemptAtEpochMillis INTEGER")
-                db.execSQL("ALTER TABLE offline_attendance_events ADD COLUMN failureClass TEXT")
-            }
-        }).fallbackToDestructiveMigrationOnDowngrade().build()
+        }).addMigrations(DatabaseMigrations.MIGRATION_4_5)
+            .fallbackToDestructiveMigrationOnDowngrade()
+            .build()
         
     @Provides
     @Singleton

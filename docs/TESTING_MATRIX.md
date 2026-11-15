@@ -46,6 +46,7 @@ or approval.
 | Bounded exponential retry | `OfflineSyncPolicyTest` | Automated — pass |
 | Duplicate replay | Android unit + SQL idempotency | Automated — pass |
 | Legacy client event is retained, not falsely synced | `device_authorization.sql` | Automated — pass |
+| Android Room v4 → v5 outbox upgrade | `OfflineAttendanceMigrationTest` on CI emulator | Automated — preserves failed/pending/synced rows; failed rows require review and are not replayed |
 | Network interruption/restoration | WorkManager staging test | Manual staging required |
 | App process death with Room event pending | Instrumented device test | Blocked pending device lab |
 | Phone restart / boot receiver re-registration | Instrumented physical-device test | Blocked pending device lab |
@@ -86,6 +87,7 @@ or approval.
 | Schema lint | New functions clean; two pre-existing non-blocking warnings |
 | Web typecheck/lint/unit/build | Pass |
 | Android unit/lint/debug build | Pass |
+| Android Room v4 → v5 upgrade regression | Automated on CI emulator; production-signed in-place device upgrade still required |
 | Android minified signed release build | Build pass |
 | Release APK update signer | **Fail/blocker: signer mismatch** |
 | Upgrade without data loss | Blocked until correct signer/device available |
