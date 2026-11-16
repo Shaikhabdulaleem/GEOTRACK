@@ -20,6 +20,7 @@ const Attendance = React.lazy(() => import('./views/Attendance'));
 const Productivity = React.lazy(() => import('./views/Productivity'));
 const Overtime = React.lazy(() => import('./views/Overtime'));
 const DeviceUsage = React.lazy(() => import('./views/DeviceUsage'));
+const DeviceApprovals = React.lazy(() => import('./views/DeviceApprovals'));
 const Geofences = React.lazy(() => import('./views/Geofences'));
 const Reports = React.lazy(() => import('./views/Reports'));
 const Notifications = React.lazy(() => import('./views/Notifications'));
@@ -39,6 +40,7 @@ const VIEWS: Record<ViewId, ViewComponent> = {
   productivity: Productivity,
   overtime: Overtime,
   device: DeviceUsage,
+  'device-approvals': DeviceApprovals,
   geofences: Geofences,
   reports: Reports,
   notifications: RoleAwareNotifications,

@@ -87,3 +87,23 @@ test('Mailroom productivity UI preserves employee performance and adds operation
   assert.match(migration, /enable row level security/i)
   assert.match(migration, /revoke all on table public\.mailroom_dsp_partners/i)
 })
+
+test('administrator device approvals compare phones and use the audited review RPC', async () => {
+  const [view, access, service, migration] = await Promise.all([
+    read('src/views/DeviceApprovals.tsx'),
+    read('src/auth/view-access.ts'),
+    read('src/services/device.service.ts'),
+    read('../supabase/migrations/20261116183000_device_enrollment_admin_review.sql'),
+  ])
+
+  assert.match(access, /'device-approvals': \['administrator'\]/)
+  assert.match(view, /Last approved mobile/)
+  assert.match(view, /Current mobile requesting access/)
+  assert.match(view, /New attendance device detected/)
+  assert.match(view, /Approve current mobile/)
+  assert.match(view, /Reject device/)
+  assert.match(service, /rpc\('review_employee_device_enrollment'/)
+  assert.match(migration, /private\.has_org_role\(v_device\.organization_id, array\['administrator'\]\)/i)
+  assert.match(migration, /previous_integrity_status, new_integrity_status, reason/i)
+  assert.match(migration, /revoke all on function public\.review_employee_device_enrollment\(uuid, text, text\)/i)
+})

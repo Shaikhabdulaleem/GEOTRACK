@@ -903,6 +903,10 @@ export interface Database {
         Args: Record<string, never>;
         Returns: undefined;
       };
+      review_employee_device_enrollment: {
+        Args: { p_device_id: string; p_decision: 'approve' | 'reject'; p_reason?: string | null };
+        Returns: EmployeeDeviceRow;
+      };
       record_location_ping: {
         Args: {
           p_employee_id: string;
