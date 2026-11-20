@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Search, CheckCircle, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Search, CheckCircle, XCircle, AlertCircle, RefreshCw, Edit3, RotateCcw, ExternalLink, Loader2, X } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import Avatar from '../components/Avatar';
 import { useAuth } from '../auth/AuthContext';
@@ -11,6 +12,7 @@ import { correctionService } from '../services/correction.service';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { employees as mockEmployees } from '../data/mockData';
 import { todayInTimezone } from '../lib/dates';
+import { getErrorMessage } from '../lib/errors';
 import type { AttendanceRecordRow, DepartmentRow, EmployeeProfileRow, ShiftAssignmentRow, ShiftRow, ManualAttendanceRequestRow } from '../types/database';
 
 const tabs = ['Today', 'Corrections'];
@@ -35,9 +37,11 @@ function formatDuration(minutes: number | null) {
 }
 
 export default function Attendance() {
-  const { activeMembership, user } = useAuth();
+  const { activeMembership, user, hasAnyRole } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
   const supabaseReady = isSupabaseConfigured();
+  const navigate = useNavigate();
+  const canManage = hasAnyRole(['administrator', 'manager']);
 
   const [tab, setTab] = useState('Today');
   const [search, setSearch] = useState('');
@@ -51,7 +55,25 @@ export default function Attendance() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Corrections (mocked for now, as requests system is not fully built yet)
+  // Direct correction modal state
+  const [correctingTarget, setCorrectingTarget] = useState<{
+    employeeId: string;
+    name: string;
+    code: string;
+    shiftName: string;
+    shiftStart: string | null;
+    shiftEnd: string | null;
+    checkInAt: string | null;
+    checkOutAt: string | null;
+    recordId: string | null;
+  } | null>(null);
+  const [correctingIn, setCorrectingIn] = useState('');
+  const [correctingOut, setCorrectingOut] = useState('');
+  const [correctingReason, setCorrectingReason] = useState('');
+  const [correctingSaving, setCorrectingSaving] = useState(false);
+  const [correctingError, setCorrectingError] = useState('');
+
+  // Corrections requests
   const [corrections, setCorrections] = useState<ManualAttendanceRequestRow[]>([]);
 
   const approveCorrection = async (id: string) => {
@@ -120,11 +142,17 @@ export default function Attendance() {
       // Fallback to mock if no supabase
       return mockEmployees.map(e => ({
         id: e.id,
+        employeeId: e.id,
         name: e.name,
         photo: e.photo,
         dept: e.dept,
         deptId: e.dept,
         shiftName: e.shift,
+        shiftStart: '09:00:00' as string | null,
+        shiftEnd: '17:00:00' as string | null,
+        recordId: null as string | null,
+        rawCheckIn: null as string | null,
+        rawCheckOut: null as string | null,
         checkin: e.checkin,
         checkout: e.checkout,
         worked: e.worked,
@@ -157,10 +185,16 @@ export default function Attendance() {
 
       return {
         id: emp.employee_code || emp.id.substring(0, 8),
+        employeeId: emp.id,
         name: emp.full_name,
         dept: departmentNames.get(emp.department_id) ?? 'Unassigned',
         deptId: emp.department_id,
         shiftName: assignment?.shift?.name || 'Off / Unassigned',
+        shiftStart: assignment?.shift?.start_time ?? null,
+        shiftEnd: assignment?.shift?.end_time ?? null,
+        recordId: rec?.id ?? null,
+        rawCheckIn: rec?.check_in_at ?? null,
+        rawCheckOut: rec?.check_out_at ?? null,
         checkin: formatTime(rec?.check_in_at ?? null),
         checkout: formatTime(rec?.check_out_at ?? null),
         worked: formatDuration(rec?.worked_minutes ?? null),
@@ -173,6 +207,72 @@ export default function Attendance() {
       };
     });
   }, [supabaseReady, emps, records, assignments, departmentNames]);
+
+  const openCorrection = (emp: (typeof displayData)[number]) => {
+    const today = todayInTimezone('Asia/Riyadh');
+    const inVal = emp.rawCheckIn
+      ? emp.rawCheckIn.slice(0, 16)
+      : `${today}T${(emp.shiftStart || '09:00').slice(0, 5)}`;
+    const isCross = emp.shiftStart && emp.shiftEnd && emp.shiftEnd <= emp.shiftStart;
+    const nextDay = new Date(`${today}T00:00:00Z`);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    const outDate = isCross ? nextDay.toISOString().slice(0, 10) : today;
+    const outVal = emp.rawCheckOut
+      ? emp.rawCheckOut.slice(0, 16)
+      : `${outDate}T${(emp.shiftEnd || '17:00').slice(0, 5)}`;
+
+    setCorrectingIn(inVal);
+    setCorrectingOut(outVal);
+    setCorrectingReason('');
+    setCorrectingError('');
+    setCorrectingTarget({
+      employeeId: emp.employeeId,
+      name: emp.name,
+      code: emp.id,
+      shiftName: emp.shiftName,
+      shiftStart: emp.shiftStart,
+      shiftEnd: emp.shiftEnd,
+      checkInAt: emp.rawCheckIn,
+      checkOutAt: emp.rawCheckOut,
+      recordId: emp.recordId,
+    });
+  };
+
+  const submitDirectCorrection = async () => {
+    if (!correctingTarget) return;
+    if (!correctingIn || !correctingOut) {
+      setCorrectingError('Both check-in and check-out timestamps are required.');
+      return;
+    }
+    if (Date.parse(correctingOut) <= Date.parse(correctingIn)) {
+      setCorrectingError('Check-out timestamp must be after check-in.');
+      return;
+    }
+    if (correctingReason.trim().length < 3) {
+      setCorrectingError('Please enter a valid correction reason (at least 3 characters).');
+      return;
+    }
+    setCorrectingSaving(true);
+    setCorrectingError('');
+    try {
+      const today = todayInTimezone('Asia/Riyadh');
+      await correctionService.directCorrection({
+        organizationId,
+        employeeId: correctingTarget.employeeId,
+        workDate: today,
+        attendanceRecordId: correctingTarget.recordId,
+        checkInAt: new Date(correctingIn).toISOString(),
+        checkOutAt: new Date(correctingOut).toISOString(),
+        reason: correctingReason.trim(),
+      });
+      setCorrectingTarget(null);
+      await loadData();
+    } catch (err) {
+      setCorrectingError(getErrorMessage(err));
+    } finally {
+      setCorrectingSaving(false);
+    }
+  };
 
   const departmentDisplayData = useMemo(
     () => departmentId ? displayData.filter(employee => employee.deptId === departmentId) : displayData,
@@ -283,7 +383,7 @@ export default function Attendance() {
             <table className="w-full">
               <thead>
                 <tr style={{ background: '#122338' }}>
-                  {['Employee', 'Shift', 'In/Out', 'Worked', 'Missing', 'Calc. OT', 'Status', 'Source'].map(h => (
+                  {['Employee', 'Shift', 'In/Out', 'Worked', 'Missing', 'Calc. OT', 'Status', 'Source', 'Actions'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider" style={{ color: '#4b6a8a' }}>{h}</th>
                   ))}
                 </tr>
@@ -322,6 +422,18 @@ export default function Attendance() {
                     </td>
                     <td className="px-4 py-3"><StatusBadge status={emp.attendanceStatus} /></td>
                     <td className="px-4 py-3 text-xs" style={{ color: '#4b6a8a' }}>{emp.source}</td>
+                    <td className="px-4 py-3">
+                      {canManage && (
+                        <button
+                          onClick={() => openCorrection(emp)}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors"
+                          style={{ background: 'rgba(37,99,235,0.12)', color: '#93c5fd', border: '1px solid rgba(37,99,235,0.25)' }}
+                          title="Correct attendance for this employee"
+                        >
+                          <Edit3 size={11} /> Correct
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {filtered.length === 0 && !loading && (
@@ -338,7 +450,27 @@ export default function Attendance() {
       )}
 
       {tab === 'Corrections' && (
-        <div className="space-y-3">
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+            <div>
+              <div className="text-sm font-semibold text-white flex items-center gap-2">
+                <RotateCcw size={16} className="text-blue-400" />
+                Attendance Correction Management
+              </div>
+              <div className="text-xs mt-0.5" style={{ color: '#64748b' }}>
+                For custom date ranges, manager direct corrections, and timesheet recalculations, access the full module.
+              </div>
+            </div>
+            <button
+              onClick={() => navigate('/corrections')}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold"
+              style={{ background: '#2563eb', color: '#fff' }}
+            >
+              <span>Open Correction Module</span>
+              <ExternalLink size={13} />
+            </button>
+          </div>
+
           {pendingCorrectionCount > 0 && (
             <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)', color: '#f59e0b' }}>
               <AlertCircle size={14} />
@@ -385,6 +517,116 @@ export default function Attendance() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Row Direct Correction Dialog */}
+      {correctingTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(6,13,26,0.85)', backdropFilter: 'blur(4px)' }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl overflow-hidden shadow-2xl"
+            style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}
+          >
+            <div
+              className="flex items-center justify-between px-6 py-4"
+              style={{ borderBottom: '1px solid #1e3a5a', background: '#08111f' }}
+            >
+              <div>
+                <h3 className="font-bold text-white text-sm">Correct Attendance</h3>
+                <div className="text-[11px]" style={{ color: '#64748b' }}>
+                  {correctingTarget.name} ({correctingTarget.code}) · {correctingTarget.shiftName}
+                </div>
+              </div>
+              <button
+                onClick={() => setCorrectingTarget(null)}
+                style={{ color: '#4b6a8a' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {correctingError && (
+                <div
+                  className="p-3 rounded-xl flex gap-2 text-xs"
+                  style={{ background: 'rgba(239,68,68,0.1)', color: '#fca5a5' }}
+                >
+                  <AlertCircle size={15} />
+                  <span>{correctingError}</span>
+                </div>
+              )}
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block mb-1 font-medium" style={{ color: '#94a3b8' }}>
+                    Corrected Check-in *
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={correctingIn}
+                    onChange={e => setCorrectingIn(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg outline-none font-mono"
+                    style={{ background: '#08111f', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block mb-1 font-medium" style={{ color: '#94a3b8' }}>
+                    Corrected Check-out *
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={correctingOut}
+                    onChange={e => setCorrectingOut(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg outline-none font-mono"
+                    style={{ background: '#08111f', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block mb-1 font-medium" style={{ color: '#94a3b8' }}>
+                    Correction Reason / Audit Note *
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={correctingReason}
+                    onChange={e => setCorrectingReason(e.target.value)}
+                    placeholder="State reason for manual attendance correction…"
+                    className="w-full px-3 py-2 rounded-xl outline-none resize-none"
+                    style={{ background: '#08111f', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
+                  />
+                  <div className="text-[11px] mt-1" style={{ color: '#64748b' }}>
+                    Worked hours, late minutes, and overtime will be automatically recalculated.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="px-6 py-4 flex justify-end gap-3"
+              style={{ borderTop: '1px solid #1e3a5a', background: '#08111f' }}
+            >
+              <button
+                onClick={() => setCorrectingTarget(null)}
+                className="px-4 py-2 rounded-lg text-xs"
+                style={{ background: '#122338', color: '#94a3b8' }}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={correctingSaving}
+                onClick={() => void submitDirectCorrection()}
+                className="flex items-center gap-2 px-5 py-2 rounded-lg text-xs font-semibold disabled:opacity-50"
+                style={{ background: '#2563eb', color: '#fff' }}
+              >
+                {correctingSaving && <Loader2 size={13} className="animate-spin" />}
+                Save & Recalculate
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

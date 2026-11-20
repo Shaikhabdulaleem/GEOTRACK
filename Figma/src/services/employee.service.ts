@@ -33,6 +33,7 @@ export interface EmployeeCreateInput {
   manager_user_id?: string | null;
   joining_date?: string | null;
   employment_status?: EmploymentStatus;
+  status_effective_date?: string | null;
 }
 
 export const employeeService = {
@@ -54,7 +55,16 @@ export const employeeService = {
     const from = (page - 1) * pageSize;
     const result = await query.order(input.sortBy ?? 'full_name', { ascending: input.sortAscending ?? true }).range(from, from + pageSize - 1);
     if (result.error) throw result.error;
-    return { rows: result.data ?? [], count: result.count ?? 0 };
+    const rows = (result.data ?? []) as EmployeeProfileRow[];
+    if (typeof window !== 'undefined') {
+      rows.forEach(r => {
+        if (!r.status_effective_date) {
+          const stored = localStorage.getItem(`emp_status_date_${r.id}`);
+          r.status_effective_date = stored || r.joining_date || r.created_at?.slice(0, 10) || null;
+        }
+      });
+    }
+    return { rows, count: result.count ?? 0 };
   },
 
   /** Fetches every matching row in bounded pages. Callers that aggregate
@@ -73,30 +83,86 @@ export const employeeService = {
   },
 
   async getById(employeeId: string): Promise<EmployeeProfileRow> {
-    return executeQuery(
+    const row = await executeQuery<EmployeeProfileRow>(
       getSupabaseClient().from('employee_profiles').select('*').eq('id', employeeId).single(),
       'Unable to load the employee.',
     );
+    if (typeof window !== 'undefined' && !row.status_effective_date) {
+      const stored = localStorage.getItem(`emp_status_date_${row.id}`);
+      row.status_effective_date = stored || row.joining_date || row.created_at?.slice(0, 10) || null;
+    }
+    return row;
   },
 
   async create(input: EmployeeCreateInput): Promise<EmployeeProfileRow> {
     const normalized = validateEmployeeInput(input);
-    return executeQuery(
-      getSupabaseClient().from('employee_profiles').insert(normalized as TablesInsert<'employee_profiles'>).select('*').single(),
-      'Unable to create the employee.',
-    );
+    const client = getSupabaseClient();
+    try {
+      const row = await executeQuery<EmployeeProfileRow>(
+        client.from('employee_profiles').insert(normalized as TablesInsert<'employee_profiles'>).select('*').single(),
+        'Unable to create the employee.',
+      );
+      if (typeof window !== 'undefined' && normalized.status_effective_date) {
+        localStorage.setItem(`emp_status_date_${row.id}`, normalized.status_effective_date);
+        row.status_effective_date = normalized.status_effective_date;
+      }
+      return row;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('status_effective_date') || msg.includes('schema cache')) {
+        const stripped = { ...normalized };
+        delete (stripped as any).status_effective_date;
+        const row = await executeQuery<EmployeeProfileRow>(
+          client.from('employee_profiles').insert(stripped as TablesInsert<'employee_profiles'>).select('*').single(),
+          'Unable to create the employee.',
+        );
+        if (typeof window !== 'undefined' && normalized.status_effective_date) {
+          localStorage.setItem(`emp_status_date_${row.id}`, normalized.status_effective_date);
+          row.status_effective_date = normalized.status_effective_date;
+        }
+        return row;
+      }
+      throw err;
+    }
   },
 
   async update(employeeId: string, input: TablesUpdate<'employee_profiles'>): Promise<EmployeeProfileRow> {
     const safeInput = sanitizeEmployeeUpdate(input);
-    return executeQuery(
-      getSupabaseClient().from('employee_profiles').update(safeInput).eq('id', employeeId).select('*').single(),
-      'Unable to update the employee.',
-    );
+    const client = getSupabaseClient();
+    if (typeof window !== 'undefined' && (input as any).status_effective_date) {
+      localStorage.setItem(`emp_status_date_${employeeId}`, String((input as any).status_effective_date));
+    }
+    try {
+      const row = await executeQuery<EmployeeProfileRow>(
+        client.from('employee_profiles').update(safeInput).eq('id', employeeId).select('*').single(),
+        'Unable to update the employee.',
+      );
+      if (typeof window !== 'undefined' && (input as any).status_effective_date) {
+        row.status_effective_date = String((input as any).status_effective_date);
+      }
+      return row;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('status_effective_date') || msg.includes('schema cache')) {
+        const stripped = { ...safeInput };
+        delete (stripped as any).status_effective_date;
+        const row = await executeQuery<EmployeeProfileRow>(
+          client.from('employee_profiles').update(stripped as TablesUpdate<'employee_profiles'>).eq('id', employeeId).select('*').single(),
+          'Unable to update the employee.',
+        );
+        if (typeof window !== 'undefined' && (input as any).status_effective_date) {
+          row.status_effective_date = String((input as any).status_effective_date);
+        }
+        return row;
+      }
+      throw err;
+    }
   },
 
-  async setStatus(employeeId: string, status: EmploymentStatus): Promise<EmployeeProfileRow> {
-    return this.update(employeeId, { employment_status: status });
+  async setStatus(employeeId: string, status: EmploymentStatus, effectiveDate?: string): Promise<EmployeeProfileRow> {
+    const updates: Record<string, unknown> = { employment_status: status };
+    if (effectiveDate) updates.status_effective_date = effectiveDate;
+    return this.update(employeeId, updates as TablesUpdate<'employee_profiles'>);
   },
 
   async assignShift(input: ShiftAssignmentInput): Promise<ShiftAssignmentRow> {
@@ -173,6 +239,7 @@ function sanitizeEmployeeUpdate(input: TablesUpdate<'employee_profiles'>): Table
   const allowed = [
     'employee_code', 'iqama_number', 'full_name', 'mobile_number', 'branch_id',
     'department_id', 'job_title', 'manager_user_id', 'joining_date', 'employment_status',
+    'status_effective_date',
   ] as const;
   for (const key of allowed) {
     if (input[key] !== undefined) safe[key] = input[key] as never;

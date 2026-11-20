@@ -17,6 +17,7 @@ const LiveAttendance = React.lazy(() => import('./views/LiveAttendance'));
 const Employees = React.lazy(() => import('./views/Employees'));
 const ShiftScheduler = React.lazy(() => import('./views/ShiftScheduler'));
 const Attendance = React.lazy(() => import('./views/Attendance'));
+const AttendanceCorrections = React.lazy(() => import('./views/AttendanceCorrections'));
 const Productivity = React.lazy(() => import('./views/Productivity'));
 const Overtime = React.lazy(() => import('./views/Overtime'));
 const DeviceUsage = React.lazy(() => import('./views/DeviceUsage'));
@@ -37,6 +38,7 @@ const VIEWS: Record<ViewId, ViewComponent> = {
   employees: Employees,
   scheduler: ShiftScheduler,
   attendance: Attendance,
+  corrections: AttendanceCorrections,
   productivity: Productivity,
   overtime: Overtime,
   device: DeviceUsage,

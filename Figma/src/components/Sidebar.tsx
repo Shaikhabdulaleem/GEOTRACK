@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { LayoutDashboard, Users, CalendarDays, Clock, TrendingUp, Timer, Smartphone, MapPin, FileText, Bell, Settings, Radio, LogOut, Shield, ShieldCheck, Plane, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Users, CalendarDays, Clock, RotateCcw, TrendingUp, Timer, Smartphone, MapPin, FileText, Bell, Settings, Radio, LogOut, Shield, ShieldCheck, Plane, Menu, X } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import type { ViewId } from '../auth/view-access';
 import type { AppRole } from '../types/database';
@@ -11,6 +11,7 @@ const nav: ReadonlyArray<{ id: ViewId; label: string; icon: typeof LayoutDashboa
   { id: 'employees', label: 'Employees',       icon: Users },
   { id: 'scheduler', label: 'Shift Scheduler', icon: CalendarDays },
   { id: 'attendance',label: 'Attendance',      icon: Clock },
+  { id: 'corrections', label: 'Attendance Correction', icon: RotateCcw },
   { id: 'leave',     label: 'Leave Requests',  icon: Plane },
   { id: 'productivity',label:'Productivity',   icon: TrendingUp },
   { id: 'overtime',  label: 'Overtime',        icon: Timer },

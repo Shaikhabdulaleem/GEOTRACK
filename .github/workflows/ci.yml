@@ -92,7 +92,8 @@ jobs:
                    supabase/tests/device_authorization.sql \
                    supabase/tests/dashboard_reporting.sql \
                    supabase/tests/geofence_breach_detection.sql \
-                   supabase/tests/overtime_review.sql; do
+                   supabase/tests/overtime_review.sql \
+                   supabase/tests/mailroom_productivity.sql; do
             echo "::group::$t"
             psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$t"
             echo "::endgroup::"

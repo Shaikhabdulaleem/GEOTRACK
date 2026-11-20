@@ -175,6 +175,7 @@ export interface EmployeeProfileRow {
   manager_user_id: string | null;
   joining_date: string | null;
   employment_status: EmploymentStatus;
+  status_effective_date?: string | null;
   must_change_password: boolean;
   login_last_reset_at: string | null;
   created_at: string;
@@ -444,7 +445,21 @@ export interface MailroomProductivitySettingsRow {
   max_overtime_hours_per_day: number;
   week_starts_on: number;
   opening_return_backlog: number;
+  overtime_hourly_cost: number;
+  overtime_hourly_cost_own: number;
+  overtime_hourly_cost_3pl: number;
   created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomDailyTurnaroundMetricRow {
+  organization_id: string;
+  branch_id: string;
+  client_id: string;
+  work_date: string;
+  warehouse_code: string;
+  total_minutes: number;
+  shipment_count: number;
   updated_at: string;
 }
 
@@ -499,6 +514,10 @@ export interface MailroomDailyShipmentRow {
   received_units: number;
   validated_units: number;
   processed_units: number;
+  backlog_released_units: number;
+  batch_closed_units: number;
+  returns_received: number;
+  returns_processed: number;
   notes: string | null;
   created_by: string | null;
   updated_by: string | null;
@@ -515,6 +534,7 @@ export interface MailroomEmployeeSettingsRow {
   employment_source: MailroomEmploymentSource;
   overtime_eligible: boolean;
   max_overtime_hours_override: number | null;
+  overtime_hourly_cost: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -695,6 +715,7 @@ export interface Database {
       mailroom_dsp_partners: TableDefinition<MailroomDspPartnerRow, 'organization_id' | 'branch_id' | 'code' | 'name'>;
       mailroom_daily_entries: TableDefinition<MailroomDailyEntryRow, 'organization_id' | 'branch_id' | 'work_date'>;
       mailroom_daily_dsp_allocations: TableDefinition<MailroomDailyDspAllocationRow, 'organization_id' | 'branch_id' | 'daily_entry_id' | 'client_id' | 'partner_id'>;
+      mailroom_daily_turnaround_metrics: TableDefinition<MailroomDailyTurnaroundMetricRow, 'organization_id' | 'branch_id' | 'client_id' | 'work_date' | 'warehouse_code' | 'total_minutes' | 'shipment_count'>;
       phone_usage_records: TableDefinition<PhoneUsageRecordRow, 'organization_id' | 'employee_id' | 'work_date'>;
       notifications: TableDefinition<NotificationRow, 'organization_id' | 'recipient_user_id' | 'notification_type' | 'title' | 'body'>;
       leave_requests: TableDefinition<LeaveRequestRow, 'organization_id' | 'employee_id' | 'leave_type' | 'from_date' | 'to_date' | 'days' | 'reason' | 'requested_by'>;
@@ -882,6 +903,18 @@ export interface Database {
           p_notes?: string | null;
         };
         Returns: Json;
+      };
+      save_mailroom_productivity_month: {
+        Args: { p_organization_id: string; p_days: Json };
+        Returns: Json;
+      };
+      save_mailroom_turnaround_metrics: {
+        Args: { p_organization_id: string; p_rows: Json };
+        Returns: number;
+      };
+      save_mailroom_client_returns: {
+        Args: { p_organization_id: string; p_rows: Json };
+        Returns: number;
       };
       manager_correct_attendance: {
         Args: {
