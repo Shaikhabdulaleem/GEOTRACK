@@ -1,4 +1,4 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.2';
+import { createClient } from 'npm:@supabase/supabase-js@2.57.2';
 
 // This function is invoked from the admin web dashboard, so it must answer CORS
 // preflight and echo an allowed origin. Mirrors send-mobile-notification: any

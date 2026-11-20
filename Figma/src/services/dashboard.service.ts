@@ -23,6 +23,13 @@ export interface DashboardGeofencePoint {
   employees: number;
 }
 
+interface DashboardTrends {
+  attendance: Array<{ date: string; day: string; present: number; late: number; absent: number; missing: number; workedHours: number }>;
+  overtime: Array<{ date: string; day: string; hours: number }>;
+  productivity: Array<{ date: string; day: string; productivity: number | null; available: boolean }>;
+  geofence: Array<{ date: string; day: string; violations: number }>;
+}
+
 /** A single employee's live position for the dashboard workforce map. */
 export interface WorkforcePosition {
   employeeId: string;
@@ -215,26 +222,22 @@ export const dashboardService = {
     
     const pendingApprovals = (otReqs.count || 0) + (manualReqs.count || 0);
     
-    // Geofence Violations
-    let geofenceViolations = 0;
-    for (let i = 0; i < validEmpIds.length; i += batchSize) {
-      const batchIds = validEmpIds.slice(i, i + batchSize);
-      const { count } = await client
-        .from('attendance_events')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', organizationId)
-        .gte('event_at', `${filters.date}T00:00:00Z`)
-        .lte('event_at', `${filters.date}T23:59:59Z`)
-        .in('employee_id', batchIds)
-        .eq('inside_geofence', false);
-      if (count) geofenceViolations += count;
-    }
-
-    // Mock trend data for now if we don't have historical data aggregated, but make it empty to show we removed hardcoded mocks
-    // In a real app, you'd aggregate the last 7 days from attendance_records.
-    const attendanceTrend: any[] = [];
-    const otTrend: any[] = [];
-    const productivityTrend: any[] = [];
+    const { data: trendData, error: trendError } = await client.rpc('get_dashboard_trends', {
+      p_organization_id: organizationId,
+      p_end_date: filters.date,
+      p_days: 7,
+      p_branch_id: filters.branchId || null,
+      p_department_id: filters.departmentId || null,
+      p_shift_id: filters.shiftId || null,
+      p_manager_id: filters.managerId || null,
+      p_employee_id: filters.employeeId || null,
+    });
+    if (trendError) throw trendError;
+    const trends = trendData as unknown as DashboardTrends;
+    const attendanceTrend = trends.attendance;
+    const otTrend = trends.overtime;
+    const productivityTrend = trends.productivity;
+    const geofenceViolations = trends.geofence.find(point => point.date === filters.date)?.violations ?? 0;
     const geofencesData: DashboardGeofencePoint[] = [];
     
     return {

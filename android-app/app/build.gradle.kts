@@ -49,8 +49,8 @@ android {
         applicationId = "com.geotrack.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.2.6"
+        versionCode = 10
+        versionName = "0.2.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -145,8 +145,16 @@ dependencies {
     implementation("com.google.firebase:firebase-messaging")
 
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
 
 kapt {
     correctErrorTypes = true
+}
+
+tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
+    // The runtime graph is what ships in the APK. Restricting the SBOM to it
+    // avoids resolving AGP's internal/test tooling configurations in CI.
+    includeConfigs = listOf("debugRuntimeClasspath")
 }

@@ -331,9 +331,22 @@ private fun AttendanceCard(
                 }
             }
 
-            if (uiState.syncStatus == "PENDING_SYNC" || uiState.syncStatus == "SYNC_FAILED") {
-                val color = if (uiState.syncStatus == "SYNC_FAILED") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
-                val text = if (uiState.syncStatus == "SYNC_FAILED") "Failed to sync attendance" else "Attendance pending sync (offline)"
+            if (uiState.syncStatus in setOf(
+                    "PENDING_SYNC", "RETRYABLE_FAILURE", "REAUTHENTICATION_REQUIRED",
+                    "REQUIRES_REVIEW", "PERMANENT_FAILURE",
+                )
+            ) {
+                val needsAction = uiState.syncStatus in setOf(
+                    "REAUTHENTICATION_REQUIRED", "REQUIRES_REVIEW", "PERMANENT_FAILURE",
+                )
+                val color = if (needsAction) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
+                val text = when (uiState.syncStatus) {
+                    "PENDING_SYNC" -> "Attendance pending sync (offline)"
+                    "RETRYABLE_FAILURE" -> "Attendance sync delayed; retry scheduled"
+                    "REAUTHENTICATION_REQUIRED" -> "Sign in again to sync preserved attendance"
+                    "REQUIRES_REVIEW" -> "Attendance event preserved; administrator review required"
+                    else -> "Attendance event preserved; correction required"
+                }
                 Text(text = text, color = color, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
             }
         }

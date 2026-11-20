@@ -1,6 +1,19 @@
 import { getSupabaseClient } from '../lib/supabase';
-import { executeQuery } from './database.service';
-import type { PhoneUsageRecordRow, TablesInsert } from '../types/database';
+import { toAppError } from '../lib/errors';
+import type { EmployeeDeviceRow, PhoneUsageRecordRow } from '../types/database';
+
+export type DeviceReviewRecord = Pick<
+  EmployeeDeviceRow,
+  'id' | 'employee_id' | 'device_identifier_hash' | 'platform' | 'model' | 'os_version' | 'app_version' | 'integrity_status' | 'registered_at' | 'last_seen_at' | 'revoked_at'
+>;
+
+export interface DeviceApprovalItem {
+  employeeId: string;
+  employeeCode: string;
+  employeeName: string;
+  currentDevice: DeviceReviewRecord;
+  previousDevice: DeviceReviewRecord | null;
+}
 
 export interface DeviceTelemetryPayload {
   organizationId: string;
@@ -13,30 +26,68 @@ export interface DeviceTelemetryPayload {
 }
 
 export const deviceService = {
+  async listApprovalQueue(organizationId: string): Promise<DeviceApprovalItem[]> {
+    const client = getSupabaseClient();
+    const [devicesResult, employeesResult] = await Promise.all([
+      client
+        .from('employee_devices')
+        .select('id, employee_id, device_identifier_hash, platform, model, os_version, app_version, integrity_status, registered_at, last_seen_at, revoked_at')
+        .eq('organization_id', organizationId)
+        .order('last_seen_at', { ascending: false, nullsFirst: false }),
+      client
+        .from('employee_profiles')
+        .select('id, employee_code, full_name')
+        .eq('organization_id', organizationId),
+    ]);
+
+    if (devicesResult.error) throw toAppError(devicesResult.error, 'Unable to load attendance devices.');
+    if (employeesResult.error) throw toAppError(employeesResult.error, 'Unable to load employee details.');
+
+    const employees = new Map((employeesResult.data ?? []).map(employee => [employee.id, employee]));
+    const devices = devicesResult.data ?? [];
+    return devices
+      .filter(device => device.integrity_status === 'suspected' && !device.revoked_at)
+      .map(currentDevice => {
+        const employee = employees.get(currentDevice.employee_id);
+        if (!employee) return null;
+        const previousDevice = devices.find(device =>
+          device.employee_id === currentDevice.employee_id
+          && device.id !== currentDevice.id
+          && device.integrity_status === 'valid'
+          && !device.revoked_at
+        ) ?? devices.find(device =>
+          device.employee_id === currentDevice.employee_id
+          && device.id !== currentDevice.id
+        ) ?? null;
+        return {
+          employeeId: employee.id,
+          employeeCode: employee.employee_code,
+          employeeName: employee.full_name,
+          currentDevice,
+          previousDevice,
+        };
+      })
+      .filter((item): item is DeviceApprovalItem => item !== null);
+  },
+
+  async reviewEnrollment(deviceId: string, decision: 'approve' | 'reject', reason: string | null): Promise<EmployeeDeviceRow> {
+    const { data, error } = await getSupabaseClient().rpc('review_employee_device_enrollment', {
+      p_device_id: deviceId,
+      p_decision: decision,
+      p_reason: reason,
+    });
+    if (error) throw toAppError(error, `Unable to ${decision} the device.`);
+    return data;
+  },
+
   /**
    * Endpoint designed for native Mobile Agents (Android UsageStatsManager / iOS MDM) 
    * to securely push phone usage telemetry to the backend.
    */
   async ingestTelemetry(payload: DeviceTelemetryPayload): Promise<PhoneUsageRecordRow> {
-    const record: TablesInsert<'phone_usage_records'> = {
-      organization_id: payload.organizationId,
-      employee_id: payload.employeeId,
-      device_id: payload.deviceId,
-      work_date: payload.workDate,
-      active_minutes: payload.totalActiveMinutes,
-      within_shift_minutes: payload.inShiftActiveMinutes,
-      consent_version: payload.consentVersion,
-      source: 'native_mobile_agent'
-    };
-
-    // Upsert telemetry per employee per date
-    return executeQuery(
-      getSupabaseClient()
-        .from('phone_usage_records')
-        .upsert(record, { onConflict: 'employee_id,work_date' })
-        .select('*')
-        .single(),
-      'Unable to ingest device telemetry.'
+    void payload;
+    throw new Error(
+      'Direct browser telemetry ingestion is disabled. Approved native devices must use upsert_phone_usage_summary.',
     );
   },
 
@@ -50,7 +101,7 @@ export const deviceService = {
     // 1. Get phone usage records
     const { data: usageData, error: usageErr } = await client
       .from('phone_usage_records')
-      .select('*, total_shift_minutes, usage_percentage, synced_at, shift_assignment_id')
+      .select('*, total_shift_minutes, usage_percentage, synced_at, shift_assignment_id, data_status')
       .eq('organization_id', organizationId)
       .eq('work_date', workDate);
       
@@ -69,14 +120,20 @@ export const deviceService = {
 
     const aggregated = (usageData || []).map(usage => {
       const workedMins = attendanceMap.get(usage.employee_id) || 0;
-      const usagePercent = usage.usage_percentage ?? (workedMins > 0
-        ? Math.min(100, Math.round((usage.within_shift_minutes / workedMins) * 100))
-        : 0);
+      const hasMeasuredData = usage.data_status === 'available' || usage.data_status === 'partial';
+      const usagePercent = hasMeasuredData
+        ? (usage.usage_percentage ?? (workedMins > 0
+          ? Math.min(100, Math.round((usage.within_shift_minutes / workedMins) * 100))
+          : null))
+        : null;
 
       return {
         ...usage,
         worked_minutes: workedMins,
-        usage_percent: usagePercent
+        usage_percent: usagePercent,
+        telemetry_available: hasMeasuredData,
+        telemetry_status: usage.data_status,
+        evidence_classification: 'employee_device_reported',
       };
     });
 

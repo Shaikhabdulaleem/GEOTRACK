@@ -10,7 +10,7 @@
 // Schedule it every few minutes (Supabase Dashboard > Edge Functions > Schedule,
 // or pg_cron + pg_net), sending `Authorization: Bearer <SCHEDULE_SECRET>`.
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.2';
+import { createClient } from 'npm:@supabase/supabase-js@2.57.2';
 import { importPKCS8, SignJWT } from 'npm:jose@6.1.0';
 
 const json = (body: unknown, status = 200) =>
@@ -59,6 +59,8 @@ type ClaimedAlert = {
   alert_id: string;
   notification_id: string | null;
   recipient_user_id: string;
+  claim_token: string;
+  attempt_count: number;
 };
 
 Deno.serve(async (request: Request) => {
@@ -81,6 +83,31 @@ Deno.serve(async (request: Request) => {
   }
 
   const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
+  const completeAttempt = async (
+    alert: ClaimedAlert,
+    sentCount: number,
+    failedCount: number,
+    error: string | null,
+    permanent = false,
+  ): Promise<boolean> => {
+    const { data, error: completionError } = await admin.rpc('complete_breach_push_attempt', {
+      p_alert_id: alert.alert_id,
+      p_claim_token: alert.claim_token,
+      p_sent_count: sentCount,
+      p_failed_count: failedCount,
+      p_error: error,
+      p_permanent: permanent,
+    });
+    if (completionError || data !== true) {
+      console.error(JSON.stringify({
+        event: 'claim_completion_failed',
+        alert_id: alert.alert_id,
+        code: completionError?.code,
+      }));
+      return false;
+    }
+    return true;
+  };
 
   const { data: claimed, error: claimError } = await admin.rpc('claim_breach_push_batch', { p_limit: 200 });
   if (claimError) {
@@ -96,18 +123,37 @@ Deno.serve(async (request: Request) => {
     accessToken = await firebaseAccessToken();
   } catch {
     console.error(JSON.stringify({ event: 'firebase_oauth_failed' }));
+    await Promise.all(alerts.map((alert) => completeAttempt(
+      alert,
+      0,
+      1,
+      'Firebase OAuth token acquisition failed',
+    )));
     return json({ error: 'Push delivery is temporarily unavailable' }, 502);
   }
 
   let sent = 0;
   let failed = 0;
   for (const alert of alerts) {
+    let alertSent = 0;
+    let alertFailed = 0;
+    let lastError: string | null = null;
+    let onlyUnregisteredFailures = true;
     const { data: tokens, error: tokenError } = await admin
       .from('mobile_push_tokens')
       .select('id, token')
       .eq('user_id', alert.recipient_user_id)
       .is('revoked_at', null);
-    if (tokenError || !tokens?.length) continue;
+    if (tokenError) {
+      failed += 1;
+      await completeAttempt(alert, 0, 1, `Push token lookup failed: ${tokenError.code}`);
+      continue;
+    }
+    if (!tokens?.length) {
+      failed += 1;
+      await completeAttempt(alert, 0, 1, 'Recipient has no active push token', true);
+      continue;
+    }
 
     for (const tokenRow of tokens) {
       try {
@@ -127,6 +173,7 @@ Deno.serve(async (request: Request) => {
         });
         if (response.ok) {
           sent += 1;
+          alertSent += 1;
           continue;
         }
         const result = await response.json().catch(() => null) as {
@@ -135,15 +182,36 @@ Deno.serve(async (request: Request) => {
         const errorCode = result?.error?.details?.find((detail) => detail.errorCode)?.errorCode;
         if (errorCode === 'UNREGISTERED') {
           await admin.from('mobile_push_tokens').update({ revoked_at: new Date().toISOString() }).eq('id', tokenRow.id);
+          alertFailed += 1;
+          lastError = 'FCM token is unregistered';
         } else {
           failed += 1;
+          alertFailed += 1;
+          onlyUnregisteredFailures = false;
+          lastError = `FCM request failed (${response.status}${errorCode ? `, ${errorCode}` : ''})`;
           console.warn(JSON.stringify({ event: 'fcm_send_failed', status: response.status, code: errorCode }));
         }
       } catch {
         failed += 1;
+        alertFailed += 1;
+        onlyUnregisteredFailures = false;
+        lastError = 'FCM network request failed';
         console.warn(JSON.stringify({ event: 'fcm_network_failed' }));
       }
     }
+
+    // Any successful device delivery completes the recipient alert. When all
+    // known tokens are unregistered there is nothing retryable until the app
+    // registers a new token, so record a permanent failure for operator review.
+    const allTokensInvalid = alertSent === 0 && alertFailed === tokens.length &&
+      onlyUnregisteredFailures;
+    await completeAttempt(
+      alert,
+      alertSent,
+      alertFailed,
+      lastError,
+      allTokensInvalid,
+    );
   }
 
   return json({ sent, failed, recipients: alerts.length }, sent === 0 && failed > 0 ? 502 : 200);

@@ -66,6 +66,8 @@ const PALETTE = ['#2563eb', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4
 const CLOSE_RADIUS_PX = 14;
 const DEFAULT_CENTER: [number, number] = [24.688, 46.722]; // Riyadh
 const DEFAULT_ZOOM = 15;
+const MIN_ACCURACY_METERS = 5;
+const MAX_ACCURACY_METERS = 500;
 
 interface LocationSearchResult {
   place_id: number;
@@ -146,6 +148,13 @@ function SaveModal({
   const [mode, setMode] = useState<CheckinMode>(initialMode);
   const [accuracy, setAccuracy] = useState(String(initialAccuracy));
   const [timeout, setTimeout_] = useState(String(initialTimeout));
+  const parsedAccuracy = Number(accuracy);
+  const parsedTimeout = Number(timeout);
+  const configValid = Number.isInteger(parsedAccuracy)
+    && parsedAccuracy >= MIN_ACCURACY_METERS
+    && parsedAccuracy <= MAX_ACCURACY_METERS
+    && Number.isInteger(parsedTimeout)
+    && parsedTimeout >= 1;
 
   // Compute bounding box of ring for SVG preview
   const preview = useMemo(() => {
@@ -168,7 +177,8 @@ function SaveModal({
 
   const handleSave = () => {
     if (!name.trim() || !branchId) return;
-    onSave(name.trim(), branchId, color, mode, Number(accuracy) || 50, Number(timeout) || 15);
+    if (!configValid) return;
+    onSave(name.trim(), branchId, color, mode, parsedAccuracy, parsedTimeout);
   };
 
   return (
@@ -259,11 +269,14 @@ function SaveModal({
             {/* Config */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs block mb-1" style={{ color: '#4b6a8a' }}>GPS Accuracy (m)</label>
-                <input type="number" min="5" max="500"
+                <label className="text-xs block mb-1" style={{ color: '#4b6a8a' }}>Maximum GPS uncertainty (m)</label>
+                <input type="number" min={MIN_ACCURACY_METERS} max={MAX_ACCURACY_METERS}
                   className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                   style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#f0f6ff' }}
                   value={accuracy} onChange={e => setAccuracy(e.target.value)} />
+                <div className="mt-1 text-[10px] leading-relaxed" style={{ color: '#4b6a8a' }}>
+                  Higher values tolerate weaker indoor GPS. 50 m is balanced; use 100 m for difficult indoor sites.
+                </div>
               </div>
               <div>
                 <label className="text-xs block mb-1" style={{ color: '#4b6a8a' }}>Auto-out Timeout (min)</label>
@@ -307,7 +320,7 @@ function SaveModal({
             <div className="flex gap-2 pt-1">
               <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl text-sm"
                 style={{ background: '#122338', color: '#4b6a8a', border: '1px solid #1e3a5a' }}>Cancel</button>
-              <button onClick={handleSave} disabled={!name.trim() || !branchId || saving}
+              <button onClick={handleSave} disabled={!name.trim() || !branchId || !configValid || saving}
                 className="flex-1 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-opacity"
                 style={{ background: name.trim() && branchId ? 'linear-gradient(135deg,#2563eb,#1d4ed8)' : '#1e3a5a', color: '#fff', opacity: saving ? 0.7 : 1 }}>
                 {saving ? <RefreshCw size={13} className="animate-spin" /> : null}
@@ -316,6 +329,92 @@ function SaveModal({
             </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AccuracyControl({
+  geofence,
+  saving,
+  error,
+  onSave,
+}: {
+  geofence: GeofenceWithPolygon;
+  saving: boolean;
+  error: string;
+  onSave: (meters: number) => void;
+}) {
+  const configuredMeters = geofence.required_accuracy_meters ?? 50;
+  const [value, setValue] = useState(String(configuredMeters));
+  const meters = Number(value);
+  const valid = Number.isInteger(meters) && meters >= MIN_ACCURACY_METERS && meters <= MAX_ACCURACY_METERS;
+  const changed = valid && meters !== configuredMeters;
+
+  return (
+    <div className="rounded-xl p-4" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <MapPin size={14} style={{ color: geofence.color ?? '#2563eb' }} />
+            <h2 className="text-sm font-semibold text-white">Location accuracy · {geofence.name}</h2>
+          </div>
+          <p className="mt-1 max-w-xl text-xs leading-relaxed" style={{ color: '#6b86a3' }}>
+            Attendance accepts a GPS reading when its reported uncertainty is at or below this value.
+            Increase it for indoor or high-rise sites where GPS is weaker; the polygon and mock-location checks still apply.
+          </p>
+        </div>
+        <div className="flex items-end gap-2">
+          <label className="text-xs" style={{ color: '#94a3b8' }}>
+            Maximum uncertainty
+            <div className="relative mt-1">
+              <input
+                aria-label="Maximum GPS uncertainty in metres"
+                type="number"
+                min={MIN_ACCURACY_METERS}
+                max={MAX_ACCURACY_METERS}
+                value={value}
+                onChange={event => setValue(event.target.value)}
+                className="w-28 rounded-lg px-3 py-2 pr-8 text-sm outline-none"
+                style={{ background: '#122338', border: `1px solid ${valid ? '#1e3a5a' : '#ef4444'}`, color: '#f0f6ff' }}
+              />
+              <span className="absolute right-3 top-2 text-xs" style={{ color: '#4b6a8a' }}>m</span>
+            </div>
+          </label>
+          <button
+            onClick={() => onSave(meters)}
+            disabled={!changed || saving}
+            className="rounded-lg px-4 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ background: '#2563eb', color: '#fff' }}
+          >
+            {saving ? 'Saving…' : 'Save accuracy'}
+          </button>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="text-[11px]" style={{ color: '#4b6a8a' }}>Quick settings:</span>
+        {[
+          { value: 25, label: 'Strict · 25 m' },
+          { value: 50, label: 'Balanced · 50 m' },
+          { value: 100, label: 'Indoor · 100 m' },
+        ].map(option => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => setValue(String(option.value))}
+            className="rounded-full px-2.5 py-1 text-[11px]"
+            style={{
+              background: meters === option.value ? 'rgba(37,99,235,.2)' : '#122338',
+              border: `1px solid ${meters === option.value ? '#2563eb' : '#1e3a5a'}`,
+              color: meters === option.value ? '#93c5fd' : '#94a3b8',
+            }}
+          >
+            {option.label}
+          </button>
+        ))}
+        <span className="text-[11px]" style={{ color: '#64748b' }}>Recommended: start at 50 m; use 100 m only where employees see accuracy rejections.</span>
+      </div>
+      {!valid && <div className="mt-2 text-xs" style={{ color: '#fca5a5' }}>Enter a whole number from {MIN_ACCURACY_METERS} to {MAX_ACCURACY_METERS} metres.</div>}
+      {error && <div className="mt-2 text-xs" style={{ color: '#fca5a5' }}>{error}</div>}
     </div>
   );
 }
@@ -958,6 +1057,8 @@ export default function Geofences() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [showAssign, setShowAssign] = useState(false);
+  const [accuracySaving, setAccuracySaving] = useState(false);
+  const [accuracyError, setAccuracyError] = useState('');
 
   // ── Config state ─────────────────────────────────────────────────────────
 
@@ -1127,6 +1228,24 @@ export default function Geofences() {
       setSbFences(prev => prev.map(f => f.id === gf.id ? { ...f, status: newStatus } : f));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to update status.');
+    }
+  };
+
+  const updateAccuracy = async (gf: GeofenceWithPolygon, meters: number) => {
+    if (!Number.isInteger(meters) || meters < MIN_ACCURACY_METERS || meters > MAX_ACCURACY_METERS) return;
+    setAccuracySaving(true);
+    setAccuracyError('');
+    try {
+      if (!supabaseReady) {
+        setMockFences(prev => prev.map(f => f.id === gf.id ? { ...f, required_accuracy_meters: meters } as MockFence : f));
+        return;
+      }
+      const updated = await geofenceService.update(gf.id, { required_accuracy_meters: meters, updated_by: user?.id ?? null });
+      setSbFences(prev => prev.map(f => f.id === gf.id ? updated : f));
+    } catch (caught) {
+      setAccuracyError(caught instanceof Error ? caught.message : 'Failed to update the accuracy setting.');
+    } finally {
+      setAccuracySaving(false);
     }
   };
 
@@ -1306,6 +1425,9 @@ export default function Geofences() {
                   <MapPin size={11} />
                   {supabaseReady ? `${(gf as GeofenceWithPolygon).ring.length} vertices` : `${(gf as unknown as { polygon: unknown[] }).polygon.length} vertices`}
                 </div>
+                <div className="flex items-center gap-1" style={{ color: '#f59e0b' }}>
+                  GPS ≤ {(gf as GeofenceWithPolygon).required_accuracy_meters ?? 50} m
+                </div>
               </div>
 
               {!supabaseReady && (gf as unknown as { employees: number }).employees > 0 && (
@@ -1412,6 +1534,16 @@ export default function Geofences() {
               )}
             </div>
           </div>
+
+          {!drawMode && selectedGf && (
+            <AccuracyControl
+              key={`${selectedGf.id}:${selectedGf.required_accuracy_meters}`}
+              geofence={selectedGf}
+              saving={accuracySaving}
+              error={accuracyError}
+              onSave={meters => void updateAccuracy(selectedGf, meters)}
+            />
+          )}
 
           {/* Employee assignment panel (Supabase only) */}
           {showAssign && selectedId && supabaseReady && (

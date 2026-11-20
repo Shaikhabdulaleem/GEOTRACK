@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
 import android.location.LocationManager
+import com.google.android.gms.location.CurrentLocationRequest
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
@@ -27,8 +28,16 @@ class DefaultLocationTracker @Inject constructor(
 
         return suspendCancellableCoroutine { cont ->
             val cancellationTokenSource = CancellationTokenSource()
+            // Do not reuse an old cached network fix for attendance. Give the
+            // fused provider a short window to obtain a fresh high-accuracy
+            // sample; the per-geofence threshold remains the final policy.
+            val request = CurrentLocationRequest.Builder()
+                .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+                .setMaxUpdateAgeMillis(0)
+                .setDurationMillis(FRESH_FIX_TIMEOUT_MS)
+                .build()
             fusedLocationProviderClient.getCurrentLocation(
-                Priority.PRIORITY_HIGH_ACCURACY,
+                request,
                 cancellationTokenSource.token
             ).addOnSuccessListener { location: Location? ->
                 if (location != null) {
@@ -56,5 +65,9 @@ class DefaultLocationTracker @Inject constructor(
                 cancellationTokenSource.cancel()
             }
         }
+    }
+
+    private companion object {
+        const val FRESH_FIX_TIMEOUT_MS = 10_000L
     }
 }

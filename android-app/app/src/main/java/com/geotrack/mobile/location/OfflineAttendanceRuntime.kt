@@ -1,6 +1,7 @@
 package com.geotrack.mobile.location
 
 import android.content.Context
+import android.util.Log
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.hilt.work.HiltWorker
@@ -11,11 +12,13 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.BackoffPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.geotrack.mobile.database.GeoTrackDatabase
 import com.geotrack.mobile.database.OfflineAttendanceEventEntity
 import com.geotrack.mobile.data.remote.supabase.SupabaseClientHolder
+import com.geotrack.mobile.core.security.DeviceIdentity
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import io.github.jan.supabase.postgrest.postgrest
@@ -37,12 +40,18 @@ object OfflineAttendanceSyncScheduler {
         WorkManager.getInstance(context).enqueueUniqueWork(
             UNIQUE_NOW,
             ExistingWorkPolicy.REPLACE,
-            OneTimeWorkRequestBuilder<OfflineAttendanceSyncWorker>().setConstraints(constraints).build(),
+            OneTimeWorkRequestBuilder<OfflineAttendanceSyncWorker>()
+                .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .build(),
         )
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             UNIQUE_PERIODIC,
             ExistingPeriodicWorkPolicy.UPDATE,
-            PeriodicWorkRequestBuilder<OfflineAttendanceSyncWorker>(15, TimeUnit.MINUTES).setConstraints(constraints).build(),
+            PeriodicWorkRequestBuilder<OfflineAttendanceSyncWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .build(),
         )
     }
 
@@ -69,6 +78,8 @@ private data class OfflineSyncResponse(
     @SerialName("validation_status") val validationStatus: String? = null,
     val reason: String? = null,
     val error: String? = null,
+    @SerialName("failure_class") val failureClass: String? = null,
+    val retryable: Boolean? = null,
 )
 
 @HiltWorker
@@ -81,15 +92,31 @@ class OfflineAttendanceSyncWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         val client = clientHolder.client ?: return Result.retry()
         client.auth.awaitInitialization()
+        val now = System.currentTimeMillis()
         if (client.auth.currentSessionOrNull() == null) {
-            database.offlineAttendanceDao().pending().forEach { event ->
-                database.offlineAttendanceDao().updateStatus(event.localEventId, "SYNC_FAILED", event.retryCount + 1, "Session expired", null, System.currentTimeMillis())
+            database.offlineAttendanceDao()
+                .readyForSync(now, OfflineSyncPolicy.MAX_RETRIES)
+                .forEach { event ->
+                database.offlineAttendanceDao().updateStatus(
+                    localEventId = event.localEventId,
+                    status = "REAUTHENTICATION_REQUIRED",
+                    retryCount = event.retryCount,
+                    error = "Sign in again to sync this attendance event",
+                    serverEventId = event.serverEventId,
+                    updatedAt = now,
+                    nextAttemptAt = 0,
+                    lastAttemptAt = event.lastAttemptAtEpochMillis,
+                    failureClass = "reauthentication",
+                )
             }
             return Result.success()
         }
-        val events = database.offlineAttendanceDao().pending()
+        val events = database.offlineAttendanceDao()
+            .readyForSync(now, OfflineSyncPolicy.MAX_RETRIES)
         var transientFailure = false
         for (event in events) {
+            val attemptAt = System.currentTimeMillis()
+            val nextRetryCount = event.retryCount + 1
             try {
                 val response = client.postgrest.rpc("sync_offline_attendance_event", buildJsonObject {
                     put("p_local_event_id", event.localEventId)
@@ -104,43 +131,77 @@ class OfflineAttendanceSyncWorker @AssistedInject constructor(
                     put("p_accuracy_meters", event.accuracyMeters)
                     put("p_is_mock_location", event.isMockLocation)
                     put("p_geofence_validation", event.geofenceValidation)
+                    put("p_device_hash", DeviceIdentity.hash(applicationContext))
                 }).decodeSingle<OfflineSyncResponse>()
-                val disposition = response.outcome ?: response.status
-                val synced = disposition !in setOf("SYNC_FAILED", "rejected", "device_blocked", "error", "failed")
-                database.offlineAttendanceDao().updateStatus(
-                    event.localEventId,
-                    if (synced) "SYNCED" else "SYNC_FAILED",
-                    event.retryCount + 1,
-                    response.error ?: if (synced) null else response.reason,
-                    response.locationEventId ?: response.eventId,
-                    System.currentTimeMillis(),
+                val disposition = OfflineSyncPolicy.classify(
+                    response.status,
+                    response.outcome,
+                    response.failureClass,
+                    response.retryable,
                 )
-            } catch (error: Exception) {
-                // Do not retry authorization/validation failures forever.  A
-                // retry is useful only when the transport is currently down;
-                // permanent failures remain visible as SYNC_FAILED.
-                if (applicationContext.hasNetworkConnection()) {
-                    database.offlineAttendanceDao().updateStatus(
-                        event.localEventId,
-                        "SYNC_FAILED",
-                        event.retryCount + 1,
-                        error.message,
-                        null,
-                        System.currentTimeMillis(),
-                    )
-                    continue
+                val exhausted = disposition == OfflineSyncPolicy.Disposition.RETRYABLE &&
+                    nextRetryCount >= OfflineSyncPolicy.MAX_RETRIES
+                val status = when {
+                    exhausted -> "REQUIRES_REVIEW"
+                    disposition == OfflineSyncPolicy.Disposition.SYNCED -> "SYNCED"
+                    disposition == OfflineSyncPolicy.Disposition.RETRYABLE -> "RETRYABLE_FAILURE"
+                    disposition == OfflineSyncPolicy.Disposition.REAUTHENTICATION -> "REAUTHENTICATION_REQUIRED"
+                    disposition == OfflineSyncPolicy.Disposition.REVIEW_REQUIRED -> "REQUIRES_REVIEW"
+                    else -> "PERMANENT_FAILURE"
                 }
-                transientFailure = true
+                val shouldRetry = status == "RETRYABLE_FAILURE"
+                transientFailure = transientFailure || shouldRetry
                 database.offlineAttendanceDao().updateStatus(
-                    event.localEventId,
-                    "SYNC_FAILED",
-                    event.retryCount + 1,
-                    error.message,
-                    null,
-                    System.currentTimeMillis(),
+                    localEventId = event.localEventId,
+                    status = status,
+                    retryCount = nextRetryCount,
+                    error = response.error ?: if (status == "SYNCED") null else response.reason,
+                    serverEventId = response.locationEventId ?: response.eventId,
+                    updatedAt = System.currentTimeMillis(),
+                    nextAttemptAt = if (shouldRetry) {
+                        OfflineSyncPolicy.nextAttemptAt(attemptAt, nextRetryCount)
+                    } else 0,
+                    lastAttemptAt = attemptAt,
+                    failureClass = if (exhausted) "retry_exhausted" else response.failureClass,
                 )
+                if (status == "REQUIRES_REVIEW" || status == "PERMANENT_FAILURE") {
+                    Log.w(TAG, "Offline attendance ${event.localEventId} requires review: ${response.reason ?: response.error}")
+                }
+            } catch (error: Exception) {
+                val sessionExpired = client.auth.currentSessionOrNull() == null
+                val exhausted = !sessionExpired && nextRetryCount >= OfflineSyncPolicy.MAX_RETRIES
+                val status = when {
+                    sessionExpired -> "REAUTHENTICATION_REQUIRED"
+                    exhausted -> "REQUIRES_REVIEW"
+                    else -> "RETRYABLE_FAILURE"
+                }
+                transientFailure = transientFailure || status == "RETRYABLE_FAILURE"
+                database.offlineAttendanceDao().updateStatus(
+                    localEventId = event.localEventId,
+                    status = status,
+                    retryCount = if (sessionExpired) event.retryCount else nextRetryCount,
+                    error = error.message,
+                    serverEventId = event.serverEventId,
+                    updatedAt = System.currentTimeMillis(),
+                    nextAttemptAt = if (status == "RETRYABLE_FAILURE") {
+                        OfflineSyncPolicy.nextAttemptAt(attemptAt, nextRetryCount)
+                    } else 0,
+                    lastAttemptAt = attemptAt,
+                    failureClass = when {
+                        sessionExpired -> "reauthentication"
+                        exhausted -> "retry_exhausted"
+                        else -> "retryable"
+                    },
+                )
+                if (nextRetryCount >= 3) {
+                    Log.w(TAG, "Repeated offline attendance sync failure (${nextRetryCount}/${OfflineSyncPolicy.MAX_RETRIES})", error)
+                }
             }
         }
         return if (transientFailure) Result.retry() else Result.success()
+    }
+
+    private companion object {
+        const val TAG = "OfflineAttendanceSync"
     }
 }

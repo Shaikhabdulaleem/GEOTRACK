@@ -8,6 +8,7 @@ import com.geotrack.mobile.core.config.SupabaseConfig
 import com.geotrack.mobile.data.repository.SupabaseAuthRepository
 import com.geotrack.mobile.data.repository.SupabaseSessionRepository
 import com.geotrack.mobile.database.GeoTrackDatabase
+import com.geotrack.mobile.database.DatabaseMigrations
 import com.geotrack.mobile.domain.repository.AuthRepository
 import com.geotrack.mobile.domain.repository.SessionRepository
 import dagger.Binds
@@ -55,7 +56,9 @@ object AppModule {
                 // geofence's configured value.
                 db.execSQL("ALTER TABLE cached_geofences ADD COLUMN requiredAccuracyMeters INTEGER NOT NULL DEFAULT 50")
             }
-        }).fallbackToDestructiveMigrationOnDowngrade().build()
+        }).addMigrations(DatabaseMigrations.MIGRATION_4_5)
+            .fallbackToDestructiveMigrationOnDowngrade()
+            .build()
         
     @Provides
     @Singleton

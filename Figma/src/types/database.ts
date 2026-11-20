@@ -47,6 +47,12 @@ export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelle
 export type NotificationSeverity = 'info' | 'warning' | 'error';
 export type DevicePlatform = 'android' | 'ios' | 'web';
 export type DeviceIntegrityStatus = 'unknown' | 'valid' | 'suspected' | 'blocked';
+export type MailroomProcessingMode = 'immediate' | 'validation_gated';
+export type MailroomVolumeDriver = 'received' | 'validated' | 'processed';
+export type MailroomActivityVolumeSource = 'client_mapping' | 'dsp_allocated' | 'returns_received';
+export type MailroomLaborClass = 'dlp' | 'non_dlp';
+export type MailroomEmploymentSource = 'own' | '3pl';
+export type MailroomDailyEntryStatus = 'draft' | 'finalized';
 
 export interface GeoJsonPoint {
   type: 'Point';
@@ -169,6 +175,7 @@ export interface EmployeeProfileRow {
   manager_user_id: string | null;
   joining_date: string | null;
   employment_status: EmploymentStatus;
+  status_effective_date?: string | null;
   must_change_password: boolean;
   login_last_reset_at: string | null;
   created_at: string;
@@ -429,6 +436,150 @@ export interface ProductivityRecordRow {
   updated_at: string;
 }
 
+export interface MailroomProductivitySettingsRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  standard_hours_per_day: number;
+  planned_absence_percent: number;
+  max_overtime_hours_per_day: number;
+  week_starts_on: number;
+  opening_return_backlog: number;
+  overtime_hourly_cost: number;
+  overtime_hourly_cost_own: number;
+  overtime_hourly_cost_3pl: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomDailyTurnaroundMetricRow {
+  organization_id: string;
+  branch_id: string;
+  client_id: string;
+  work_date: string;
+  warehouse_code: string;
+  total_minutes: number;
+  shipment_count: number;
+  updated_at: string;
+}
+
+export interface MailroomClientRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  code: string;
+  name: string;
+  processing_mode: MailroomProcessingMode;
+  opening_awaiting_validation: number;
+  opening_ready_to_process: number;
+  opening_unprocessed_units: number;
+  status: RecordStatus;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomActivityRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  code: string;
+  name: string;
+  units_per_labor_hour: number;
+  volume_source: MailroomActivityVolumeSource;
+  status: RecordStatus;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomClientActivityRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  client_id: string;
+  activity_id: string;
+  volume_driver: MailroomVolumeDriver;
+  workload_multiplier: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomDailyShipmentRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  client_id: string;
+  work_date: string;
+  received_units: number;
+  validated_units: number;
+  processed_units: number;
+  backlog_released_units: number;
+  batch_closed_units: number;
+  returns_received: number;
+  returns_processed: number;
+  notes: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomEmployeeSettingsRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  employee_id: string;
+  labor_class: MailroomLaborClass;
+  employment_source: MailroomEmploymentSource;
+  overtime_eligible: boolean;
+  max_overtime_hours_override: number | null;
+  overtime_hourly_cost: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomDspPartnerRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  code: string;
+  name: string;
+  status: RecordStatus;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomDailyEntryRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  work_date: string;
+  status: MailroomDailyEntryStatus;
+  returns_received: number;
+  returns_processed: number;
+  notes: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  finalized_by: string | null;
+  finalized_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MailroomDailyDspAllocationRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  daily_entry_id: string;
+  client_id: string;
+  partner_id: string;
+  allocated_units: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PhoneUsageRecordRow {
   id: string;
   organization_id: string;
@@ -444,6 +595,7 @@ export interface PhoneUsageRecordRow {
   policy_limit_minutes: number | null;
   source: string | null;
   consent_version: string | null;
+  data_status: 'available' | 'partial' | 'permission_not_granted' | 'no_data';
   created_at: string;
   updated_at: string;
 }
@@ -554,6 +706,16 @@ export interface Database {
       manual_attendance_requests: TableDefinition<ManualAttendanceRequestRow, 'organization_id' | 'employee_id' | 'request_type' | 'requested_at' | 'reason' | 'requested_by'>;
       overtime_records: TableDefinition<OvertimeRecordRow, 'organization_id' | 'employee_id' | 'attendance_record_id' | 'requested_minutes' | 'requested_by'>;
       productivity_records: TableDefinition<ProductivityRecordRow, 'organization_id' | 'employee_id' | 'work_date' | 'metric_code'>;
+      mailroom_productivity_settings: TableDefinition<MailroomProductivitySettingsRow, 'organization_id' | 'branch_id'>;
+      mailroom_clients: TableDefinition<MailroomClientRow, 'organization_id' | 'branch_id' | 'code' | 'name' | 'processing_mode'>;
+      mailroom_activities: TableDefinition<MailroomActivityRow, 'organization_id' | 'branch_id' | 'code' | 'name' | 'units_per_labor_hour'>;
+      mailroom_client_activities: TableDefinition<MailroomClientActivityRow, 'organization_id' | 'branch_id' | 'client_id' | 'activity_id' | 'volume_driver'>;
+      mailroom_daily_shipments: TableDefinition<MailroomDailyShipmentRow, 'organization_id' | 'branch_id' | 'client_id' | 'work_date'>;
+      mailroom_employee_settings: TableDefinition<MailroomEmployeeSettingsRow, 'organization_id' | 'branch_id' | 'employee_id'>;
+      mailroom_dsp_partners: TableDefinition<MailroomDspPartnerRow, 'organization_id' | 'branch_id' | 'code' | 'name'>;
+      mailroom_daily_entries: TableDefinition<MailroomDailyEntryRow, 'organization_id' | 'branch_id' | 'work_date'>;
+      mailroom_daily_dsp_allocations: TableDefinition<MailroomDailyDspAllocationRow, 'organization_id' | 'branch_id' | 'daily_entry_id' | 'client_id' | 'partner_id'>;
+      mailroom_daily_turnaround_metrics: TableDefinition<MailroomDailyTurnaroundMetricRow, 'organization_id' | 'branch_id' | 'client_id' | 'work_date' | 'warehouse_code' | 'total_minutes' | 'shipment_count'>;
       phone_usage_records: TableDefinition<PhoneUsageRecordRow, 'organization_id' | 'employee_id' | 'work_date'>;
       notifications: TableDefinition<NotificationRow, 'organization_id' | 'recipient_user_id' | 'notification_type' | 'title' | 'body'>;
       leave_requests: TableDefinition<LeaveRequestRow, 'organization_id' | 'employee_id' | 'leave_type' | 'from_date' | 'to_date' | 'days' | 'reason' | 'requested_by'>;
@@ -708,6 +870,52 @@ export interface Database {
         Args: { p_decisions: Json };
         Returns: OvertimeRecordRow[];
       };
+      get_dashboard_trends: {
+        Args: {
+          p_organization_id: string;
+          p_end_date: string;
+          p_days?: number;
+          p_branch_id?: string | null;
+          p_department_id?: string | null;
+          p_shift_id?: string | null;
+          p_manager_id?: string | null;
+          p_employee_id?: string | null;
+        };
+        Returns: Json;
+      };
+      initialize_mailroom_productivity: {
+        Args: { p_organization_id: string };
+        Returns: Json;
+      };
+      save_mailroom_productivity_week: {
+        Args: { p_organization_id: string; p_week_start: string; p_rows: Json };
+        Returns: number;
+      };
+      save_mailroom_productivity_day: {
+        Args: {
+          p_organization_id: string;
+          p_work_date: string;
+          p_status: MailroomDailyEntryStatus;
+          p_clients: Json;
+          p_returns_received: number;
+          p_returns_processed: number;
+          p_dsp_allocations: Json;
+          p_notes?: string | null;
+        };
+        Returns: Json;
+      };
+      save_mailroom_productivity_month: {
+        Args: { p_organization_id: string; p_days: Json };
+        Returns: Json;
+      };
+      save_mailroom_turnaround_metrics: {
+        Args: { p_organization_id: string; p_rows: Json };
+        Returns: number;
+      };
+      save_mailroom_client_returns: {
+        Args: { p_organization_id: string; p_rows: Json };
+        Returns: number;
+      };
       manager_correct_attendance: {
         Args: {
           p_organization_id: string;
@@ -727,6 +935,10 @@ export interface Database {
       complete_password_change: {
         Args: Record<string, never>;
         Returns: undefined;
+      };
+      review_employee_device_enrollment: {
+        Args: { p_device_id: string; p_decision: 'approve' | 'reject'; p_reason?: string | null };
+        Returns: EmployeeDeviceRow;
       };
       record_location_ping: {
         Args: {

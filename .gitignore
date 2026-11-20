@@ -65,6 +65,8 @@ logs/
 .tmp-*
 tree.txt
 android-tree.txt
+outputs/
+tmp/
 
 # Local agent/runtime state
 **/.plugins/

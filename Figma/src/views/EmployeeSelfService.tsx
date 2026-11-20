@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, Bell, Calendar, CheckCircle, Clock, Loader2, LogIn, LogOut, MapPin, RotateCcw, Timer, TrendingUp, UserRound, ArrowRight } from 'lucide-react';
+import { AlertCircle, Bell, Calendar, CheckCircle, Clock, Loader2, LogIn, LogOut, MapPin, RotateCcw, Timer, TrendingUp, UserRound, ArrowRight, X } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { attendanceService, type AttendanceActionInput } from '../services/attendance.service';
+import { correctionService } from '../services/correction.service';
 import { getErrorMessage } from '../lib/errors';
-import type { AttendanceRecordRow } from '../types/database';
+import type { AttendanceRecordRow, ManualAttendanceRequestRow } from '../types/database';
 import { employeeDashboardService, type EmployeeDashboardMetrics } from '../services/employeeDashboard.service';
 
 function getLocation(): Promise<GeolocationPosition> {
@@ -34,23 +35,39 @@ export default function EmployeeSelfService() {
   const [action, setAction] = useState<'check-in' | 'check-out' | null>(null);
   const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
+  // Correction request states
+  const [myCorrections, setMyCorrections] = useState<ManualAttendanceRequestRow[]>([]);
+  const [showCorrectionModal, setShowCorrectionModal] = useState(false);
+  const [corrType, setCorrType] = useState<'check_in' | 'check_out'>('check_in');
+  const [corrDate, setCorrDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [corrTime, setCorrTime] = useState(() => `${new Date().toISOString().slice(0, 10)}T09:00`);
+  const [corrReason, setCorrReason] = useState('');
+  const [corrSaving, setCorrSaving] = useState(false);
+  const [corrError, setCorrError] = useState('');
+
   const loadAttendance = useCallback(async () => {
     if (!employeeProfile || !activeMembership || !profile) return;
     setLoading(true);
     setMessage(null);
     try {
-      const nextRecords = await attendanceService.list({
-        organizationId: activeMembership.organization_id,
-        employeeId: employeeProfile.id,
-      });
+      const [nextRecords, metrics, corrList] = await Promise.all([
+        attendanceService.list({
+          organizationId: activeMembership.organization_id,
+          employeeId: employeeProfile.id,
+        }),
+        employeeDashboardService.getMetrics(
+          activeMembership.organization_id,
+          employeeProfile.id,
+          profile.id,
+        ),
+        correctionService.list({
+          organizationId: activeMembership.organization_id,
+          employeeId: employeeProfile.id,
+        }),
+      ]);
       setRecords(nextRecords.slice(0, 7));
-
-      const metrics = await employeeDashboardService.getMetrics(
-        activeMembership.organization_id,
-        employeeProfile.id,
-        profile.id
-      );
       setDashMetrics(metrics);
+      setMyCorrections(corrList.slice(0, 5));
     } catch (caught) {
       setMessage({ kind: 'error', text: getErrorMessage(caught) });
     } finally {
@@ -61,6 +78,42 @@ export default function EmployeeSelfService() {
   useEffect(() => {
     void loadAttendance();
   }, [loadAttendance]);
+
+  const submitCorrectionRequest = async () => {
+    if (!profile || !employeeProfile || !activeMembership) return;
+    if (!corrTime) {
+      setCorrError('Requested timestamp is required.');
+      return;
+    }
+    if (corrReason.trim().length < 3) {
+      setCorrError('Please provide a reason explaining this attendance correction.');
+      return;
+    }
+    setCorrSaving(true);
+    setCorrError('');
+    try {
+      await correctionService.submitRequest({
+        organization_id: activeMembership.organization_id,
+        employee_id: employeeProfile.id,
+        request_type: corrType,
+        requested_at: new Date(corrTime).toISOString(),
+        reason: corrReason.trim(),
+        requested_by: profile.id,
+        status: 'pending',
+      });
+      setShowCorrectionModal(false);
+      setCorrReason('');
+      setMessage({
+        kind: 'success',
+        text: 'Attendance correction request submitted for manager review.',
+      });
+      await loadAttendance();
+    } catch (err) {
+      setCorrError(getErrorMessage(err));
+    } finally {
+      setCorrSaving(false);
+    }
+  };
 
   const submitAttendance = async (nextAction: 'check-in' | 'check-out') => {
     setAction(nextAction);
@@ -193,16 +246,24 @@ export default function EmployeeSelfService() {
 
             <div className="grid grid-cols-3 gap-2">
               {[
-                { icon: UserRound, label: 'Profile' },
-                { icon: Calendar, label: 'Schedule' },
-                { icon: Clock, label: 'Attendance' },
-                { icon: RotateCcw, label: 'Correction' },
-                { icon: Timer, label: 'Overtime' },
-                { icon: TrendingUp, label: 'Productivity' },
+                { icon: UserRound, label: 'Profile', onClick: undefined },
+                { icon: Calendar, label: 'Schedule', onClick: undefined },
+                { icon: Clock, label: 'Attendance', onClick: undefined },
+                { icon: RotateCcw, label: 'Correction', onClick: () => setShowCorrectionModal(true) },
+                { icon: Timer, label: 'Overtime', onClick: undefined },
+                { icon: TrendingUp, label: 'Productivity', onClick: undefined },
               ].map(item => (
-                <div key={item.label} className="rounded-xl p-3 flex flex-col items-center gap-1 text-xs" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#4b6a8a' }}>
-                  <item.icon size={16} style={{ color: '#3b82f6' }} /> {item.label}
-                </div>
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={item.onClick}
+                  className={`rounded-xl p-3 flex flex-col items-center gap-1 text-xs transition ${
+                    item.onClick ? 'hover:bg-[#1a324d] cursor-pointer' : 'cursor-default'
+                  }`}
+                  style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: item.onClick ? '#e2e8f0' : '#4b6a8a' }}
+                >
+                  <item.icon size={16} style={{ color: item.onClick ? '#60a5fa' : '#3b82f6' }} /> {item.label}
+                </button>
               ))}
             </div>
           </div>
@@ -325,11 +386,168 @@ export default function EmployeeSelfService() {
                     <div className="text-xs text-center py-6" style={{ color: '#4b6a8a' }}>No recent records.</div>
                   )}
                 </div>
+
+                {/* My Attendance Corrections */}
+                <div className="rounded-2xl p-5" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <RotateCcw size={18} style={{ color: '#38bdf8' }} />
+                      <h2 className="font-bold text-white">My Attendance Corrections</h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowCorrectionModal(true)}
+                      className="px-2.5 py-1 text-xs font-medium rounded-lg transition hover:bg-sky-500/30"
+                      style={{ background: 'rgba(56,189,248,0.15)', color: '#38bdf8', border: '1px solid rgba(56,189,248,0.3)' }}
+                    >
+                      + Request
+                    </button>
+                  </div>
+                  {myCorrections.length > 0 ? (
+                    <div className="space-y-2">
+                      {myCorrections.map(corr => (
+                        <div key={corr.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: '#122338' }}>
+                          <div>
+                            <div className="text-xs font-semibold text-white capitalize">
+                              {corr.request_type.replace('_', ' ')}: {new Date(corr.requested_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">
+                              {new Date(corr.requested_at).toISOString().slice(0, 10)} • {corr.reason}
+                            </div>
+                            {corr.review_note && (
+                              <div className="text-[10px] text-slate-500 mt-1 italic">
+                                Note: {corr.review_note}
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <span
+                              className="text-[10px] px-2 py-0.5 rounded-full capitalize font-semibold"
+                              style={{
+                                background: corr.status === 'approved' ? 'rgba(16,185,129,0.15)' : corr.status === 'rejected' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                                color: corr.status === 'approved' ? '#34d399' : corr.status === 'rejected' ? '#f87171' : '#fbbf24',
+                              }}
+                            >
+                              {corr.status}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-center py-4" style={{ color: '#4b6a8a' }}>
+                      No recent correction requests.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </>
         )}
       </div>
+
+      {/* Employee Correction Modal */}
+      {showCorrectionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl p-6 shadow-2xl relative" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+            <button
+              type="button"
+              onClick={() => setShowCorrectionModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white"
+            >
+              <X size={18} />
+            </button>
+            <div className="flex items-center gap-2 mb-4">
+              <RotateCcw size={20} className="text-sky-400" />
+              <h2 className="text-lg font-bold text-white">Request Attendance Correction</h2>
+            </div>
+            <p className="text-xs text-slate-400 mb-5">
+              Submit a punch-in or punch-out time correction for manager review and approval.
+            </p>
+
+            {corrError && (
+              <div className="mb-4 p-3 rounded-xl text-xs flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.15)', color: '#fca5a5' }}>
+                <AlertCircle size={15} />
+                <span>{corrError}</span>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Correction Type</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCorrType('check_in')}
+                    className={`py-2 px-3 rounded-xl text-xs font-medium border transition ${
+                      corrType === 'check_in'
+                        ? 'bg-blue-600/30 border-blue-500 text-blue-300'
+                        : 'bg-[#122338] border-[#1e3a5a] text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Check In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCorrType('check_out')}
+                    className={`py-2 px-3 rounded-xl text-xs font-medium border transition ${
+                      corrType === 'check_out'
+                        ? 'bg-blue-600/30 border-blue-500 text-blue-300'
+                        : 'bg-[#122338] border-[#1e3a5a] text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Check Out
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Actual Punch Date & Time</label>
+                <input
+                  type="datetime-local"
+                  value={corrTime}
+                  onChange={(e) => setCorrTime(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl text-xs text-white border outline-none"
+                  style={{ background: '#122338', borderColor: '#1e3a5a' }}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Reason for Correction <span className="text-red-400">*</span></label>
+                <textarea
+                  rows={3}
+                  value={corrReason}
+                  onChange={(e) => setCorrReason(e.target.value)}
+                  placeholder="e.g. biometric scanner malfunction, forgotten punch-out during emergency, etc."
+                  className="w-full px-3 py-2 rounded-xl text-xs text-white border outline-none resize-none"
+                  style={{ background: '#122338', borderColor: '#1e3a5a' }}
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCorrectionModal(false)}
+                  disabled={corrSaving}
+                  className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white border border-[#1e3a5a]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitCorrectionRequest()}
+                  disabled={corrSaving}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 transition"
+                  style={{ background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', opacity: corrSaving ? 0.7 : 1 }}
+                >
+                  {corrSaving && <Loader2 size={13} className="animate-spin" />}
+                  Submit Request
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

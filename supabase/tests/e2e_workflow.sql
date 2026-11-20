@@ -59,6 +59,12 @@ BEGIN
     (v_empC, v_empC, v_org, v_branch, v_dept, 'E03', '9000000003', 'Emp C', v_manager),
     (v_empD, v_empD, v_org, v_branch, v_dept, 'E04', '9000000004', 'Emp D', v_manager);
 
+  INSERT INTO public.employee_devices (
+    organization_id, employee_id, device_identifier_hash, platform, integrity_status
+  ) VALUES
+    (v_org, v_empA, repeat('a', 64), 'android', 'valid'),
+    (v_org, v_empC, repeat('c', 64), 'android', 'valid');
+
   INSERT INTO public.manager_scopes (organization_id, manager_user_id, department_id)
   VALUES (v_org, v_manager, v_dept);
 
@@ -115,14 +121,14 @@ BEGIN
   perform set_config('request.jwt.claims', format('{"sub": "%s"}', v_empA), true);
   
   SELECT * INTO v_out FROM public.process_attendance_event(
-    v_empA, v_geofence, 'check_in', false, 0, 0, 10, false, 'empA-in', '{}'
+    v_empA, v_geofence, 'check_in', false, 0, 0, 10, false, 'empA-in', '{}', repeat('a', 64)
   );
   if v_out.status = 'outside_geofence' then
     RAISE EXCEPTION 'Emp A check in failed: outside geofence';
   end if;
 
   SELECT * INTO v_out FROM public.process_attendance_event(
-    v_empA, v_geofence, 'check_out', false, 0, 0, 10, false, 'empA-out', '{}'
+    v_empA, v_geofence, 'check_out', false, 0, 0, 10, false, 'empA-out', '{}', repeat('a', 64)
   );
 
   SELECT * INTO v_record FROM public.attendance_records WHERE employee_id = v_empA;
@@ -138,7 +144,7 @@ BEGIN
   perform set_config('request.jwt.claims', format('{"sub": "%s"}', v_empC), true);
   begin
     PERFORM public.process_attendance_event(
-      v_empC, v_geofence, 'check_in', false, 0, 0, 10, false, 'empC-in', '{}'
+      v_empC, v_geofence, 'check_in', false, 0, 0, 10, false, 'empC-in', '{}', repeat('c', 64)
     );
     RAISE EXCEPTION 'Emp C off-day check-in should have been rejected';
   exception

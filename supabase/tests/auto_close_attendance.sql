@@ -74,6 +74,10 @@ BEGIN
          (v_empD, v_empD, v_org, v_branch, v_dept, 'E04', '9100000004', 'Emp D'),
          (v_empE, v_empE, v_org, v_branch, v_dept, 'E05', '9100000005', 'Emp E');
 
+  INSERT INTO public.employee_devices (
+    organization_id, employee_id, device_identifier_hash, platform, integrity_status
+  ) VALUES (v_org, v_empD, repeat('d', 64), 'android', 'valid');
+
   -- A one-minute shift (used dated to yesterday so it is reliably past the
   -- grace regardless of the wall-clock time the test runs), and one that runs
   -- all of today.
@@ -163,28 +167,28 @@ BEGIN
   PERFORM set_config('request.jwt.claims', format('{"sub": "%s"}', v_empD), true);
   SELECT * INTO v_location_result FROM public.record_attendance_location(
     v_empD, v_geofence, 50, 50, 1000, false,
-    v_graceD_exit - interval '4 minutes', 'emp-d-low-accuracy', 'device-emp-d', 'test'
+    v_graceD_exit - interval '4 minutes', 'emp-d-low-accuracy', repeat('d', 64), 'test'
   );
   IF v_location_result.outcome <> 'rejected' OR v_location_result.reason <> 'low_accuracy' THEN
     RAISE EXCEPTION 'Low-accuracy point should be rejected'; END IF;
 
   SELECT * INTO v_location_result FROM public.record_attendance_location(
     v_empD, v_geofence, 50, 50, 5, true,
-    v_graceD_exit - interval '3 minutes', 'emp-d-mock', 'device-emp-d', 'test'
+    v_graceD_exit - interval '3 minutes', 'emp-d-mock', repeat('d', 64), 'test'
   );
   IF v_location_result.outcome <> 'rejected' OR v_location_result.reason <> 'mock_location' THEN
     RAISE EXCEPTION 'Mock point should be rejected'; END IF;
 
   SELECT * INTO v_location_result FROM public.record_attendance_location(
     v_empD, v_geofence, 50, 50, 5, false,
-    v_graceD_exit, 'emp-d-valid-exit', 'device-emp-d', 'test'
+    v_graceD_exit, 'emp-d-valid-exit', repeat('d', 64), 'test'
   );
   IF v_location_result.outcome <> 'checkout_completed' OR v_location_result.classified_position <> 'outside' THEN
     RAISE EXCEPTION 'Accurate grace-window exit should close immediately'; END IF;
 
   SELECT * INTO v_location_result FROM public.record_attendance_location(
     v_empD, v_geofence, 50, 50, 5, false,
-    v_graceD_exit, 'emp-d-valid-exit', 'device-emp-d', 'test'
+    v_graceD_exit, 'emp-d-valid-exit', repeat('d', 64), 'test'
   );
   IF v_location_result.outcome <> 'checkout_completed' OR v_location_result.reason <> 'duplicate' THEN
     RAISE EXCEPTION 'Duplicate location event should return the existing checkout'; END IF;

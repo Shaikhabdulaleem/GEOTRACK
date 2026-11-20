@@ -27,6 +27,35 @@
   Sev-2 attendance outage or notification failure; Sev-3 degraded reporting.
 - Review Supabase security and performance advisors after every schema change
   and at least monthly.
+- Keep `geotrack-cron-failure-monitor` active every five minutes. It creates one
+  administrator notification for each latest failed GEOTRACK cron run and for
+  each terminal breach-push delivery failure. Alert externally as well; an
+  in-app notification alone is insufficient during a platform outage.
+- Monitor `geofence_breach_alerts.delivery_status`: pending oldest age,
+  `in_flight` older than ten minutes, retry attempts, permanent failures, and
+  successful downstream deliveries. Cron success is not proof of FCM success.
+
+### Dispatcher secret rotation
+
+The breach dispatcher cron command must contain only Vault lookups. It must not
+contain a bearer token, service-role key, or literal secret.
+
+1. Generate a high-entropy replacement outside SQL and store it in the approved
+   secrets manager.
+2. Update the `SCHEDULE_SECRET` Edge Function secret.
+3. Upsert Supabase Vault secrets named `geotrack_project_url` and
+   `geotrack_breach_dispatch_secret` through an approved administrator session.
+   Do not paste values into migration files, tickets, logs, or command history.
+4. Deploy the dispatcher, invoke one authenticated staging request, and confirm
+   queue completion. Then enable/schedule `geotrack-dispatch-breach-alerts`.
+5. Revoke the prior credential and inspect `cron.job.command` only for the
+   absence of literal credentials. Record rotation date and owner without the
+   value.
+6. If rotation fails, disable the dispatcher cron, preserve queued alerts, and
+   restore the previous Edge Function configuration through the secrets manager.
+
+Rotate immediately after any suspected exposure, on staff/owner change, and at
+the approved periodic interval.
 
 ### Automatic checkout health
 
@@ -73,6 +102,19 @@ Review them using approved attendance evidence; never infer a checkout time.
 3. Determine affected users, records, time window and cross-tenant impact.
 4. Follow the approved Saudi PDPL breach assessment/notification procedure.
 5. Restore service, validate RLS and document corrective actions.
+
+### Attendance processing incident
+
+1. Disable only the failing automated job or Edge Function; keep manual
+   attendance and correction available.
+2. Preserve offline outbox, raw evidence, breach, audit, and cron-run rows. Do
+   not bulk mark events synced and do not infer checkout/absence from silence.
+3. Identify affected organizations, employees, sessions, time window, and
+   application versions using minimized identifiers.
+4. Reconcile idempotently in staging first, then run the reviewed production
+   repair. Require an audit reason for every attendance correction.
+5. Notify payroll/operations owners and follow the privacy incident process if
+   location or employee data may have been exposed.
 
 ## Required production register
 
