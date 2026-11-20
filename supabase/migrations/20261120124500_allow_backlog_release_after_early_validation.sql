@@ -18,6 +18,8 @@ begin
 
   if v_updated <> v_definition then
     execute v_updated;
+    execute 'revoke all on function public.save_mailroom_productivity_day(uuid, date, text, jsonb, bigint, bigint, jsonb, text) from public, anon;';
+    execute 'grant execute on function public.save_mailroom_productivity_day(uuid, date, text, jsonb, bigint, bigint, jsonb, text) to authenticated;';
   end if;
 end;
 $$;

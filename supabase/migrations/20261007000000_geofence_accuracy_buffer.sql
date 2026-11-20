@@ -397,3 +397,6 @@ begin
   return query select v_record.id, v_event_id, v_record.status::text, true, v_validation;
 end;
 $function$;
+
+revoke all on function public.process_attendance_event_legacy(uuid, uuid, text, boolean, double precision, double precision, double precision, boolean, text, jsonb) from public, anon;
+grant execute on function public.process_attendance_event_legacy(uuid, uuid, text, boolean, double precision, double precision, double precision, boolean, text, jsonb) to authenticated;

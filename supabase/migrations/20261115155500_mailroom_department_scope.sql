@@ -120,3 +120,6 @@ begin
   return jsonb_build_object('branch_id', v_branch_id, 'department_id', v_department_id, 'clients', v_clients, 'mappings_added', v_activities);
 end;
 $$;
+
+revoke all on function public.initialize_mailroom_productivity(uuid) from public, anon;
+grant execute on function public.initialize_mailroom_productivity(uuid) to authenticated;
