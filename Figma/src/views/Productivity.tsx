@@ -89,6 +89,8 @@ function EmployeeProductivity() {
     const agg: Record<string, { target: number; units: number; hours: number; shiftName: string }> = {};
     
     records.forEach(r => {
+      const emp = emps[r.employee_id];
+      if (emp && r.work_date && !isEmployeeActiveOnDate(emp, r.work_date)) return;
       if (!agg[r.employee_id]) {
         let sName = 'Unassigned';
         if (r.shift_assignment_id && assignments[r.shift_assignment_id]) {
@@ -674,7 +676,17 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
 
   const employeeOvertimeRows = useMemo(() => {
     return workspace.employees
-      .filter(employee => isEmployeeActiveOnDate(employee, workDate))
+      .filter(employee => {
+        if (isEmployeeActiveOnDate(employee, workDate)) return true;
+        const hasAttendance = workspace.attendance.some(a => a.employee_id === employee.id && a.attendance_date === workDate);
+        const { approvedMinutes, requestedMinutes } = getApprovedOvertimeMinutes(
+          employee.id,
+          workDate,
+          workspace.attendance,
+          workspace.overtimeRecords ?? []
+        );
+        return hasAttendance || approvedMinutes > 0 || requestedMinutes > 0;
+      })
       .map(employee => {
         const setting = workspace.employeeSettings.find(s => s.employee_id === employee.id);
         const schedule = workspace.schedules[employee.id]?.find(s => s.work_date === workDate);

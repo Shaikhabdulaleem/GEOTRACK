@@ -60,7 +60,11 @@ export const employeeService = {
       rows.forEach(r => {
         if (!r.status_effective_date) {
           const stored = localStorage.getItem(`emp_status_date_${r.id}`);
-          r.status_effective_date = stored || r.joining_date || r.created_at?.slice(0, 10) || null;
+          if (stored) {
+            r.status_effective_date = stored;
+          } else if (r.employment_status === 'active') {
+            r.status_effective_date = r.joining_date || r.created_at?.slice(0, 10) || null;
+          }
         }
       });
     }
@@ -89,7 +93,11 @@ export const employeeService = {
     );
     if (typeof window !== 'undefined' && !row.status_effective_date) {
       const stored = localStorage.getItem(`emp_status_date_${row.id}`);
-      row.status_effective_date = stored || row.joining_date || row.created_at?.slice(0, 10) || null;
+      if (stored) {
+        row.status_effective_date = stored;
+      } else if (row.employment_status === 'active') {
+        row.status_effective_date = row.joining_date || row.created_at?.slice(0, 10) || null;
+      }
     }
     return row;
   },
@@ -269,3 +277,5 @@ function sanitizeEmployeeUpdate(input: TablesUpdate<'employee_profiles'>): Table
   if (typeof safe.job_title === 'string') safe.job_title = safe.job_title.trim() || null;
   return safe;
 }
+
+export { isEmployeeActiveOnDate } from '../lib/employee-status';

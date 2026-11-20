@@ -6,6 +6,7 @@ import { getSupabaseClient } from '../lib/supabase';
 import { useAuth } from '../auth/AuthContext';
 import { toAppError } from '../lib/errors';
 import { todayInTimezone } from '../lib/dates';
+import { isEmployeeActiveOnDate } from '../services/employee.service';
 
 const filters = ['All', 'Present', 'Late', 'Employee week Off', 'Absent', 'Missing', 'Inside Geofence', 'Outside Geofence'];
 
@@ -73,7 +74,12 @@ export default function LiveAttendance() {
       if (!(ev.employee_id in insideMap)) insideMap[ev.employee_id] = !!ev.inside_geofence;
     }
 
-    const mapped = (profiles || []).map(p => {
+    const mapped = (profiles || [])
+      .filter(p => {
+        const rec = recordMap[p.id];
+        return isEmployeeActiveOnDate(p, today) || !!rec;
+      })
+      .map(p => {
       const rec = recordMap[p.id];
       const assign = assignMap[p.id];
       const isOff = assign?.status === 'off' || weeklyOffSet.has(p.id);

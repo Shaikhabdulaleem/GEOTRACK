@@ -1,5 +1,7 @@
 import { getSupabaseClient } from '../lib/supabase';
 import { executeQuery } from './database.service';
+import { isEmployeeActiveOnDate } from '../lib/employee-status';
+export { isEmployeeActiveOnDate };
 import type {
   AttendanceRecordRow,
   DepartmentRow,
@@ -305,27 +307,6 @@ export function getDepartmentBaseOtRate(settings: {
   return settings.overtime_hourly_cost_own || settings.overtime_hourly_cost || settings.overtime_hourly_cost_3pl || 0;
 }
 
-export function isEmployeeActiveOnDate(employee: EmployeeProfileRow, date: string): boolean {
-  const joiningDate = employee.joining_date || employee.created_at?.slice(0, 10);
-  const effectiveDate = employee.status_effective_date || joiningDate;
-
-  if (employee.employment_status === 'active') {
-    const startDate = effectiveDate || joiningDate;
-    if (startDate && date < startDate) return false;
-    return true;
-  }
-
-  if (employee.employment_status === 'inactive' || employee.employment_status === 'terminated') {
-    if (joiningDate && date < joiningDate) return false;
-    if (effectiveDate && date >= effectiveDate) return false;
-    return true;
-  }
-
-  // on_leave: active employee who is currently on leave
-  if (joiningDate && date < joiningDate) return false;
-  return true;
-}
-
 export function getEmployeeOtRate(
   setting: { labor_class?: string; employment_source?: 'own' | '3pl' | string; overtime_hourly_cost?: number | null } | null | undefined,
   settings: { overtime_hourly_cost: number; overtime_hourly_cost_own?: number; overtime_hourly_cost_3pl?: number },
@@ -466,16 +447,19 @@ export function buildMailroomOperationalModel(
     let dayApprovedOtHours = 0;
     let dayApprovedOtCost = 0;
     workspace.employees.forEach(employee => {
-      if (!isEmployeeActiveOnDate(employee, date)) return;
       const setting = settingFor(employee);
       if (setting.labor_class !== 'dlp') return;
       const { approvedMinutes, requestedMinutes } = getApprovedOvertimeMinutes(employee.id, date, workspace.attendance, workspace.overtimeRecords ?? []);
       const effectiveMinutes = approvedMinutes > 0 ? approvedMinutes : requestedMinutes;
       const hours = effectiveMinutes / 60;
       if (hours > 0) {
-        const rate = getEmployeeOtRate(setting, workspace.settings);
-        dayApprovedOtHours += hours;
-        dayApprovedOtCost += hours * rate;
+        const isActive = isEmployeeActiveOnDate(employee, date);
+        const hasAttendance = workspace.attendance.some(a => a.employee_id === employee.id && a.attendance_date === date);
+        if (isActive || hasAttendance) {
+          const rate = getEmployeeOtRate(setting, workspace.settings);
+          dayApprovedOtHours += hours;
+          dayApprovedOtCost += hours * rate;
+        }
       }
     });
     const actualOvertimeHours = dayApprovedOtHours;
@@ -553,29 +537,32 @@ export function buildMailroomOperationalModel(
   const baseOtRate = getDepartmentBaseOtRate(workspace.settings);
   officialDays.forEach(day => {
     workspace.employees.forEach(employee => {
-      if (!isEmployeeActiveOnDate(employee, day.date)) return;
       const setting = settingFor(employee);
       if (setting.labor_class !== 'dlp') return;
       const { approvedMinutes, requestedMinutes } = getApprovedOvertimeMinutes(employee.id, day.date, workspace.attendance, workspace.overtimeRecords ?? []);
       const effectiveMinutes = approvedMinutes > 0 ? approvedMinutes : requestedMinutes;
       const hours = effectiveMinutes / 60;
       if (hours > 0) {
-        const rate = getEmployeeOtRate(setting, workspace.settings);
-        const current = employeeOtMap.get(employee.id) ?? {
-          employeeId: employee.id,
-          employeeName: employee.full_name,
-          employeeCode: employee.employee_code,
-          laborClass: setting.labor_class,
-          employmentSource: setting.employment_source,
-          approvedHours: 0,
-          hourlyCost: rate,
-          totalCost: 0,
-          daysCount: 0,
-        };
-        current.approvedHours += hours;
-        current.totalCost += hours * rate;
-        current.daysCount += 1;
-        employeeOtMap.set(employee.id, current);
+        const isActive = isEmployeeActiveOnDate(employee, day.date);
+        const hasAttendance = workspace.attendance.some(a => a.employee_id === employee.id && a.attendance_date === day.date);
+        if (isActive || hasAttendance) {
+          const rate = getEmployeeOtRate(setting, workspace.settings);
+          const current = employeeOtMap.get(employee.id) ?? {
+            employeeId: employee.id,
+            employeeName: employee.full_name,
+            employeeCode: employee.employee_code,
+            laborClass: setting.labor_class,
+            employmentSource: setting.employment_source,
+            approvedHours: 0,
+            hourlyCost: rate,
+            totalCost: 0,
+            daysCount: 0,
+          };
+          current.approvedHours += hours;
+          current.totalCost += hours * rate;
+          current.daysCount += 1;
+          employeeOtMap.set(employee.id, current);
+        }
       }
     });
   });
@@ -676,16 +663,19 @@ export function buildMailroomDayPreview(
   let approvedOvertimeHours = 0;
   let approvedOvertimeCost = 0;
   workspace.employees.forEach(employee => {
-    if (!isEmployeeActiveOnDate(employee, workDate)) return;
     const setting = employeeSettingById.get(employee.id);
     if (setting?.labor_class !== 'dlp') return;
     const { approvedMinutes, requestedMinutes } = getApprovedOvertimeMinutes(employee.id, workDate, workspace.attendance, workspace.overtimeRecords ?? []);
     const effectiveMinutes = approvedMinutes > 0 ? approvedMinutes : requestedMinutes;
     const hours = effectiveMinutes / 60;
     if (hours > 0) {
-      const rate = getEmployeeOtRate(setting, workspace.settings);
-      approvedOvertimeHours += hours;
-      approvedOvertimeCost += hours * rate;
+      const isActive = isEmployeeActiveOnDate(employee, workDate);
+      const hasAttendance = workspace.attendance.some(a => a.employee_id === employee.id && a.attendance_date === workDate);
+      if (isActive || hasAttendance) {
+        const rate = getEmployeeOtRate(setting, workspace.settings);
+        approvedOvertimeHours += hours;
+        approvedOvertimeCost += hours * rate;
+      }
     }
   });
   return {
@@ -833,7 +823,11 @@ export const productivityService = {
       employees.forEach(emp => {
         if (!emp.status_effective_date) {
           const stored = localStorage.getItem(`emp_status_date_${emp.id}`);
-          emp.status_effective_date = stored || emp.joining_date || emp.created_at?.slice(0, 10) || null;
+          if (stored) {
+            emp.status_effective_date = stored;
+          } else if (emp.employment_status === 'active') {
+            emp.status_effective_date = emp.joining_date || emp.created_at?.slice(0, 10) || null;
+          }
         }
       });
     }

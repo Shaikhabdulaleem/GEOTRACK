@@ -28,7 +28,7 @@ import {
 } from '../services/correction.service';
 import { attendanceService } from '../services/attendance.service';
 import { shiftService } from '../services/shift.service';
-import { employeeService, type EmployeeLookups } from '../services/employee.service';
+import { employeeService, isEmployeeActiveOnDate, type EmployeeLookups } from '../services/employee.service';
 import { organizationService } from '../services/organization.service';
 import { todayInTimezone } from '../lib/dates';
 import { getErrorMessage } from '../lib/errors';
@@ -273,15 +273,23 @@ export default function AttendanceCorrections() {
 
     for (const workDate of dates) {
       for (const emp of employees) {
-        if (employmentStatus && emp.employment_status !== employmentStatus) continue;
-        if (!employmentStatus && emp.employment_status === 'terminated') {
-          const hasRecord = attendanceRecords.some(
-            r => r.employee_id === emp.id && r.attendance_date === workDate,
-          );
-          const hasShift = shiftAssignments.some(
-            a => a.employee_id === emp.id && a.work_date === workDate,
-          );
-          if (!hasRecord && !hasShift) continue;
+        const isActiveOnDate = isEmployeeActiveOnDate(emp, workDate);
+        const hasRecord = attendanceRecords.some(
+          r => r.employee_id === emp.id && r.attendance_date === workDate,
+        );
+        const hasShift = shiftAssignments.some(
+          a => a.employee_id === emp.id && a.work_date === workDate,
+        );
+
+        if (employmentStatus === 'active') {
+          if (!isActiveOnDate && !hasRecord) continue;
+        } else if (employmentStatus === 'inactive') {
+          if (isActiveOnDate && !hasRecord) continue;
+        } else if (employmentStatus) {
+          if (emp.employment_status !== employmentStatus && !hasRecord) continue;
+        } else {
+          // If employee is inactive on this date and has neither attendance nor shift, do not generate a phantom "Missed / Absent" row!
+          if (!isActiveOnDate && !hasRecord && !hasShift) continue;
         }
 
         const rec =

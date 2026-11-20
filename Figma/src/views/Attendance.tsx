@@ -5,7 +5,7 @@ import StatusBadge from '../components/StatusBadge';
 import Avatar from '../components/Avatar';
 import { useAuth } from '../auth/AuthContext';
 import { attendanceService } from '../services/attendance.service';
-import { employeeService } from '../services/employee.service';
+import { employeeService, isEmployeeActiveOnDate } from '../services/employee.service';
 import { organizationService } from '../services/organization.service';
 import { shiftService } from '../services/shift.service';
 import { correctionService } from '../services/correction.service';
@@ -165,7 +165,13 @@ export default function Attendance() {
       }));
     }
 
-    return emps.map(emp => {
+    const today = todayInTimezone('Asia/Riyadh');
+    return emps
+      .filter(emp => {
+        const rec = records.find(r => r.employee_id === emp.id);
+        return isEmployeeActiveOnDate(emp, today) || !!rec;
+      })
+      .map(emp => {
       const rec = records.find(r => r.employee_id === emp.id);
       const assignment = assignments.find(a => a.employee_id === emp.id);
       
