@@ -40,6 +40,8 @@ begin
 end;
 $$;
 
+revoke all on function private.set_mailroom_activity_volume_source() from public, anon;
+
 create trigger set_mailroom_activity_volume_source
 before insert or update of code on public.mailroom_activities
 for each row execute function private.set_mailroom_activity_volume_source();

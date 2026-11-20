@@ -26,6 +26,8 @@ as $$
   end;
 $$;
 
+revoke all on function private.can_access_mailroom(uuid, uuid, boolean) from public, anon;
+
 create or replace function public.initialize_mailroom_productivity(p_organization_id uuid)
 returns jsonb
 language plpgsql
