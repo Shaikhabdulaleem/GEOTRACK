@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts';
 import { useAuth } from '../auth/AuthContext';
-import { addDays, buildMailroomDayPreview, buildMailroomOperationalModel, dateRange, getApprovedOvertimeMinutes, getEmployeeOtRate, isEmployeeActiveOnDate, productivityService, startOfSundayWeek, type MailroomDailyClientInput, type MailroomDailyDspInput, type MailroomDailyInput, type MailroomWorkspace } from '../services/productivity.service';
+import { addDays, buildMailroomDayPreview, buildMailroomOperationalModel, dateRange, getApprovedOvertimeMinutes, getEffectiveApprovedOvertimeMinutes, getEmployeeOtRate, isEmployeeActiveOnDate, productivityService, startOfSundayWeek, type MailroomDailyClientInput, type MailroomDailyDspInput, type MailroomDailyInput, type MailroomWorkspace } from '../services/productivity.service';
 import { employeeService } from '../services/employee.service';
 import { shiftService } from '../services/shift.service';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -676,23 +676,13 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
 
   const employeeOvertimeRows = useMemo(() => {
     return workspace.employees
-      .filter(employee => {
-        if (isEmployeeActiveOnDate(employee, workDate)) return true;
-        const hasAttendance = workspace.attendance.some(a => a.employee_id === employee.id && a.attendance_date === workDate);
-        const { approvedMinutes, requestedMinutes } = getApprovedOvertimeMinutes(
-          employee.id,
-          workDate,
-          workspace.attendance,
-          workspace.overtimeRecords ?? []
-        );
-        return hasAttendance || approvedMinutes > 0 || requestedMinutes > 0;
-      })
+      .filter(employee => isEmployeeActiveOnDate(employee, workDate))
       .map(employee => {
         const setting = workspace.employeeSettings.find(s => s.employee_id === employee.id);
         const schedule = workspace.schedules[employee.id]?.find(s => s.work_date === workDate);
         const attendance = workspace.attendance.filter(a => a.employee_id === employee.id && a.attendance_date === workDate);
         const workedHours = attendance.reduce((sum, a) => sum + (a.worked_minutes || 0) / 60, 0);
-        const { approvedMinutes, requestedMinutes, status } = getApprovedOvertimeMinutes(
+        const { effectiveMinutes, approvedMinutes, requestedMinutes, status } = getEffectiveApprovedOvertimeMinutes(
           employee.id,
           workDate,
           workspace.attendance,
@@ -700,7 +690,7 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
         );
         const approvedHours = approvedMinutes / 60;
         const requestedHours = requestedMinutes / 60;
-        const otHours = approvedHours > 0 ? approvedHours : requestedHours;
+        const otHours = effectiveMinutes / 60;
         const hourlyRate = getEmployeeOtRate(setting, workspace.settings);
         const approvedCost = otHours * hourlyRate;
         const maxOt = setting?.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
@@ -1134,7 +1124,11 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
                     {row.workedHours > 0 ? `${number(row.workedHours, 1)}h` : (row.scheduleState === 'working' ? '0h (Absent)' : '—')}
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono">
-                    {row.otHours > 0 ? (
+                    {row.status === 'rejected' ? (
+                      <span className="text-rose-400 font-mono text-[11px] line-through" title="Rejected by manager">
+                        {number(row.requestedHours, 1)}h
+                      </span>
+                    ) : row.otHours > 0 ? (
                       <span className={`font-bold ${row.status === 'approved' ? 'text-emerald-400' : 'text-amber-400'}`}>
                         {number(row.otHours, 1)}h
                       </span>

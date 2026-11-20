@@ -1,7 +1,17 @@
 import { getSupabaseClient } from '../lib/supabase';
 import { executeQuery } from './database.service';
-import { isEmployeeActiveOnDate } from '../lib/employee-status';
-export { isEmployeeActiveOnDate };
+import {
+  isEmployeeActiveOnDate,
+  getApprovedOvertimeMinutes,
+  getEffectiveApprovedOvertimeMinutes,
+  type EmployeeApprovedOvertimeResult,
+} from '../lib/employee-status';
+export {
+  isEmployeeActiveOnDate,
+  getApprovedOvertimeMinutes,
+  getEffectiveApprovedOvertimeMinutes,
+  type EmployeeApprovedOvertimeResult,
+};
 import type {
   AttendanceRecordRow,
   DepartmentRow,
@@ -242,62 +252,7 @@ function shiftHours(schedule: ResolvedScheduleRow): number {
   return Math.max(0, duration - (schedule.break_minutes ?? 0)) / 60;
 }
 
-export interface EmployeeApprovedOvertimeResult {
-  approvedMinutes: number;
-  requestedMinutes: number;
-  status: 'approved' | 'pending' | 'rejected' | 'none';
-}
 
-export function getApprovedOvertimeMinutes(
-  employeeId: string,
-  workDate: string,
-  attendance: AttendanceRecordRow[],
-  overtimeRecords: OvertimeRecordRow[],
-): EmployeeApprovedOvertimeResult {
-  const dayAttendance = (attendance ?? []).filter(a => a.employee_id === employeeId && a.attendance_date === workDate);
-  const dayAttendanceIds = new Set(dayAttendance.map(a => a.id));
-
-  const dayOtRecords = (overtimeRecords ?? []).filter(
-    r => r.employee_id === employeeId && dayAttendanceIds.has(r.attendance_record_id)
-  );
-
-  let approvedMinutes = 0;
-  let requestedMinutes = 0;
-  let hasPending = false;
-  let hasRejected = false;
-  let hasApproved = false;
-
-  dayOtRecords.forEach(r => {
-    requestedMinutes += r.requested_minutes ?? 0;
-    if (r.status === 'approved') {
-      hasApproved = true;
-      approvedMinutes += (r.approved_minutes ?? r.requested_minutes ?? 0);
-    } else if (r.status === 'pending') {
-      hasPending = true;
-    } else if (r.status === 'rejected') {
-      hasRejected = true;
-    }
-  });
-
-  if (!hasApproved && !hasPending && !hasRejected) {
-    dayAttendance.forEach(a => {
-      if (a.overtime_minutes > 0) {
-        requestedMinutes += a.overtime_minutes;
-        if (a.approval_status === 'approved') {
-          hasApproved = true;
-          approvedMinutes += a.overtime_minutes;
-        } else if (a.approval_status === 'pending') {
-          hasPending = true;
-        }
-      }
-    });
-  }
-
-  const status: 'approved' | 'pending' | 'rejected' | 'none' =
-    hasApproved ? 'approved' : hasPending ? 'pending' : hasRejected ? 'rejected' : 'none';
-
-  return { approvedMinutes, requestedMinutes, status };
-}
 
 export function getDepartmentBaseOtRate(settings: {
   overtime_hourly_cost: number;
@@ -449,17 +404,16 @@ export function buildMailroomOperationalModel(
     workspace.employees.forEach(employee => {
       const setting = settingFor(employee);
       if (setting.labor_class !== 'dlp') return;
-      const { approvedMinutes, requestedMinutes } = getApprovedOvertimeMinutes(employee.id, date, workspace.attendance, workspace.overtimeRecords ?? []);
-      const effectiveMinutes = approvedMinutes > 0 ? approvedMinutes : requestedMinutes;
+      if (!isEmployeeActiveOnDate(employee, date)) return;
+
+      const { effectiveMinutes, status } = getEffectiveApprovedOvertimeMinutes(employee.id, date, workspace.attendance, workspace.overtimeRecords ?? []);
+      if (status === 'rejected') return;
+
       const hours = effectiveMinutes / 60;
       if (hours > 0) {
-        const isActive = isEmployeeActiveOnDate(employee, date);
-        const hasAttendance = workspace.attendance.some(a => a.employee_id === employee.id && a.attendance_date === date);
-        if (isActive || hasAttendance) {
-          const rate = getEmployeeOtRate(setting, workspace.settings);
-          dayApprovedOtHours += hours;
-          dayApprovedOtCost += hours * rate;
-        }
+        const rate = getEmployeeOtRate(setting, workspace.settings);
+        dayApprovedOtHours += hours;
+        dayApprovedOtCost += hours * rate;
       }
     });
     const actualOvertimeHours = dayApprovedOtHours;
@@ -539,30 +493,29 @@ export function buildMailroomOperationalModel(
     workspace.employees.forEach(employee => {
       const setting = settingFor(employee);
       if (setting.labor_class !== 'dlp') return;
-      const { approvedMinutes, requestedMinutes } = getApprovedOvertimeMinutes(employee.id, day.date, workspace.attendance, workspace.overtimeRecords ?? []);
-      const effectiveMinutes = approvedMinutes > 0 ? approvedMinutes : requestedMinutes;
+      if (!isEmployeeActiveOnDate(employee, day.date)) return;
+
+      const { effectiveMinutes, status } = getEffectiveApprovedOvertimeMinutes(employee.id, day.date, workspace.attendance, workspace.overtimeRecords ?? []);
+      if (status === 'rejected') return;
+
       const hours = effectiveMinutes / 60;
       if (hours > 0) {
-        const isActive = isEmployeeActiveOnDate(employee, day.date);
-        const hasAttendance = workspace.attendance.some(a => a.employee_id === employee.id && a.attendance_date === day.date);
-        if (isActive || hasAttendance) {
-          const rate = getEmployeeOtRate(setting, workspace.settings);
-          const current = employeeOtMap.get(employee.id) ?? {
-            employeeId: employee.id,
-            employeeName: employee.full_name,
-            employeeCode: employee.employee_code,
-            laborClass: setting.labor_class,
-            employmentSource: setting.employment_source,
-            approvedHours: 0,
-            hourlyCost: rate,
-            totalCost: 0,
-            daysCount: 0,
-          };
-          current.approvedHours += hours;
-          current.totalCost += hours * rate;
-          current.daysCount += 1;
-          employeeOtMap.set(employee.id, current);
-        }
+        const rate = getEmployeeOtRate(setting, workspace.settings);
+        const current = employeeOtMap.get(employee.id) ?? {
+          employeeId: employee.id,
+          employeeName: employee.full_name,
+          employeeCode: employee.employee_code,
+          laborClass: setting.labor_class,
+          employmentSource: setting.employment_source,
+          approvedHours: 0,
+          hourlyCost: rate,
+          totalCost: 0,
+          daysCount: 0,
+        };
+        current.approvedHours += hours;
+        current.totalCost += hours * rate;
+        current.daysCount += 1;
+        employeeOtMap.set(employee.id, current);
       }
     });
   });
@@ -665,17 +618,16 @@ export function buildMailroomDayPreview(
   workspace.employees.forEach(employee => {
     const setting = employeeSettingById.get(employee.id);
     if (setting?.labor_class !== 'dlp') return;
-    const { approvedMinutes, requestedMinutes } = getApprovedOvertimeMinutes(employee.id, workDate, workspace.attendance, workspace.overtimeRecords ?? []);
-    const effectiveMinutes = approvedMinutes > 0 ? approvedMinutes : requestedMinutes;
+    if (!isEmployeeActiveOnDate(employee, workDate)) return;
+
+    const { effectiveMinutes, status } = getEffectiveApprovedOvertimeMinutes(employee.id, workDate, workspace.attendance, workspace.overtimeRecords ?? []);
+    if (status === 'rejected') return;
+
     const hours = effectiveMinutes / 60;
     if (hours > 0) {
-      const isActive = isEmployeeActiveOnDate(employee, workDate);
-      const hasAttendance = workspace.attendance.some(a => a.employee_id === employee.id && a.attendance_date === workDate);
-      if (isActive || hasAttendance) {
-        const rate = getEmployeeOtRate(setting, workspace.settings);
-        approvedOvertimeHours += hours;
-        approvedOvertimeCost += hours * rate;
-      }
+      const rate = getEmployeeOtRate(setting, workspace.settings);
+      approvedOvertimeHours += hours;
+      approvedOvertimeCost += hours * rate;
     }
   });
   return {
