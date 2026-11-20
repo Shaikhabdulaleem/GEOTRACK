@@ -7,7 +7,7 @@ import { useAuth } from '../auth/AuthContext';
 import { toAppError } from '../lib/errors';
 import { todayInTimezone } from '../lib/dates';
 
-const filters = ['All', 'Present', 'Late', 'Absent', 'Missing', 'Inside Geofence', 'Outside Geofence'];
+const filters = ['All', 'Present', 'Late', 'Employee week Off', 'Absent', 'Missing', 'Inside Geofence', 'Outside Geofence'];
 
 export default function LiveAttendance() {
   const { activeMembership } = useAuth();
@@ -43,13 +43,30 @@ export default function LiveAttendance() {
 
     // Latest location signal per employee today. Riyadh is a fixed +03:00 offset,
     // matching todayInTimezone above. Newest-first, so the first row per employee wins.
-    const { data: events, error: eError } = await client
-      .from('attendance_events')
-      .select('employee_id, inside_geofence, event_at')
-      .eq('organization_id', activeMembership.organization_id)
-      .gte('event_at', `${today}T00:00:00+03:00`)
-      .order('event_at', { ascending: false });
+    const [{ data: events, error: eError }, { data: assignments }, { data: weeklyOffRows }] = await Promise.all([
+      client
+        .from('attendance_events')
+        .select('employee_id, inside_geofence, event_at')
+        .eq('organization_id', activeMembership.organization_id)
+        .gte('event_at', `${today}T00:00:00+03:00`)
+        .order('event_at', { ascending: false }),
+      client
+        .from('shift_assignments')
+        .select('employee_id, shift_id, status, shift:shifts(name)')
+        .eq('organization_id', activeMembership.organization_id)
+        .eq('work_date', today),
+      client
+        .from('weekly_offs')
+        .select('employee_id')
+        .eq('organization_id', activeMembership.organization_id)
+        .eq('weekday', new Date(`${today}T12:00:00Z`).getUTCDay())
+        .lte('effective_from', today)
+        .or(`effective_to.is.null,effective_to.gte.${today}`),
+    ]);
     if (eError) throw eError;
+
+    const assignMap: Record<string, any> = Object.fromEntries((assignments || []).map((a: any) => [a.employee_id, a]));
+    const weeklyOffSet = new Set((weeklyOffRows || []).map((w: any) => w.employee_id));
 
     const insideMap: Record<string, boolean> = {};
     for (const ev of events || []) {
@@ -58,19 +75,54 @@ export default function LiveAttendance() {
 
     const mapped = (profiles || []).map(p => {
       const rec = recordMap[p.id];
+      const assign = assignMap[p.id];
+      const isOff = assign?.status === 'off' || weeklyOffSet.has(p.id);
+
+      let status = 'Absent';
+      let attendance = 'absent';
+      if (rec) {
+        if (rec.status === 'present') {
+          status = 'Present';
+          attendance = 'present';
+        } else if (rec.status === 'late') {
+          status = 'Late';
+          attendance = 'late';
+        } else if (isOff) {
+          status = 'Employee week Off';
+          attendance = 'Employee week Off';
+        } else if (rec.status === 'absent') {
+          status = 'Absent';
+          attendance = 'absent';
+        } else {
+          status = 'Missing';
+          attendance = rec.status;
+        }
+      } else {
+        if (isOff) {
+          status = 'Employee week Off';
+          attendance = 'Employee week Off';
+        } else {
+          status = 'Absent';
+          attendance = 'absent';
+        }
+      }
+
+      const shiftObj = Array.isArray(assign?.shift) ? assign?.shift[0] : assign?.shift;
+
       return {
         id: p.id,
         name: p.full_name,
-        shift: 'Day',
+        shift: isOff ? 'Week Off' : (shiftObj?.name ?? 'Day'),
         shiftStart: '09:00',
         checkin: rec ? (rec.check_in_at ? new Date(rec.check_in_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : null) : null,
-        status: rec ? (rec.status ? rec.status.charAt(0).toUpperCase() + rec.status.slice(1) : 'Present') : 'Absent',
+        status,
         worked: '0h 00m',
         inside: insideMap[p.id] ?? false, // no location signal today → not Inside
         productivity: 0,
         phone: 0,
         ot: '0h 00m',
-        attendance: rec ? rec.status : 'absent'
+        attendance,
+        isOff,
       };
     });
 
@@ -118,6 +170,7 @@ export default function LiveAttendance() {
     if (search && !e.name.toLowerCase().includes(search.toLowerCase()) && !e.id.toLowerCase().includes(search.toLowerCase())) return false;
     if (filter === 'Present') return e.status === 'Present';
     if (filter === 'Late') return e.status === 'Late';
+    if (filter === 'Employee week Off') return e.status === 'Employee week Off';
     if (filter === 'Absent') return e.status === 'Absent';
     if (filter === 'Missing') return e.status === 'Missing';
     if (filter === 'Inside Geofence') return e.inside;
@@ -212,7 +265,7 @@ export default function LiveAttendance() {
                 </td>
                 <td className="px-4 py-3"><StatusBadge status={emp.shift} /></td>
                 <td className="px-4 py-3 font-mono text-xs" style={{ color: emp.checkin ? '#f0f6ff' : '#4b6a8a' }}>{emp.checkin ?? '—'}</td>
-                <td className="px-4 py-3"><StatusBadge status={emp.attendance} /></td>
+                <td className="px-4 py-3"><StatusBadge status={emp.status} /></td>
                 <td className="px-4 py-3 font-mono text-xs" style={{ color: '#94a3b8' }}>{emp.worked}</td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1.5">

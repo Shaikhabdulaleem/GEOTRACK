@@ -137,6 +137,62 @@ export const dashboardService = {
       if (batchAtt) allAttendance.push(...batchAtt);
     }
     
+    let dayShiftCount = 0;
+    let nightShiftCount = 0;
+    const offEmpIds = new Set<string>();
+
+    try {
+      const schedules = await Promise.all(
+        validEmpIds.map(employeeId => shiftService.resolveSchedule(employeeId, filters.date, filters.date)),
+      );
+      schedules.forEach((empScheds, idx) => {
+        const empId = validEmpIds[idx];
+        const row = empScheds[0];
+        if (row) {
+          if (row.state === 'off' || row.state === 'leave' || row.state === 'holiday') {
+            offEmpIds.add(empId);
+          } else if (row.state === 'working') {
+            if (!filters.shiftId || row.shift_id === filters.shiftId) {
+              if (row.crosses_midnight) nightShiftCount++;
+              else dayShiftCount++;
+            }
+          }
+        }
+      });
+    } catch (error) {
+      if (!isMissingScheduleResolver(error)) throw error;
+
+      // Compatibility path for deployments where the recurring-schedule
+      // migration has not reached the database yet. Explicit assignments are
+      // still useful dashboard data, and one missing RPC must not blank every
+      // KPI on the page.
+      logger.warn('Schedule resolver is unavailable; using explicit shift assignments for dashboard counts.', {
+        error,
+      });
+      const assignments: LegacyShiftAssignment[] = [];
+      for (let i = 0; i < validEmpIds.length; i += batchSize) {
+        const batchIds = validEmpIds.slice(i, i + batchSize);
+        const { data, error: assignmentError } = await client
+          .from('shift_assignments')
+          .select('employee_id, shift_id, status, shift:shifts(id, crosses_midnight)')
+          .eq('organization_id', organizationId)
+          .eq('work_date', filters.date)
+          .in('employee_id', batchIds);
+        if (assignmentError) throw assignmentError;
+        assignments.push(...((data ?? []) as unknown as LegacyShiftAssignment[]));
+      }
+      assignments.forEach(assignment => {
+        if (assignment.status === 'off') {
+          offEmpIds.add(assignment.employee_id);
+          return;
+        }
+        if (assignment.status !== 'scheduled') return;
+        if (!assignment.shift || (filters.shiftId && assignment.shift_id !== filters.shiftId)) return;
+        if (assignment.shift.crosses_midnight) nightShiftCount++;
+        else dayShiftCount++;
+      });
+    }
+
     let presentCount = 0;
     let absentCount = 0;
     let lateCount = 0;
@@ -160,55 +216,19 @@ export const dashboardService = {
           presentCount++;
           if (!a.check_out_at) currentlyWorkingCount++;
           break;
-        case 'absent': absentCount++; break;
+        case 'absent':
+          if (!offEmpIds.has(a.employee_id)) {
+            absentCount++;
+          }
+          break;
         case 'missing_check_in': 
         case 'missing_check_out':
-          missingCount++; break;
+          if (!offEmpIds.has(a.employee_id)) {
+            missingCount++;
+          }
+          break;
       }
     });
-
-    // Shift counts (requires joining assignments + shifts)
-    let dayShiftCount = 0;
-    let nightShiftCount = 0;
-    
-    try {
-      const schedules = await Promise.all(
-        validEmpIds.map(employeeId => shiftService.resolveSchedule(employeeId, filters.date, filters.date)),
-      );
-      schedules.flat().forEach(row => {
-        if (row.state !== 'working' || (filters.shiftId && row.shift_id !== filters.shiftId)) return;
-        if (row.crosses_midnight) nightShiftCount++;
-        else dayShiftCount++;
-      });
-    } catch (error) {
-      if (!isMissingScheduleResolver(error)) throw error;
-
-      // Compatibility path for deployments where the recurring-schedule
-      // migration has not reached the database yet. Explicit assignments are
-      // still useful dashboard data, and one missing RPC must not blank every
-      // KPI on the page.
-      logger.warn('Schedule resolver is unavailable; using explicit shift assignments for dashboard counts.', {
-        error,
-      });
-      const assignments: LegacyShiftAssignment[] = [];
-      for (let i = 0; i < validEmpIds.length; i += batchSize) {
-        const batchIds = validEmpIds.slice(i, i + batchSize);
-        const { data, error: assignmentError } = await client
-          .from('shift_assignments')
-          .select('employee_id, shift_id, status, shift:shifts(id, crosses_midnight)')
-          .eq('organization_id', organizationId)
-          .eq('work_date', filters.date)
-          .eq('status', 'scheduled')
-          .in('employee_id', batchIds);
-        if (assignmentError) throw assignmentError;
-        assignments.push(...((data ?? []) as unknown as LegacyShiftAssignment[]));
-      }
-      assignments.forEach(assignment => {
-        if (!assignment.shift || (filters.shiftId && assignment.shift_id !== filters.shiftId)) return;
-        if (assignment.shift.crosses_midnight) nightShiftCount++;
-        else dayShiftCount++;
-      });
-    }
     
     // Pending Approvals (Overtime + Manual)
     const [otReqs, manualReqs] = await Promise.all([
@@ -306,7 +326,7 @@ export const dashboardService = {
     const ids = active.map(e => e.id);
     if (ids.length === 0) return [] as Array<Record<string, unknown>>;
 
-    const [{ data: depts }, { data: records }, { data: assignments }] = await Promise.all([
+    const [{ data: depts }, { data: records }, { data: assignments }, { data: weeklyOffRows }] = await Promise.all([
       client.from('departments').select('id, name').eq('organization_id', organizationId),
       client.from('attendance_records')
         .select('employee_id, status, check_in_at, check_out_at, geofence_validated')
@@ -314,33 +334,108 @@ export const dashboardService = {
         .eq('attendance_date', filters.date)
         .in('employee_id', ids),
       client.from('shift_assignments')
-        .select('employee_id, shift_id, shift:shifts(name, crosses_midnight)')
+        .select('employee_id, shift_id, status, shift:shifts(name, crosses_midnight)')
         .eq('organization_id', organizationId)
         .eq('work_date', filters.date)
         .in('employee_id', ids),
+      client.from('weekly_offs')
+        .select('employee_id')
+        .eq('organization_id', organizationId)
+        .eq('weekday', new Date(`${filters.date}T12:00:00Z`).getUTCDay())
+        .lte('effective_from', filters.date)
+        .or(`effective_to.is.null,effective_to.gte.${filters.date}`)
+        .in('employee_id', ids),
     ]);
+
+    const weeklyOffSet = new Set((weeklyOffRows || []).map(w => w.employee_id));
+
+    // Resolve schedules to accurately identify week off / scheduled off vs working
+    const scheduleMap = new Map<string, {
+      state: string;
+      shiftId: string | null;
+      shiftName: string | null;
+      crossesMidnight: boolean;
+      source: string;
+    }>();
+
+    try {
+      const scheduleResults = await Promise.all(
+        ids.map(async empId => {
+          try {
+            const rows = await shiftService.resolveSchedule(empId, filters.date, filters.date);
+            return { empId, row: rows[0] ?? null };
+          } catch {
+            return { empId, row: null };
+          }
+        })
+      );
+      for (const { empId, row } of scheduleResults) {
+        if (row) {
+          scheduleMap.set(empId, {
+            state: row.state,
+            shiftId: row.shift_id,
+            shiftName: row.shift_name,
+            crossesMidnight: row.crosses_midnight,
+            source: row.source,
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed resolving schedules for live attendance', { error: err });
+    }
 
     const deptMap = new Map((depts || []).map((d: { id: string; name: string }) => [d.id, d.name]));
     const recMap = new Map((records || []).map((r: { employee_id: string }) => [r.employee_id, r]));
     const shiftMap = new Map(
-      (assignments || []).map((a: { employee_id: string; shift_id: string | null; shift: { name: string; crosses_midnight: boolean } | null }) => [a.employee_id, a]),
+      (assignments || []).map((a: { employee_id: string; shift_id: string | null; status?: string; shift: { name: string; crosses_midnight: boolean } | null }) => [a.employee_id, a]),
     );
 
     const rows = active.map(e => {
       const r = recMap.get(e.id) as { status?: string; check_in_at?: string | null; check_out_at?: string | null; geofence_validated?: boolean } | undefined;
-      const a = shiftMap.get(e.id) as { shift_id: string | null; shift: unknown } | undefined;
+      const a = shiftMap.get(e.id) as { shift_id: string | null; status?: string; shift: unknown } | undefined;
+      const sched = scheduleMap.get(e.id);
+
       // PostgREST embeds a to-one relation as an object, but can surface as an array.
       const shiftObj = Array.isArray(a?.shift) ? a?.shift[0] : a?.shift;
-      const crossesMidnight = (shiftObj as { crosses_midnight?: boolean } | undefined)?.crosses_midnight;
-      const shiftLabel = shiftObj ? (crossesMidnight ? 'Night' : 'Day') : null;
+      const crossesMidnight = sched ? sched.crossesMidnight : (shiftObj as { crosses_midnight?: boolean } | undefined)?.crosses_midnight;
+      const shiftName = sched?.shiftName || (shiftObj as { name?: string } | undefined)?.name;
+      const shiftLabel = shiftName ? (crossesMidnight ? 'Night' : 'Day') : (shiftObj ? (crossesMidnight ? 'Night' : 'Day') : null);
+
+      const isOff = sched?.state === 'off' || a?.status === 'off' || weeklyOffSet.has(e.id);
+      const isLeave = sched?.state === 'leave';
+      const isHoliday = sched?.state === 'holiday';
+
+      let attendanceStatus = 'absent';
+      if (r && r.status) {
+        if (r.status === 'present' || r.status === 'late') {
+          attendanceStatus = r.status;
+        } else if (isOff) {
+          attendanceStatus = 'Employee week Off';
+        } else {
+          attendanceStatus = r.status;
+        }
+      } else {
+        if (isOff) {
+          attendanceStatus = 'Employee week Off';
+        } else if (isLeave) {
+          attendanceStatus = 'On Leave';
+        } else if (isHoliday) {
+          attendanceStatus = 'Holiday';
+        } else {
+          attendanceStatus = 'absent';
+        }
+      }
+
       return {
         id: e.id,
         name: e.full_name,
         dept: deptMap.get(e.department_id) || '—',
-        shift: shiftLabel,
-        shiftId: a?.shift_id ?? null,
+        shift: isOff ? null : shiftLabel,
+        shiftId: sched?.shiftId ?? a?.shift_id ?? null,
         checkInAt: r?.check_in_at ?? null,
-        attendance: r?.status ?? 'absent',
+        attendance: attendanceStatus,
+        isOff,
+        scheduleState: sched?.state ?? (isOff ? 'off' : 'working'),
         inside: Boolean(r && r.check_in_at && !r.check_out_at && r.geofence_validated),
         location: '',
       };
@@ -348,7 +443,7 @@ export const dashboardService = {
 
     const filtered = filters.shiftId ? rows.filter(row => row.shiftId === filters.shiftId) : rows;
     // Checked-in employees first, so the widget surfaces who is actually working.
-    const rank = (s: string) => (s === 'present' || s === 'late' ? 0 : s === 'absent' ? 2 : 1);
+    const rank = (s: string) => (s === 'present' || s === 'late' ? 0 : s === 'Employee week Off' ? 3 : s === 'absent' ? 2 : 1);
     return filtered.sort((x, y) => rank(x.attendance) - rank(y.attendance));
   },
 

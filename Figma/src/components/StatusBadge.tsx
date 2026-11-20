@@ -13,6 +13,11 @@ const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   'Approved': { bg: 'rgba(16,185,129,0.12)', color: '#10b981' },
   'Rejected': { bg: 'rgba(239,68,68,0.12)', color: '#ef4444' },
   'OFF': { bg: 'rgba(148,163,184,0.08)', color: '#64748b' },
+  'Employee week Off': { bg: 'rgba(148,163,184,0.14)', color: '#94a3b8' },
+  'Employee Week Off': { bg: 'rgba(148,163,184,0.14)', color: '#94a3b8' },
+  'Week Off': { bg: 'rgba(148,163,184,0.14)', color: '#94a3b8' },
+  'On Leave': { bg: 'rgba(139,92,246,0.12)', color: '#8b5cf6' },
+  'Holiday': { bg: 'rgba(59,130,246,0.12)', color: '#3b82f6' },
   'Day': { bg: 'rgba(37,99,235,0.12)', color: '#3b82f6' },
   'Night': { bg: 'rgba(139,92,246,0.12)', color: '#8b5cf6' },
   'Active': { bg: 'rgba(16,185,129,0.12)', color: '#10b981' },
@@ -21,7 +26,8 @@ const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
 };
 
 export default function StatusBadge({ status }: { status: string }) {
-  const s = STATUS_COLORS[status] ?? { bg: 'rgba(148,163,184,0.08)', color: '#94a3b8' };
+  const normKey = Object.keys(STATUS_COLORS).find(k => k.toLowerCase() === status?.trim().toLowerCase());
+  const s = (normKey ? STATUS_COLORS[normKey] : undefined) ?? STATUS_COLORS[status] ?? { bg: 'rgba(148,163,184,0.08)', color: '#94a3b8' };
   return (
     <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium" style={{ background: s.bg, color: s.color }}>
       {status}

@@ -387,20 +387,40 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   }, [supabaseReady, organizationId]);
 
   // Real per-employee live attendance (status, check-in time, shift, geofence).
-  const filteredEmps = supabaseReady ? liveAttendance.map(e => ({
-    id: e.id,
-    name: e.name,
-    status: e.attendance === 'late' ? 'Late' : e.attendance === 'present' ? 'Present' : e.attendance === 'absent' ? 'Absent' : 'Missing',
-    phone: 0,
-    dept: e.dept,
-    shift: e.shift,
-    attendance: e.attendance,
-    location: e.location ?? '',
-    checkin: e.checkInAt
-      ? new Date(e.checkInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Riyadh' })
-      : null,
-    inside: e.inside
-  })) : [];
+  const filteredEmps = supabaseReady ? liveAttendance.map(e => {
+    let displayStatus = 'Missing';
+    if (e.isOff || e.scheduleState === 'off' || e.attendance === 'Employee week Off') {
+      displayStatus = 'Employee week Off';
+    } else if (e.attendance === 'late') {
+      displayStatus = 'Late';
+    } else if (e.attendance === 'present') {
+      displayStatus = 'Present';
+    } else if (e.attendance === 'absent') {
+      displayStatus = 'Absent';
+    } else if (e.attendance === 'On Leave' || e.scheduleState === 'leave') {
+      displayStatus = 'On Leave';
+    } else if (e.attendance === 'Holiday' || e.scheduleState === 'holiday') {
+      displayStatus = 'Holiday';
+    }
+
+    const isOff = e.isOff || displayStatus === 'Employee week Off';
+
+    return {
+      id: e.id,
+      name: e.name,
+      status: displayStatus,
+      phone: 0,
+      dept: e.dept,
+      shift: isOff ? null : e.shift,
+      attendance: displayStatus,
+      isOff,
+      location: e.location ?? '',
+      checkin: e.checkInAt
+        ? new Date(e.checkInAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Riyadh' })
+        : null,
+      inside: e.inside
+    };
+  }) : [];
 
   // Loads all dashboard data for the current filters. Pass { silent: true } for
   // background refreshes (e.g. realtime updates) so the dashboard isn't blanked
@@ -710,10 +730,15 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
               <Avatar name={emp.name} />
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium text-white truncate">{emp.name}</div>
-                <div className="text-xs" style={{ color: '#4b6a8a' }}>{emp.dept}{emp.shift ? ` · ${emp.shift} Shift` : ''}</div>
+                <div className="text-xs" style={{ color: '#4b6a8a' }}>
+                  {emp.dept}
+                  {emp.isOff || emp.status === 'Employee week Off'
+                    ? ' · Week Off'
+                    : emp.shift ? ` · ${emp.shift} Shift` : ''}
+                </div>
               </div>
               <div className="text-xs font-mono" style={{ color: '#94a3b8' }}>{emp.checkin ?? '—'}</div>
-              <StatusBadge status={emp.attendance} />
+              <StatusBadge status={emp.status} />
             </div>
           ))}
         </div>

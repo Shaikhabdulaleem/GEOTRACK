@@ -298,8 +298,9 @@ export default function AttendanceCorrections() {
         const shiftStart = shift?.start_time || null;
         const shiftEnd = shift?.end_time || null;
 
-        let status: TimesheetCorrectionRow['status'] = 'missed';
-        let statusLabel = 'Missed / Absent';
+        const isOff = assignment?.status === 'off';
+        let status: TimesheetCorrectionRow['status'] = isOff ? ('off' as any) : 'missed';
+        let statusLabel = isOff ? 'Employee week Off' : 'Missed / Absent';
 
         if (rec) {
           if (rec.source === 'manual_manager') {
@@ -311,6 +312,9 @@ export default function AttendanceCorrections() {
           } else if (rec.status === 'late') {
             status = 'late';
             statusLabel = 'Late';
+          } else if (isOff) {
+            status = 'off' as any;
+            statusLabel = 'Employee week Off';
           } else if (rec.status === 'missing_check_in') {
             status = 'missing_in';
             statusLabel = 'Missing Check-In';

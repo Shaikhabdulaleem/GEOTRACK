@@ -169,10 +169,12 @@ export default function Attendance() {
       const rec = records.find(r => r.employee_id === emp.id);
       const assignment = assignments.find(a => a.employee_id === emp.id);
       
-      let statusStr = 'Absent';
+      const isOff = assignment?.status === 'off';
+      let statusStr = isOff ? 'Employee week Off' : 'Absent';
       if (rec) {
         if (rec.status === 'present') statusStr = 'Present';
         else if (rec.status === 'late') statusStr = 'Late';
+        else if (isOff) statusStr = 'Employee week Off';
         else if (rec.status === 'absent') statusStr = 'Absent';
         else if (rec.status === 'missing_check_in' || rec.status === 'missing_check_out') statusStr = 'Missing';
       }
