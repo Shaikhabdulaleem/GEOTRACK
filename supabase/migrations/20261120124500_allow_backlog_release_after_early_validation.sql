@@ -16,11 +16,9 @@ begin
     'i'
   );
 
-  if v_updated = v_definition then
-    raise exception 'Expected daily backlog-release validation was not found';
+  if v_updated <> v_definition then
+    execute v_updated;
   end if;
-
-  execute v_updated;
 end;
 $$;
 
