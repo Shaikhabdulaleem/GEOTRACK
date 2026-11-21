@@ -291,6 +291,68 @@ export interface ProductivityCalculatorResult {
   employeeSimulations: EmployeeSimulationDetail[];
 }
 
+export interface ClientActivityRate {
+  activityId: string;
+  activityName: string;
+  activityCode: string;
+  unitsPerHour: number;
+  volumeDriver: string;
+  workloadMultiplier: number;
+}
+
+export interface ClientProductivityProfile {
+  clientId: string;
+  clientCode: string;
+  clientName: string;
+  processingMode: string;
+  effectiveUnitsPerHour: number;
+  activities: ClientActivityRate[];
+  recentShipmentVolume: number;
+}
+
+export function getClientProductivityProfiles(workspace: MailroomWorkspace): ClientProductivityProfile[] {
+  const activityById = new Map(workspace.activities.map(a => [a.id, a]));
+  const activeClients = workspace.clients.filter(c => c.status === 'active');
+
+  return activeClients.map(client => {
+    const mappings = workspace.mappings.filter(m => m.client_id === client.id);
+    const mappedActivities: ClientActivityRate[] = mappings.map(m => {
+      const act = activityById.get(m.activity_id);
+      return {
+        activityId: m.activity_id,
+        activityName: act?.name || 'Workflow Activity',
+        activityCode: act?.code || '',
+        unitsPerHour: act?.units_per_labor_hour && act.units_per_labor_hour > 0 ? act.units_per_labor_hour : 150,
+        volumeDriver: m.volume_driver,
+        workloadMultiplier: m.workload_multiplier || 1,
+      };
+    }).filter(a => a.unitsPerHour > 0);
+
+    const hoursPerUnit = mappedActivities.reduce(
+      (sum, a) => sum + (a.workloadMultiplier / a.unitsPerHour),
+      0
+    );
+    const effectiveUnitsPerHour = hoursPerUnit > 0 ? Math.round(1 / hoursPerUnit) : 150;
+
+    const clientShipments = workspace.shipments.filter(s => s.client_id === client.id && (s.received_units || 0) > 0);
+    const dates = [...new Set(clientShipments.map(s => s.work_date))].sort();
+    const lastDate = dates[dates.length - 1];
+    const recentVolume = lastDate
+      ? clientShipments.filter(s => s.work_date === lastDate).reduce((acc, row) => acc + (row.received_units || 0), 0)
+      : 0;
+
+    return {
+      clientId: client.id,
+      clientCode: client.code,
+      clientName: client.name,
+      processingMode: client.processing_mode,
+      effectiveUnitsPerHour,
+      activities: mappedActivities,
+      recentShipmentVolume: recentVolume,
+    };
+  });
+}
+
 function isoDate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
