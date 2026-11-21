@@ -26,6 +26,18 @@ export interface DeviceTelemetryPayload {
 }
 
 export const deviceService = {
+  async listDevices(organizationId: string): Promise<EmployeeDeviceRow[]> {
+    const client = getSupabaseClient();
+    const { data, error } = await client
+      .from('employee_devices')
+      .select('id, organization_id, employee_id, device_identifier_hash, platform, model, os_version, app_version, integrity_status, registered_at, last_seen_at, revoked_at, created_at, updated_at')
+      .eq('organization_id', organizationId)
+      .order('last_seen_at', { ascending: false, nullsFirst: false });
+
+    if (error) throw toAppError(error, 'Unable to load employee devices.');
+    return (data ?? []) as EmployeeDeviceRow[];
+  },
+
   async listApprovalQueue(organizationId: string): Promise<DeviceApprovalItem[]> {
     const client = getSupabaseClient();
     const [devicesResult, employeesResult] = await Promise.all([
