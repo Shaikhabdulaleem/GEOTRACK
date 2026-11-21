@@ -230,6 +230,67 @@ export interface MailroomDayPreview {
   approvedOvertimeCost: number;
 }
 
+export interface ProductivityCalculatorInput {
+  targetVolume: number;
+  unitsPerLaborHour: number;
+  currentEmployees: number;
+  standardHoursPerDay?: number;
+  maxOvertimeHoursPerDay?: number;
+  plannedAbsencePercent?: number;
+  overtimeHourlyCost?: number;
+  employeeNamePrefix?: string;
+}
+
+export interface EmployeeSimulationDetail {
+  workerIndex: number;
+  workerName: string;
+  regularHours: number;
+  regularCapacityUnits: number;
+  otHoursRequired: number;
+  totalShiftHours: number;
+  otCost: number;
+  isCapped: boolean;
+}
+
+export interface ProductivityCalculatorResult {
+  targetVolume: number;
+  unitsPerLaborHour: number;
+  currentEmployees: number;
+  standardHoursPerDay: number;
+  maxOvertimeHoursPerDay: number;
+  plannedAbsencePercent: number;
+  overtimeHourlyCost: number;
+
+  totalRequiredLaborHours: number;
+  requiredFte: number;
+
+  effectiveEmployees: number;
+  regularCapacityHours: number;
+  regularCapacityUnits: number;
+  regularCoveragePercent: number;
+
+  volumeShortage: number;
+  hoursShortage: number;
+  isSufficientRegular: boolean;
+
+  totalOvertimeHoursNeeded: number;
+  otHoursPerPerson: number;
+  shiftHoursPerPerson: number;
+  maxPossibleOvertimeHours: number;
+  isOvertimeFeasible: boolean;
+  effectiveOvertimeHours: number;
+  uncoveredHours: number;
+  uncoveredUnits: number;
+
+  additionalHeadcountNeededWithMaxOt: number;
+  additionalHeadcountNeededWithoutOt: number;
+
+  totalOvertimeCost: number;
+  otCostPerPerson: number;
+
+  employeeSimulations: EmployeeSimulationDetail[];
+}
+
 function isoDate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -832,6 +893,101 @@ export function buildMailroomDayPreview(
     activities,
     approvedOvertimeHours,
     approvedOvertimeCost,
+  };
+}
+
+export function calculateProductivityScenario(input: ProductivityCalculatorInput): ProductivityCalculatorResult {
+  const targetVolume = Math.max(0, Math.floor(input.targetVolume || 0));
+  const unitsPerLaborHour = Math.max(0.01, input.unitsPerLaborHour || 150);
+  const currentEmployees = Math.max(0, Math.floor(input.currentEmployees || 0));
+  const standardHoursPerDay = Math.max(1, input.standardHoursPerDay ?? 8);
+  const maxOvertimeHoursPerDay = Math.max(0, input.maxOvertimeHoursPerDay ?? 3);
+  const plannedAbsencePercent = Math.min(100, Math.max(0, input.plannedAbsencePercent ?? 0));
+  const overtimeHourlyCost = Math.max(0, input.overtimeHourlyCost ?? 25);
+  const namePrefix = input.employeeNamePrefix || 'DLP Staff';
+
+  // Labor requirements
+  const totalRequiredLaborHours = unitsPerLaborHour > 0 ? targetVolume / unitsPerLaborHour : 0;
+  const requiredFte = standardHoursPerDay > 0 ? totalRequiredLaborHours / standardHoursPerDay : 0;
+
+  // Current workforce capacity
+  const effectiveEmployees = currentEmployees * (1 - plannedAbsencePercent / 100);
+  const regularCapacityHours = effectiveEmployees * standardHoursPerDay;
+  const regularCapacityUnits = Math.round(regularCapacityHours * unitsPerLaborHour);
+  const regularCoveragePercent = targetVolume > 0 ? Math.min(100, Math.round((regularCapacityUnits / targetVolume) * 1000) / 10) : 100;
+
+  // Gap / shortage
+  const volumeShortage = Math.max(0, targetVolume - regularCapacityUnits);
+  const hoursShortage = Math.max(0, totalRequiredLaborHours - regularCapacityHours);
+  const isSufficientRegular = hoursShortage <= 0.001;
+
+  // Overtime with current staff
+  const totalOvertimeHoursNeeded = hoursShortage;
+  const otHoursPerPerson = currentEmployees > 0 ? (totalOvertimeHoursNeeded / currentEmployees) : 0;
+  const shiftHoursPerPerson = standardHoursPerDay + otHoursPerPerson;
+  const maxPossibleOvertimeHours = currentEmployees * maxOvertimeHoursPerDay;
+  const isOvertimeFeasible = isSufficientRegular || (currentEmployees > 0 && otHoursPerPerson <= maxOvertimeHoursPerDay);
+  const effectiveOvertimeHours = Math.min(totalOvertimeHoursNeeded, maxPossibleOvertimeHours);
+  const uncoveredHours = Math.max(0, totalOvertimeHoursNeeded - maxPossibleOvertimeHours);
+  const uncoveredUnits = Math.round(uncoveredHours * unitsPerLaborHour);
+
+  // Additional headcount alternatives
+  const additionalHeadcountNeededWithMaxOt = standardHoursPerDay > 0 ? Math.ceil(uncoveredHours / standardHoursPerDay) : 0;
+  const additionalHeadcountNeededWithoutOt = Math.max(0, Math.ceil(requiredFte - currentEmployees));
+
+  // Costs
+  const totalOvertimeCost = effectiveOvertimeHours * overtimeHourlyCost;
+  const otCostPerPerson = currentEmployees > 0 ? totalOvertimeCost / currentEmployees : 0;
+
+  // Per-employee simulation breakdown
+  const employeeSimulations: EmployeeSimulationDetail[] = [];
+  const individualOt = Math.min(maxOvertimeHoursPerDay, otHoursPerPerson);
+  const workerRegularHours = standardHoursPerDay * (1 - plannedAbsencePercent / 100);
+  const workerRegularUnits = Math.round(workerRegularHours * unitsPerLaborHour);
+
+  for (let i = 1; i <= currentEmployees; i++) {
+    employeeSimulations.push({
+      workerIndex: i,
+      workerName: `${namePrefix} #${i}`,
+      regularHours: Math.round(workerRegularHours * 10) / 10,
+      regularCapacityUnits: workerRegularUnits,
+      otHoursRequired: Math.round(individualOt * 100) / 100,
+      totalShiftHours: Math.round((workerRegularHours + individualOt) * 100) / 100,
+      otCost: Math.round(individualOt * overtimeHourlyCost * 100) / 100,
+      isCapped: otHoursPerPerson > maxOvertimeHoursPerDay,
+    });
+  }
+
+  return {
+    targetVolume,
+    unitsPerLaborHour,
+    currentEmployees,
+    standardHoursPerDay,
+    maxOvertimeHoursPerDay,
+    plannedAbsencePercent,
+    overtimeHourlyCost,
+    totalRequiredLaborHours: Math.round(totalRequiredLaborHours * 100) / 100,
+    requiredFte: Math.round(requiredFte * 10) / 10,
+    effectiveEmployees: Math.round(effectiveEmployees * 10) / 10,
+    regularCapacityHours: Math.round(regularCapacityHours * 100) / 100,
+    regularCapacityUnits,
+    regularCoveragePercent,
+    volumeShortage,
+    hoursShortage: Math.round(hoursShortage * 100) / 100,
+    isSufficientRegular,
+    totalOvertimeHoursNeeded: Math.round(totalOvertimeHoursNeeded * 100) / 100,
+    otHoursPerPerson: Math.round(otHoursPerPerson * 100) / 100,
+    shiftHoursPerPerson: Math.round(shiftHoursPerPerson * 100) / 100,
+    maxPossibleOvertimeHours: Math.round(maxPossibleOvertimeHours * 100) / 100,
+    isOvertimeFeasible,
+    effectiveOvertimeHours: Math.round(effectiveOvertimeHours * 100) / 100,
+    uncoveredHours: Math.round(uncoveredHours * 100) / 100,
+    uncoveredUnits,
+    additionalHeadcountNeededWithMaxOt,
+    additionalHeadcountNeededWithoutOt,
+    totalOvertimeCost: Math.round(totalOvertimeCost * 100) / 100,
+    otCostPerPerson: Math.round(otCostPerPerson * 100) / 100,
+    employeeSimulations,
   };
 }
 

@@ -158,3 +158,23 @@ test('administrator device approvals compare phones and use the audited review R
   assert.match(migration, /previous_integrity_status, new_integrity_status, reason/i)
   assert.match(migration, /revoke all on function public\.review_employee_device_enrollment\(uuid, text, text\)/i)
 })
+
+test('Productivity Calculator computes required labour, current regular capacity, and per-person overtime', async () => {
+  const [view, service] = await Promise.all([
+    read('src/views/Productivity.tsx'),
+    read('src/services/productivity.service.ts'),
+  ])
+  assert.match(view, /Productivity Calculator/)
+  assert.match(view, /Required Labour/)
+  assert.match(view, /Current Labour We Have/)
+  assert.match(view, /OT Required \/ Person/)
+  assert.match(view, /Workload Deficit \/ Gap/)
+  assert.match(view, /Productivity & Overtime Calculator/)
+  assert.match(view, /Simulate in Calculator/)
+  assert.match(service, /calculateProductivityScenario/)
+  assert.match(service, /ProductivityCalculatorInput/)
+  assert.match(service, /ProductivityCalculatorResult/)
+  assert.match(service, /otHoursPerPerson/)
+  assert.match(service, /regularCapacityHours/)
+  assert.match(service, /isOvertimeFeasible/)
+})

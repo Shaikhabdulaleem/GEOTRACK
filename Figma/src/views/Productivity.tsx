@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload, Calculator, ShieldAlert, Layers, ArrowRight } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts';
 import { useAuth } from '../auth/AuthContext';
-import { addDays, buildMailroomDayPreview, buildMailroomOperationalModel, dateRange, getApprovedOvertimeMinutes, getEffectiveApprovedOvertimeMinutes, getEmployeeOtRate, isEmployeeActiveOnDate, productivityService, startOfSundayWeek, type MailroomDailyClientInput, type MailroomDailyDspInput, type MailroomDailyInput, type MailroomWorkspace } from '../services/productivity.service';
+import { addDays, buildMailroomDayPreview, buildMailroomOperationalModel, calculateProductivityScenario, dateRange, getApprovedOvertimeMinutes, getEffectiveApprovedOvertimeMinutes, getEmployeeOtRate, isEmployeeActiveOnDate, productivityService, startOfSundayWeek, type MailroomDailyClientInput, type MailroomDailyDspInput, type MailroomDailyInput, type MailroomWorkspace } from '../services/productivity.service';
 import { employeeService } from '../services/employee.service';
 import { shiftService } from '../services/shift.service';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -255,7 +255,7 @@ function EmployeeProductivity() {
   );
 }
 
-type ModuleTab = 'dashboard' | 'entry' | 'employee' | 'setup';
+type ModuleTab = 'dashboard' | 'entry' | 'calculator' | 'employee' | 'setup';
 type DashboardPeriod = 'day' | 'week' | 'month';
 
 const panelStyle = { background: '#0d1b2e', border: '1px solid #1e3a5a' };
@@ -287,7 +287,19 @@ function MetricCard({ label, value, detail, color = '#f0f6ff' }: { label: string
   return <div className="rounded-xl p-4" style={panelStyle}><div className="text-[11px] uppercase tracking-wider" style={{ color: '#4b6a8a' }}>{label}</div><div className="text-2xl font-bold font-mono mt-1" style={{ color }}>{value}</div>{detail && <div className="text-xs mt-1" style={{ color: '#64748b' }}>{detail}</div>}</div>;
 }
 
-function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace: MailroomWorkspace; fromDate: string; toDate: string; today: string }) {
+function OperationsDashboard({
+  workspace,
+  fromDate,
+  toDate,
+  today,
+  onOpenCalculator,
+}: {
+  workspace: MailroomWorkspace;
+  fromDate: string;
+  toDate: string;
+  today: string;
+  onOpenCalculator?: (volume?: number) => void;
+}) {
   const model = useMemo(() => buildMailroomOperationalModel(workspace, fromDate, toDate, today), [workspace, fromDate, toDate, today]);
   const [warehouseFilter, setWarehouseFilter] = useState('all');
   const turnaround = useMemo(() => {
@@ -467,7 +479,21 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
                 : (day.actualOvertimeHours > 0 ? 100 : null);
               return (
                 <tr key={day.date} className="border-t" style={{ borderColor: '#1e3a5a' }}>
-                  <td className="px-3 py-2 text-white font-medium">{shortDay(day.date)} <span style={{ color: '#64748b' }}>({day.date})</span></td>
+                  <td className="px-3 py-2 text-white font-medium">
+                    <div className="flex items-center justify-between gap-1">
+                      <span>{shortDay(day.date)} <span style={{ color: '#64748b' }}>({day.date})</span></span>
+                      {onOpenCalculator && day.received > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenCalculator(day.received)}
+                          className="p-1 rounded hover:bg-white/10 text-slate-400 hover:text-blue-400"
+                          title={`Calculate labor & OT for ${day.date} (${number(day.received)} units)`}
+                        >
+                          <Calculator size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-3 py-2 text-center uppercase text-[10px] font-semibold" style={{ color: day.status === 'finalized' ? '#10b981' : day.status === 'draft' ? '#f59e0b' : '#64748b' }}>
                     {day.status}
                   </td>
@@ -629,6 +655,18 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
               (Total {number(model.overtimeRecommendedHours, 1)}h)
             </span>
           </div>
+          {onOpenCalculator && (
+            <button
+              type="button"
+              onClick={() => onOpenCalculator(model.totalReceived)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-blue-600 transition-colors"
+              style={{ background: '#2563eb', color: '#fff' }}
+              title="Open this workload in the Productivity Calculator"
+            >
+              <Calculator size={13} />
+              Simulate in Calculator
+            </button>
+          )}
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -704,6 +742,659 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
       </div>
     </div>
   </div>;
+}
+
+function ProductivityCalculator({
+  workspace,
+  initialVolume,
+  onOpenDashboard,
+}: {
+  workspace: MailroomWorkspace;
+  initialVolume?: number | null;
+  onOpenDashboard?: () => void;
+}) {
+  const defaultRate = useMemo(() => {
+    const active = workspace.activities.find(a => a.status === 'active' && a.units_per_labor_hour > 0);
+    return active?.units_per_labor_hour ?? 150;
+  }, [workspace]);
+
+  const activeDlpCount = useMemo(() => {
+    const dlpEmployees = workspace.employees.filter(emp => {
+      const s = workspace.employeeSettings.find(item => item.employee_id === emp.id);
+      return s?.labor_class === 'dlp';
+    });
+    return dlpEmployees.length > 0 ? dlpEmployees.length : 10;
+  }, [workspace]);
+
+  const recentShipmentVolume = useMemo(() => {
+    if (workspace.shipments.length > 0) {
+      const dates = [...new Set(workspace.shipments.map(s => s.work_date))].sort();
+      const lastDate = dates[dates.length - 1];
+      const sum = workspace.shipments.filter(s => s.work_date === lastDate).reduce((acc, row) => acc + (row.received_units || 0), 0);
+      if (sum > 0) return sum;
+    }
+    return 14178;
+  }, [workspace]);
+
+  const [targetVolume, setTargetVolume] = useState<number>(initialVolume ?? recentShipmentVolume);
+  const [unitsPerLaborHour, setUnitsPerLaborHour] = useState<number>(defaultRate);
+  const [currentEmployees, setCurrentEmployees] = useState<number>(activeDlpCount);
+  const [standardHoursPerDay, setStandardHoursPerDay] = useState<number>(workspace.settings.standard_hours_per_day || 8);
+  const [maxOvertimeHoursPerDay, setMaxOvertimeHoursPerDay] = useState<number>(workspace.settings.max_overtime_hours_per_day || 3);
+  const [plannedAbsencePercent, setPlannedAbsencePercent] = useState<number>(workspace.settings.planned_absence_percent || 0);
+  const [overtimeHourlyCost, setOvertimeHourlyCost] = useState<number>(
+    workspace.settings.overtime_hourly_cost_own || workspace.settings.overtime_hourly_cost || 25
+  );
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  useEffect(() => {
+    if (initialVolume != null && initialVolume > 0) {
+      setTargetVolume(initialVolume);
+    }
+  }, [initialVolume]);
+
+  const calculation = useMemo(() => {
+    return calculateProductivityScenario({
+      targetVolume,
+      unitsPerLaborHour,
+      currentEmployees,
+      standardHoursPerDay,
+      maxOvertimeHoursPerDay,
+      plannedAbsencePercent,
+      overtimeHourlyCost,
+      employeeNamePrefix: 'Mailroom DLP',
+    });
+  }, [
+    targetVolume,
+    unitsPerLaborHour,
+    currentEmployees,
+    standardHoursPerDay,
+    maxOvertimeHoursPerDay,
+    plannedAbsencePercent,
+    overtimeHourlyCost,
+  ]);
+
+  const volumePresets = [10000, 14178, 16000, 20000, 25000];
+
+  return (
+    <div className="space-y-4">
+      {/* Header Banner */}
+      <div className="rounded-xl p-4 flex flex-wrap items-center justify-between gap-3" style={panelStyle}>
+        <div>
+          <div className="flex items-center gap-2">
+            <Calculator size={18} style={{ color: '#3b82f6' }} />
+            <h2 className="text-base font-bold text-white">Productivity & Overtime Calculator</h2>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: 'rgba(59,130,246,0.15)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.3)' }}>
+              LABOR CAPACITY MODEL
+            </span>
+          </div>
+          <p className="text-xs mt-1" style={{ color: '#64748b' }}>
+            Simulate how much volume your current workforce can complete in regular hours, calculate total and per-person overtime needed, and evaluate feasibility against shift limits.
+          </p>
+        </div>
+        {onOpenDashboard && (
+          <button
+            type="button"
+            onClick={onOpenDashboard}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+            style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#93c5fd' }}
+          >
+            <TrendingUp size={13} />
+            View Operations Dashboard
+          </button>
+        )}
+      </div>
+
+      {/* Interactive Controls Panel */}
+      <div className="rounded-xl p-4 space-y-4" style={panelStyle}>
+        <div className="grid md:grid-cols-3 gap-4">
+          {/* Target Volume */}
+          <div>
+            <label className="text-xs font-semibold text-white flex items-center justify-between">
+              <span>Target Shipment Volume (Units)</span>
+              <span className="text-[10px] font-mono" style={{ color: '#64748b' }}>e.g. 14,178</span>
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="100"
+              value={targetVolume}
+              onChange={e => setTargetVolume(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+              className="mt-1.5 w-full px-3 py-2 rounded-lg text-sm font-mono font-bold"
+              style={fieldStyle}
+            />
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {volumePresets.map(preset => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setTargetVolume(preset)}
+                  className="px-2 py-1 rounded text-[10px] font-mono transition-colors"
+                  style={{
+                    background: targetVolume === preset ? '#2563eb' : '#122338',
+                    color: targetVolume === preset ? '#fff' : '#94a3b8',
+                    border: `1px solid ${targetVolume === preset ? '#3b82f6' : '#1e3a5a'}`,
+                  }}
+                >
+                  {preset === 14178 ? 'Yesterday (14,178)' : preset.toLocaleString()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Productivity Rate */}
+          <div>
+            <label className="text-xs font-semibold text-white flex items-center justify-between">
+              <span>Throughput Rate (Units / Labor-Hour)</span>
+              <span className="text-[10px] font-mono" style={{ color: '#64748b' }}>Standard Speed</span>
+            </label>
+            <input
+              type="number"
+              min="1"
+              step="5"
+              value={unitsPerLaborHour}
+              onChange={e => setUnitsPerLaborHour(Math.max(1, Number(e.target.value) || 150))}
+              className="mt-1.5 w-full px-3 py-2 rounded-lg text-sm font-mono font-bold"
+              style={fieldStyle}
+            />
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {workspace.activities.filter(a => a.status === 'active').map(act => (
+                <button
+                  key={act.id}
+                  type="button"
+                  onClick={() => setUnitsPerLaborHour(act.units_per_labor_hour)}
+                  className="px-2 py-1 rounded text-[10px] font-mono transition-colors"
+                  style={{
+                    background: unitsPerLaborHour === act.units_per_labor_hour ? '#2563eb' : '#122338',
+                    color: unitsPerLaborHour === act.units_per_labor_hour ? '#fff' : '#94a3b8',
+                    border: `1px solid ${unitsPerLaborHour === act.units_per_labor_hour ? '#3b82f6' : '#1e3a5a'}`,
+                  }}
+                  title={act.name}
+                >
+                  {act.name.slice(0, 14)}: {act.units_per_labor_hour}/h
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Current Staff Count */}
+          <div>
+            <label className="text-xs font-semibold text-white flex items-center justify-between">
+              <span>Current Available DLP Staff (Headcount)</span>
+              <span className="text-[10px] font-mono" style={{ color: '#10b981' }}>{activeDlpCount} active in dept</span>
+            </label>
+            <div className="mt-1.5 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentEmployees(c => Math.max(1, c - 1))}
+                className="px-3 py-2 rounded-lg font-bold text-sm"
+                style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#fff' }}
+              >
+                -
+              </button>
+              <input
+                type="number"
+                min="1"
+                value={currentEmployees}
+                onChange={e => setCurrentEmployees(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                className="w-full px-3 py-2 rounded-lg text-sm font-mono font-bold text-center"
+                style={fieldStyle}
+              />
+              <button
+                type="button"
+                onClick={() => setCurrentEmployees(c => c + 1)}
+                className="px-3 py-2 rounded-lg font-bold text-sm"
+                style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#fff' }}
+              >
+                +
+              </button>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button
+                type="button"
+                onClick={() => setCurrentEmployees(activeDlpCount)}
+                className="px-2 py-1 rounded text-[10px] font-mono"
+                style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#93c5fd' }}
+              >
+                Reset to Active Team ({activeDlpCount})
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Advanced Settings Toggle */}
+        <div className="pt-2 border-t" style={{ borderColor: '#1e3a5a' }}>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="text-xs flex items-center gap-1 font-semibold"
+            style={{ color: '#93c5fd' }}
+          >
+            <Settings size={12} />
+            {showAdvanced ? 'Hide Shift & Cost Parameters' : 'Show Shift & Cost Parameters (Standard 8h, 3h OT Cap, 25 SAR/h)'}
+          </button>
+
+          {showAdvanced && (
+            <div className="mt-3 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 p-3 rounded-lg" style={{ background: '#081424', border: '1px solid #1e3a5a' }}>
+              <div>
+                <label className="text-[11px] text-white block">Standard Shift Hours</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="12"
+                  value={standardHoursPerDay}
+                  onChange={e => setStandardHoursPerDay(Math.max(1, Number(e.target.value) || 8))}
+                  className="mt-1 w-full px-2.5 py-1.5 rounded text-xs font-mono"
+                  style={fieldStyle}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-white block">Max Overtime Hours / Day</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="8"
+                  value={maxOvertimeHoursPerDay}
+                  onChange={e => setMaxOvertimeHoursPerDay(Math.max(0, Number(e.target.value) || 3))}
+                  className="mt-1 w-full px-2.5 py-1.5 rounded text-xs font-mono"
+                  style={fieldStyle}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-white block">Planned Absence Allowance (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="50"
+                  value={plannedAbsencePercent}
+                  onChange={e => setPlannedAbsencePercent(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                  className="mt-1 w-full px-2.5 py-1.5 rounded text-xs font-mono"
+                  style={fieldStyle}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-white block">Overtime Hourly Cost (SAR/h)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={overtimeHourlyCost}
+                  onChange={e => setOvertimeHourlyCost(Math.max(0, Number(e.target.value) || 25))}
+                  className="mt-1 w-full px-2.5 py-1.5 rounded text-xs font-mono"
+                  style={fieldStyle}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Primary KPI Result Cards */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        <MetricCard
+          label="Required Labour"
+          value={`${number(calculation.requiredFte, 1)} Staff`}
+          detail={`${number(calculation.totalRequiredLaborHours, 1)}h total labor needed to process ${number(calculation.targetVolume)} units`}
+          color="#3b82f6"
+        />
+        <MetricCard
+          label="Current Labour We Have"
+          value={`${calculation.currentEmployees} Staff`}
+          detail={`Regular output: ${number(calculation.regularCapacityUnits)} units (${calculation.regularCoveragePercent}% of workload) · ${number(calculation.regularCapacityHours, 1)}h regular`}
+          color="#10b981"
+        />
+        <MetricCard
+          label="Workload Deficit / Gap"
+          value={calculation.volumeShortage > 0 ? `-${number(calculation.volumeShortage)} units` : 'Zero Deficit'}
+          detail={calculation.hoursShortage > 0 ? `${number(calculation.hoursShortage, 1)}h labor shortage requiring OT or extra staff` : '100% covered within standard 8h shift'}
+          color={calculation.volumeShortage > 0 ? '#f59e0b' : '#10b981'}
+        />
+        <MetricCard
+          label="OT Required / Person"
+          value={`${number(calculation.otHoursPerPerson, 1)}h / person`}
+          detail={`Total: ${number(calculation.totalOvertimeHoursNeeded, 1)}h OT · Total shift: ${number(calculation.shiftHoursPerPerson, 1)}h ${calculation.isOvertimeFeasible ? '(Within 3h cap)' : '(Exceeds 3h cap!)'}`}
+          color={calculation.isOvertimeFeasible ? (calculation.otHoursPerPerson > 0 ? '#8b5cf6' : '#10b981') : '#ef4444'}
+        />
+      </div>
+
+      {/* Visual Capacity & Deficit Bar */}
+      <div className="rounded-xl p-4" style={panelStyle}>
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <div className="text-xs font-semibold text-white">Workload Capacity Distribution</div>
+          <div className="text-xs font-mono" style={{ color: '#94a3b8' }}>
+            Target: <strong className="text-white">{number(calculation.targetVolume)}</strong> units
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div className="h-4 rounded-full overflow-hidden flex" style={{ background: '#122338' }}>
+          <div
+            className="h-full transition-all"
+            style={{
+              width: `${Math.min(100, calculation.regularCoveragePercent)}%`,
+              background: '#10b981',
+            }}
+            title={`Regular Hours: ${number(calculation.regularCapacityUnits)} units (${calculation.regularCoveragePercent}%)`}
+          />
+          {calculation.volumeShortage > 0 && (
+            <div
+              className="h-full transition-all"
+              style={{
+                width: `${Math.min(100 - calculation.regularCoveragePercent, Math.round(((calculation.effectiveOvertimeHours * calculation.unitsPerLaborHour) / (calculation.targetVolume || 1)) * 100))}%`,
+                background: calculation.isOvertimeFeasible ? '#8b5cf6' : '#f59e0b',
+              }}
+              title={`Overtime Volume: ${number(Math.round(calculation.effectiveOvertimeHours * calculation.unitsPerLaborHour))} units`}
+            />
+          )}
+          {calculation.uncoveredHours > 0 && (
+            <div
+              className="h-full transition-all"
+              style={{
+                width: `${Math.max(0, 100 - calculation.regularCoveragePercent - Math.round(((calculation.effectiveOvertimeHours * calculation.unitsPerLaborHour) / (calculation.targetVolume || 1)) * 100))}%`,
+                background: '#ef4444',
+              }}
+              title={`Uncovered Deficit: ${number(calculation.uncoveredUnits)} units`}
+            />
+          )}
+        </div>
+
+        {/* Legend */}
+        <div className="flex flex-wrap items-center gap-4 mt-2.5 text-[11px]">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#10b981' }} />
+            <span style={{ color: '#94a3b8' }}>Regular Shift Capacity: </span>
+            <strong className="text-white font-mono">{number(calculation.regularCapacityUnits)} units ({calculation.regularCoveragePercent}%)</strong>
+          </div>
+          {calculation.volumeShortage > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full" style={{ background: calculation.isOvertimeFeasible ? '#8b5cf6' : '#f59e0b' }} />
+              <span style={{ color: '#94a3b8' }}>Covered by Current Staff OT: </span>
+              <strong className="text-white font-mono">{number(Math.round(calculation.effectiveOvertimeHours * calculation.unitsPerLaborHour))} units</strong>
+            </div>
+          )}
+          {calculation.uncoveredHours > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#ef4444' }} />
+              <span style={{ color: '#fca5a5' }}>Unmet Deficit Beyond 3h OT Cap: </span>
+              <strong className="text-red-400 font-mono">{number(calculation.uncoveredUnits)} units ({number(calculation.uncoveredHours, 1)}h)</strong>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Operational Feasibility Callout Banner */}
+      {calculation.isSufficientRegular ? (
+        <div className="p-4 rounded-xl flex items-start gap-3" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)' }}>
+          <CheckCircle2 size={18} style={{ color: '#10b981' }} className="shrink-0 mt-0.5" />
+          <div className="text-xs space-y-1">
+            <div className="font-bold text-white text-sm">Optimal Workforce Capacity — Zero Overtime Needed</div>
+            <div style={{ color: '#a7f3d0' }}>
+              Your current team of <strong>{calculation.currentEmployees} DLP employees</strong> can process the full target volume of <strong>{number(calculation.targetVolume)} shipments</strong> within standard 8-hour working hours ({number(calculation.regularCapacityHours, 1)}h regular capacity vs {number(calculation.totalRequiredLaborHours, 1)}h required). No overtime expenditure is required.
+            </div>
+          </div>
+        </div>
+      ) : calculation.isOvertimeFeasible ? (
+        <div className="p-4 rounded-xl flex items-start gap-3" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)' }}>
+          <Clock size={18} style={{ color: '#8b5cf6' }} className="shrink-0 mt-0.5" />
+          <div className="text-xs space-y-1">
+            <div className="font-bold text-white text-sm">
+              Workload Feasible via Overtime: {number(calculation.otHoursPerPerson, 1)} Hours / Person
+            </div>
+            <div style={{ color: '#c4b5fd' }}>
+              To complete <strong>{number(calculation.targetVolume)} units</strong>, each of your <strong>{calculation.currentEmployees} current employees</strong> must work <strong>{number(calculation.otHoursPerPerson, 1)} hours of overtime</strong> (bringing their total shift to <strong>{number(calculation.shiftHoursPerPerson, 1)} hours</strong>).
+            </div>
+            <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px]">
+              <span className="px-2 py-0.5 rounded font-mono font-semibold" style={{ background: 'rgba(16,185,129,0.15)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.3)' }}>
+                ✓ Within {calculation.maxOvertimeHoursPerDay}h daily OT limit
+              </span>
+              <span style={{ color: '#94a3b8' }}>
+                Total Overtime: <strong className="text-white font-mono">{number(calculation.totalOvertimeHoursNeeded, 1)}h</strong>
+              </span>
+              <span style={{ color: '#94a3b8' }}>
+                Total Estimated Cost: <strong className="text-amber-300 font-mono">SAR {number(calculation.totalOvertimeCost, 2)}</strong> (SAR {number(calculation.otCostPerPerson, 2)}/person)
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="p-4 rounded-xl flex items-start gap-3" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }}>
+          <ShieldAlert size={18} style={{ color: '#ef4444' }} className="shrink-0 mt-0.5" />
+          <div className="text-xs space-y-1">
+            <div className="font-bold text-white text-sm">
+              Overtime Limit Exceeded — {number(calculation.otHoursPerPerson, 1)} Hours / Person Required (Cap is {calculation.maxOvertimeHoursPerDay}h)
+            </div>
+            <div style={{ color: '#fca5a5' }}>
+              Completing {number(calculation.targetVolume)} shipments with only {calculation.currentEmployees} staff would require <strong>{number(calculation.otHoursPerPerson, 1)} hours of OT per person</strong> (total shift: <strong>{number(calculation.shiftHoursPerPerson, 1)} hours</strong>), which exceeds the safe daily cap of {calculation.maxOvertimeHoursPerDay} hours.
+            </div>
+            <div style={{ color: '#fca5a5' }}>
+              Even at maximum allowed overtime ({calculation.maxOvertimeHoursPerDay}h per person = {number(calculation.maxPossibleOvertimeHours, 1)}h total OT), an unmet deficit of <strong>{number(calculation.uncoveredHours, 1)} hours ({number(calculation.uncoveredUnits)} shipments)</strong> will remain. Review the recommended operational solutions below.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3 Operational Solutions Matrix */}
+      <div>
+        <div className="font-semibold text-sm text-white mb-2 flex items-center gap-1.5">
+          <Layers size={14} style={{ color: '#3b82f6' }} />
+          Operational Strategy Options for {number(calculation.targetVolume)} Units
+        </div>
+        <div className="grid md:grid-cols-3 gap-3">
+          {/* Option 1: Current Staff Overtime */}
+          <div className="rounded-xl p-4 flex flex-col justify-between" style={{ background: '#0d1b2e', border: calculation.isOvertimeFeasible ? '1px solid #8b5cf6' : '1px solid #ef4444' }}>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] uppercase font-bold tracking-wider" style={{ color: '#8b5cf6' }}>Option A</span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono" style={{
+                  background: calculation.isOvertimeFeasible ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                  color: calculation.isOvertimeFeasible ? '#6ee7b7' : '#fca5a5',
+                  border: `1px solid ${calculation.isOvertimeFeasible ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                }}>
+                  {calculation.isOvertimeFeasible ? '100% Volume Cleared' : 'Deficit Remains'}
+                </span>
+              </div>
+              <div className="text-sm font-bold text-white mt-1">Current Staff Overtime</div>
+              <div className="text-xs mt-1" style={{ color: '#64748b' }}>
+                Process workload using only the existing {calculation.currentEmployees} DLP employees.
+              </div>
+
+              <div className="mt-3 space-y-1.5 text-xs font-mono">
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>OT Hours / Person:</span>
+                  <strong className="text-white">{number(calculation.otHoursPerPerson, 1)}h</strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Total Shift Length:</span>
+                  <strong className="text-white">{number(calculation.shiftHoursPerPerson, 1)}h</strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Volume Processed:</span>
+                  <strong style={{ color: calculation.isOvertimeFeasible ? '#10b981' : '#f59e0b' }}>
+                    {calculation.isOvertimeFeasible ? number(calculation.targetVolume) : number(calculation.regularCapacityUnits + calculation.maxPossibleOvertimeHours * calculation.unitsPerLaborHour)} units
+                  </strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Estimated OT Cost:</span>
+                  <strong className="text-amber-300">SAR {number(calculation.totalOvertimeCost, 2)}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 text-[11px]" style={{ color: calculation.isOvertimeFeasible ? '#6ee7b7' : '#fca5a5' }}>
+              {calculation.isOvertimeFeasible
+                ? '✓ Recommended if team can work extra hours safely.'
+                : `⚠ Exceeds 3h daily cap. Leaves ${number(calculation.uncoveredUnits)} units unprocessed.`}
+            </div>
+          </div>
+
+          {/* Option 2: Additional Headcount (Zero OT) */}
+          <div className="rounded-xl p-4 flex flex-col justify-between" style={panelStyle}>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] uppercase font-bold tracking-wider" style={{ color: '#3b82f6' }}>Option B</span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono" style={{ background: 'rgba(59,130,246,0.15)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.3)' }}>
+                  Zero Overtime
+                </span>
+              </div>
+              <div className="text-sm font-bold text-white mt-1">Additional Headcount</div>
+              <div className="text-xs mt-1" style={{ color: '#64748b' }}>
+                Schedule additional staff to process all volume in standard 8-hour shifts without fatigue.
+              </div>
+
+              <div className="mt-3 space-y-1.5 text-xs font-mono">
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Additional Staff Needed:</span>
+                  <strong className="text-blue-400">+{calculation.additionalHeadcountNeededWithoutOt} workers</strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Total Workforce:</span>
+                  <strong className="text-white">{calculation.currentEmployees + calculation.additionalHeadcountNeededWithoutOt} staff</strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Shift Length:</span>
+                  <strong className="text-white">8.0h standard</strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Volume Processed:</span>
+                  <strong className="text-emerald-400">100% ({number(calculation.targetVolume)})</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 text-[11px]" style={{ color: '#93c5fd' }}>
+              ✓ Eliminates fatigue risks. Ideal when volume surge is ongoing or regular.
+            </div>
+          </div>
+
+          {/* Option 3: Balanced Hybrid */}
+          <div className="rounded-xl p-4 flex flex-col justify-between" style={{ background: '#0d1b2e', border: calculation.uncoveredHours > 0 ? '1px solid #10b981' : '1px solid #1e3a5a' }}>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] uppercase font-bold tracking-wider" style={{ color: '#10b981' }}>Option C</span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono" style={{ background: 'rgba(16,185,129,0.15)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.3)' }}>
+                  {calculation.uncoveredHours > 0 ? 'Best Balance' : 'Full Support'}
+                </span>
+              </div>
+              <div className="text-sm font-bold text-white mt-1">Hybrid: Capped OT + 3PL</div>
+              <div className="text-xs mt-1" style={{ color: '#64748b' }}>
+                Current staff work up to the {calculation.maxOvertimeHoursPerDay}h OT cap, and temporary 3PL staff cover the remainder.
+              </div>
+
+              <div className="mt-3 space-y-1.5 text-xs font-mono">
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Current Staff OT:</span>
+                  <strong className="text-white">{number(Math.min(calculation.maxOvertimeHoursPerDay, calculation.otHoursPerPerson), 1)}h / person</strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Extra 3PL Needed:</span>
+                  <strong className="text-emerald-400">+{calculation.additionalHeadcountNeededWithMaxOt} workers</strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>Volume Processed:</span>
+                  <strong className="text-emerald-400">100% ({number(calculation.targetVolume)})</strong>
+                </div>
+                <div className="flex justify-between py-1 border-b" style={{ borderColor: '#1e3a5a' }}>
+                  <span style={{ color: '#94a3b8' }}>OT Cost (Current Staff):</span>
+                  <strong className="text-amber-300">SAR {number(Math.min(calculation.totalOvertimeHoursNeeded, calculation.maxPossibleOvertimeHours) * calculation.overtimeHourlyCost, 2)}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 text-[11px]" style={{ color: '#6ee7b7' }}>
+              ✓ Maximizes existing team capacity within safe limits while guaranteeing zero backlog.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Simulated Per-Worker Roster Table */}
+      <div className="rounded-xl overflow-hidden" style={panelStyle}>
+        <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-2 border-b" style={{ borderColor: '#1e3a5a' }}>
+          <div>
+            <div className="font-semibold text-sm text-white">Simulated Per-Employee Shift & Overtime Roster</div>
+            <div className="text-xs mt-0.5" style={{ color: '#64748b' }}>
+              Individual schedule modeling across {calculation.currentEmployees} current workforce members.
+            </div>
+          </div>
+          <div className="text-xs font-mono" style={{ color: '#93c5fd' }}>
+            {calculation.currentEmployees} employees · {number(calculation.regularCapacityUnits)} reg units · {number(calculation.effectiveOvertimeHours, 1)}h total OT
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ background: '#122338', color: '#64748b' }}>
+                <th className="text-left px-3 py-2">Worker</th>
+                <th className="text-right px-3 py-2">Regular Shift</th>
+                <th className="text-right px-3 py-2">Regular Capacity</th>
+                <th className="text-right px-3 py-2">Required OT</th>
+                <th className="text-right px-3 py-2">Total Shift Length</th>
+                <th className="text-right px-3 py-2">Max Allowed OT</th>
+                <th className="text-right px-3 py-2">OT Cost</th>
+                <th className="text-center px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calculation.employeeSimulations.map(sim => (
+                <tr key={sim.workerIndex} className="border-t" style={{ borderColor: '#1e3a5a' }}>
+                  <td className="px-3 py-2.5 text-white font-medium">
+                    {sim.workerName}
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#93c5fd' }}>
+                    {number(sim.regularHours, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono text-white">
+                    {number(sim.regularCapacityUnits)} units
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: sim.otHoursRequired > 0 ? '#c4b5fd' : '#64748b' }}>
+                    {sim.otHoursRequired > 0 ? `${number(sim.otHoursRequired, 2)}h` : '0h'}
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold text-white">
+                    {number(sim.totalShiftHours, 2)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#94a3b8' }}>
+                    {calculation.maxOvertimeHoursPerDay}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: sim.otCost > 0 ? '#f59e0b' : '#64748b' }}>
+                    {sim.otCost > 0 ? `SAR ${number(sim.otCost, 2)}` : '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold font-mono" style={{
+                      background: sim.isCapped ? 'rgba(239,68,68,0.12)' : sim.otHoursRequired > 0 ? 'rgba(139,92,246,0.12)' : 'rgba(16,185,129,0.12)',
+                      color: sim.isCapped ? '#fca5a5' : sim.otHoursRequired > 0 ? '#c4b5fd' : '#6ee7b7',
+                      border: `1px solid ${sim.isCapped ? 'rgba(239,68,68,0.25)' : sim.otHoursRequired > 0 ? 'rgba(139,92,246,0.25)' : 'rgba(16,185,129,0.25)'}`,
+                    }}>
+                      {sim.isCapped ? 'Capped at 3h' : sim.otHoursRequired > 0 ? 'OT Active' : 'Regular Shift'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 font-semibold" style={{ borderColor: '#3b82f6', background: '#122338' }}>
+                <td className="px-3 py-2.5 text-white">Simulated Team Total ({calculation.currentEmployees})</td>
+                <td className="px-3 py-2.5 text-right font-mono text-white">{number(calculation.regularCapacityHours, 1)}h</td>
+                <td className="px-3 py-2.5 text-right font-mono text-white">{number(calculation.regularCapacityUnits)} units</td>
+                <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#c4b5fd' }}>
+                  {number(calculation.effectiveOvertimeHours, 1)}h
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono font-bold text-white">
+                  {number(calculation.regularCapacityHours + calculation.effectiveOvertimeHours, 1)}h
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono text-white">{calculation.maxPossibleOvertimeHours}h</td>
+                <td className="px-3 py-2.5 text-right font-mono font-bold text-amber-300">
+                  SAR {number(calculation.totalOvertimeCost, 2)}
+                </td>
+                <td className="px-3 py-2.5 text-center text-[10px]" style={{ color: calculation.isOvertimeFeasible ? '#6ee7b7' : '#fca5a5' }}>
+                  {calculation.isOvertimeFeasible ? '100% Workload Completed' : `+${number(calculation.uncoveredHours, 1)}h Deficit Remaining`}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, onSaveMonths, onLoadRange }: { workspace: MailroomWorkspace; today: string; workDate: string; setWorkDate: (value: string) => void; saving: boolean; onSave: (input: { workDate: string; status: MailroomDailyEntryStatus; clients: MailroomDailyClientInput[]; returnsReceived: number; returnsProcessed: number; dspAllocations: MailroomDailyDspInput[]; notes: string }) => Promise<void>; onSaveMonths: (batches: Array<Parameters<typeof productivityService.saveMailroomMonth>[1]>) => Promise<void>; onLoadRange: (fromDate: string, toDate: string) => Promise<MailroomWorkspace | null> }) {
@@ -1435,6 +2126,7 @@ export default function Productivity() {
   const isAdmin = activeMembership?.role_code === 'administrator';
   const today = riyadhToday();
   const [tab, setTab] = useState<ModuleTab>('dashboard');
+  const [calculatorVolume, setCalculatorVolume] = useState<number | null>(null);
   const [period, setPeriod] = useState<DashboardPeriod>('week');
   const [dashboardDay, setDashboardDay] = useState(today);
   const [weekStart, setWeekStart] = useState(startOfSundayWeek(today));
@@ -1497,9 +2189,14 @@ export default function Productivity() {
     {notice && <div className="p-3 rounded-lg text-sm" style={{ background: 'rgba(16,185,129,.08)', border: '1px solid rgba(16,185,129,.2)', color: '#6ee7b7' }}>{notice}</div>}
     {!workspace ? <div className="rounded-xl p-8 text-center" style={panelStyle}><PackageCheck size={34} className="mx-auto mb-3" style={{ color: '#3b82f6' }} /><div className="text-white font-semibold">Mailroom productivity is not initialized</div><div className="text-sm mt-1" style={{ color: '#64748b' }}>{isAdmin ? 'Load the approved clients, hourly rates, workflows and Mailroom workforce defaults.' : 'An administrator must initialize the Mailroom productivity setup.'}</div>{isAdmin && <button onClick={() => void initialize()} disabled={saving} className="mt-4 px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#2563eb', color: '#fff' }}>{saving ? 'Initializing…' : 'Initialize Mailroom module'}</button>}</div> : <>
       <div className="flex gap-2 overflow-x-auto pb-1">{[
-        ['dashboard', 'Operations Dashboard', <TrendingUp size={14} />], ['entry', 'Daily Entry', <ClipboardList size={14} />], ['employee', 'Employee Performance', <Users size={14} />], ...(isAdmin ? [['setup', 'Setup', <Settings size={14} />] as const] : []),
+        ['dashboard', 'Operations Dashboard', <TrendingUp size={14} />],
+        ['calculator', 'Productivity Calculator', <Calculator size={14} />],
+        ['entry', 'Daily Entry', <ClipboardList size={14} />],
+        ['employee', 'Employee Performance', <Users size={14} />],
+        ...(isAdmin ? [['setup', 'Setup', <Settings size={14} />] as const] : []),
       ].map(([id, label, icon]) => <button key={String(id)} onClick={() => setTab(id as ModuleTab)} className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap" style={{ background: tab === id ? '#2563eb' : '#0d1b2e', color: tab === id ? '#fff' : '#64748b', border: `1px solid ${tab === id ? '#2563eb' : '#1e3a5a'}` }}>{icon}{label}</button>)}</div>
-      {tab === 'dashboard' && <OperationsDashboard workspace={workspace} fromDate={fromDate} toDate={toDate} today={today} />}
+      {tab === 'dashboard' && <OperationsDashboard workspace={workspace} fromDate={fromDate} toDate={toDate} today={today} onOpenCalculator={(vol) => { if (vol != null) setCalculatorVolume(vol); setTab('calculator'); }} />}
+      {tab === 'calculator' && <ProductivityCalculator workspace={workspace} initialVolume={calculatorVolume} onOpenDashboard={() => setTab('dashboard')} />}
       {tab === 'entry' && <DailyEntry workspace={workspace} today={today} workDate={entryDate} setWorkDate={setEntryDate} saving={saving} onSave={saveDay} onSaveMonths={saveMonths} onLoadRange={(from, to) => productivityService.loadMailroomWorkspace(organizationId, from, to)} />}
       {tab === 'employee' && <EmployeeProductivity />}
       {tab === 'setup' && isAdmin && <SetupPanel workspace={workspace} refresh={load} />}
