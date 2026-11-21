@@ -533,16 +533,21 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
     };
   }, [supabaseReady, organizationId]);
 
-  // The breach duration counts up live between detector runs and realtime
-  // events, so refetch just the active breaches every 60s to keep "X min
-  // outside" current without reloading the whole dashboard.
+  // Realtime push handles geofence breach inserts and updates.
+  // Locally advance breach minutes outside every 60s without querying the database across the network.
   useEffect(() => {
     if (!supabaseReady || !organizationId) return;
-    const id = setInterval(async () => {
-      try {
-        const { dashboardService } = await import('../services/dashboard.service');
-        setGeofenceBreaches(await dashboardService.getActiveGeofenceBreaches(organizationId));
-      } catch { /* best-effort; the next full load will reconcile */ }
+    const id = setInterval(() => {
+      setGeofenceBreaches(prev => {
+        if (!prev || prev.length === 0) return prev;
+        const now = Date.now();
+        return prev.map(b => ({
+          ...b,
+          minutesOutside: b.startedAt
+            ? Math.max(0, Math.floor((now - new Date(b.startedAt).getTime()) / 60000))
+            : b.minutesOutside,
+        }));
+      });
     }, 60_000);
     return () => clearInterval(id);
   }, [supabaseReady, organizationId]);

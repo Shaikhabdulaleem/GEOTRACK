@@ -4,6 +4,18 @@ import assert from 'node:assert/strict'
 
 const read = file => readFile(new URL(`../${file}`, import.meta.url), 'utf8')
 
+const readProductivityView = async () => {
+  const files = [
+    'src/views/Productivity.tsx',
+    'src/components/productivity/AymakanImportModal.tsx',
+    'src/components/productivity/ProductivityCalculatorCard.tsx',
+    'src/components/productivity/DspAllocationTable.tsx',
+    'src/components/productivity/TurnaroundAnalytics.tsx',
+  ]
+  const contents = await Promise.all(files.map(read))
+  return contents.join('\n')
+}
+
 test('environment templates only expose browser-safe configuration', async () => {
   const [local, staging, production] = await Promise.all([
     read('.env.example'),
@@ -65,7 +77,7 @@ test('Mailroom productivity is department-scoped, RLS protected, and atomically 
 
 test('Mailroom productivity UI preserves employee performance and adds operations workflow', async () => {
   const [view, migration] = await Promise.all([
-    read('src/views/Productivity.tsx'),
+    readProductivityView(),
     read('../supabase/migrations/20261115170000_mailroom_daily_operations.sql'),
   ])
   assert.match(view, /Operations Dashboard/)
@@ -109,7 +121,7 @@ test('validation-client batches close using aggregate counts only', async () => 
 
 test('turnaround, returns, daily dashboard, and overtime cost remain aggregate-only', async () => {
   const [view, importer, service, migration] = await Promise.all([
-    read('src/views/Productivity.tsx'),
+    readProductivityView(),
     read('src/lib/aymakan-import.ts'),
     read('src/services/productivity.service.ts'),
     read('../supabase/migrations/20261120143000_mailroom_turnaround_and_ot_cost.sql'),
@@ -161,7 +173,7 @@ test('administrator device approvals compare phones and use the audited review R
 
 test('Productivity Calculator computes required labour, current regular capacity, and per-person overtime', async () => {
   const [view, service] = await Promise.all([
-    read('src/views/Productivity.tsx'),
+    readProductivityView(),
     read('src/services/productivity.service.ts'),
   ])
   assert.match(view, /Productivity Calculator/)

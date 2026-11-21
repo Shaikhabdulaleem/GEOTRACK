@@ -999,6 +999,39 @@ export interface Database {
           minutes_outside: number;
         }>;
       };
+      get_live_attendance_snapshot: {
+        Args: {
+          p_organization_id: string;
+          p_date?: string | null;
+          p_branch_id?: string | null;
+          p_department_id?: string | null;
+          p_shift_id?: string | null;
+          p_manager_id?: string | null;
+          p_employee_id?: string | null;
+        };
+        Returns: Array<{
+          id: string;
+          name: string;
+          employee_code: string;
+          department_id: string | null;
+          department_name: string;
+          shift: string | null;
+          shift_id: string | null;
+          shift_start: string | null;
+          shift_end: string | null;
+          crosses_midnight: boolean;
+          checkin: string | null;
+          checkout: string | null;
+          status: string;
+          attendance: string;
+          worked_minutes: number;
+          inside: boolean;
+          is_off: boolean;
+          last_event_at: string | null;
+          latitude: number | null;
+          longitude: number | null;
+        }>;
+      };
     };
     Enums: {
       app_role: AppRole;

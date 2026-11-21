@@ -25,13 +25,59 @@ export default function LiveAttendance() {
     if (!activeMembership) return;
     const client = getSupabaseClient();
 
+    const today = todayInTimezone('Asia/Riyadh');
+
+    // ── Optimized Server-side RPC path ──────────────────────────────────────────
+    // Fetches the exact scoped snapshot in 1 query without downloading thousands
+    // of raw attendance_events over the wire.
+    try {
+      const { data: rpcData, error: rpcErr } = await client.rpc('get_live_attendance_snapshot', {
+        p_organization_id: activeMembership.organization_id,
+        p_date: today,
+      });
+
+      if (!rpcErr && Array.isArray(rpcData)) {
+        const mapped = rpcData.map((row: any) => {
+          const totalMins = Number(row.worked_minutes) || 0;
+          const hours = Math.floor(totalMins / 60);
+          const mins = totalMins % 60;
+          const checkinTime = row.checkin
+            ? new Date(row.checkin).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : null;
+
+          return {
+            id: row.id,
+            name: row.name,
+            shift: row.shift ?? 'Day',
+            shiftStart: row.shift_start ?? '09:00',
+            checkin: checkinTime,
+            status: row.status,
+            worked: `${hours}h ${String(mins).padStart(2, '0')}m`,
+            inside: Boolean(row.inside),
+            productivity: 0,
+            phone: 0,
+            ot: '0h 00m',
+            attendance: row.attendance,
+            isOff: Boolean(row.is_off),
+          };
+        });
+
+        if (mountedRef.current) {
+          setEmployees(mapped);
+          setLastUpdated(new Date());
+        }
+        return;
+      }
+    } catch {
+      // Fall through to client-side fallback if RPC is not yet deployed
+    }
+
+    // ── Fallback client-side path ────────────────────────────────────────────────
     const { data: profiles, error: pError } = await client
       .from('employee_profiles')
       .select('*')
       .eq('organization_id', activeMembership.organization_id);
     if (pError) throw pError;
-
-    const today = todayInTimezone('Asia/Riyadh');
 
     const { data: records, error: rError } = await client
       .from('attendance_records')
@@ -43,14 +89,15 @@ export default function LiveAttendance() {
     const recordMap = Object.fromEntries((records || []).map(r => [r.employee_id, r]));
 
     // Latest location signal per employee today. Riyadh is a fixed +03:00 offset,
-    // matching todayInTimezone above. Newest-first, so the first row per employee wins.
+    // matching todayInTimezone above. Limit to recent rows for safety.
     const [{ data: events, error: eError }, { data: assignments }, { data: weeklyOffRows }] = await Promise.all([
       client
         .from('attendance_events')
         .select('employee_id, inside_geofence, event_at')
         .eq('organization_id', activeMembership.organization_id)
         .gte('event_at', `${today}T00:00:00+03:00`)
-        .order('event_at', { ascending: false }),
+        .order('event_at', { ascending: false })
+        .limit(2000),
       client
         .from('shift_assignments')
         .select('employee_id, shift_id, status, shift:shifts(name)')
@@ -147,11 +194,17 @@ export default function LiveAttendance() {
       .catch(err => { if (mountedRef.current) setError(toAppError(err).message); })
       .finally(() => { if (mountedRef.current) setLoading(false); });
 
-    // Live updates: refetch whenever today's attendance rows change for this
-    // organization. Requires Realtime enabled on attendance_records (migration
-    // 20261007120000_realtime_attendance.sql). If Realtime is not yet enabled
-    // the subscription is simply idle and the initial load still works.
+    // Live updates: debounced refetch whenever attendance punches or location events
+    // occur for this organization.
     const client = getSupabaseClient();
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const triggerRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        void fetchData().catch(() => undefined);
+      }, 1000);
+    };
+
     const channel = client
       .channel(`live-attendance-${activeMembership.organization_id}`)
       .on(
@@ -162,12 +215,23 @@ export default function LiveAttendance() {
           table: 'attendance_records',
           filter: `organization_id=eq.${activeMembership.organization_id}`,
         },
-        () => { void fetchData().catch(() => undefined); },
+        triggerRefresh,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'attendance_events',
+          filter: `organization_id=eq.${activeMembership.organization_id}`,
+        },
+        triggerRefresh,
       )
       .subscribe();
 
     return () => {
       mountedRef.current = false;
+      if (debounceTimer) clearTimeout(debounceTimer);
       void client.removeChannel(channel);
     };
   }, [activeMembership, fetchData]);
