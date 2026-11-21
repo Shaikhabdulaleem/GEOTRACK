@@ -324,6 +324,18 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
     {model.draftDates.length > 0 && <div className="p-3 rounded-lg text-xs" style={{ background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.25)', color: '#fbbf24' }}>{model.draftDates.length} draft day{model.draftDates.length === 1 ? '' : 's'} excluded from official totals: {model.draftDates.join(', ')}</div>}
     <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
       <MetricCard label="Received" value={number(model.totalReceived)} color="#3b82f6" />
+      <MetricCard
+        label="Regular Hours Capacity"
+        value={`${number(model.totalRegularUnitsCapacity)} units`}
+        detail={`Can do with regular hours (${model.totalReceived > 0 ? Math.round((model.totalRegularUnitsCapacity / model.totalReceived) * 100) : 100}% of received) · ${number(model.totalRegularCapacityHours, 1)}h labor`}
+        color="#3b82f6"
+      />
+      <MetricCard
+        label="Unmet Volume (Needs OT)"
+        value={`${number(model.totalShortageUnits)} units`}
+        detail={model.totalShortageUnits > 0 ? `${number(model.overtimeRecommendedHours, 1)}h overtime required to clear` : 'Fully covered within regular hours'}
+        color={model.totalShortageUnits > 0 ? '#f59e0b' : '#10b981'}
+      />
       <MetricCard label="Processed / Handover" value={number(model.totalProcessed)} color="#10b981" />
       <MetricCard label="Labor Hours Needed" value={`${number(model.totalRequiredHours, 1)}h`} color="#f59e0b" />
       <MetricCard label="Employees Required" value={number(model.averageRequiredFte, 1)} detail={`Peak ${number(model.peakRequiredFte, 1)}`} color="#f59e0b" />
@@ -332,6 +344,12 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
         value={`${number(model.overtimeRecommendedHours, 1)}h`}
         detail={`Est: SAR ${number(model.overtimeRecommendedCost, 2)}${model.uncoveredHours ? ` · ${number(model.uncoveredHours, 1)}h uncovered` : ''}`}
         color={model.uncoveredHours ? '#ef4444' : '#8b5cf6'}
+      />
+      <MetricCard
+        label="OT Required / Person"
+        value={`${number(model.averageOtRequiredPerPerson, 1)}h / person`}
+        detail={`Across ${model.scheduledDlpCount || model.eligibleDlpCount || (model.ownDlp + model.threePlDlp)} DLP employees · ${number(model.overtimeRecommendedHours, 1)}h total`}
+        color={model.averageOtRequiredPerPerson > (workspace.settings.max_overtime_hours_per_day || 3) ? '#ef4444' : '#8b5cf6'}
       />
       <MetricCard
         label="Actual OT (Done)"
@@ -363,7 +381,15 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
       <div className="rounded-xl p-4" style={panelStyle}>
         <div className="font-semibold text-sm text-white mb-3">Mailroom workforce</div>
         <div className="space-y-3">
-          {[['Own DLP', model.ownDlp, '#3b82f6'], ['3PL DLP', model.threePlDlp, '#8b5cf6'], ['Managers / Non-DLP', model.nonDlp, '#64748b'], ['Workload utilization', `${number(utilization, 0)}%`, utilization > 100 ? '#ef4444' : '#10b981'], [model.shortageHours > 0 ? 'Capacity shortage' : 'Surplus capacity', `${number(model.shortageHours > 0 ? model.shortageHours : model.surplusHours, 1)}h`, model.shortageHours > 0 ? '#ef4444' : '#10b981']].map(([label, value, color]) => <div key={String(label)} className="flex justify-between items-center p-3 rounded-lg" style={{ background: '#122338' }}><span className="text-xs" style={{ color: '#94a3b8' }}>{label}</span><span className="font-mono font-bold" style={{ color: String(color) }}>{value}</span></div>)}
+          {[
+            ['Own DLP', model.ownDlp, '#3b82f6'],
+            ['3PL DLP', model.threePlDlp, '#8b5cf6'],
+            ['Managers / Non-DLP', model.nonDlp, '#64748b'],
+            ['Regular capacity (volume)', `${number(model.totalRegularUnitsCapacity)} units (${model.totalReceived > 0 ? Math.round((model.totalRegularUnitsCapacity / model.totalReceived) * 100) : 100}%)`, '#3b82f6'],
+            ['OT required per person', `${number(model.averageOtRequiredPerPerson, 1)}h / person`, model.averageOtRequiredPerPerson > 0 ? '#8b5cf6' : '#10b981'],
+            ['Workload utilization', `${number(utilization, 0)}%`, utilization > 100 ? '#ef4444' : '#10b981'],
+            [model.shortageHours > 0 ? 'Capacity shortage' : 'Surplus capacity', `${number(model.shortageHours > 0 ? model.shortageHours : model.surplusHours, 1)}h`, model.shortageHours > 0 ? '#ef4444' : '#10b981']
+          ].map(([label, value, color]) => <div key={String(label)} className="flex justify-between items-center p-3 rounded-lg" style={{ background: '#122338' }}><span className="text-xs" style={{ color: '#94a3b8' }}>{label}</span><span className="font-mono font-bold" style={{ color: String(color) }}>{value}</span></div>)}
         </div>
       </div>
     </div>
@@ -383,9 +409,18 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>Regular Capacity: </span>
+            <strong className="font-mono text-white">{number(model.totalRegularUnitsCapacity)} units</strong>
+            <span className="text-[10px] font-mono ml-1" style={{ color: '#93c5fd' }}>({number(model.totalRegularCapacityHours, 1)}h)</span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
             <span style={{ color: '#94a3b8' }}>OT Required: </span>
             <strong className="font-mono text-white">{number(model.overtimeRecommendedHours, 1)}h</strong>
             <span className="text-[10px] font-mono ml-1" style={{ color: '#c4b5fd' }}>(SAR {number(model.overtimeRecommendedCost, 2)})</span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>OT / Person: </span>
+            <strong className="font-mono" style={{ color: model.averageOtRequiredPerPerson > 0 ? '#c4b5fd' : '#10b981' }}>{number(model.averageOtRequiredPerPerson, 1)}h</strong>
           </div>
           <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
             <span style={{ color: '#94a3b8' }}>OT Done (Approved): </span>
@@ -412,9 +447,11 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
             <tr style={{ background: '#122338', color: '#64748b' }}>
               <th className="text-left px-3 py-2">Date</th>
               <th className="text-center px-3 py-2">Status</th>
-              <th className="text-right px-3 py-2">Workload Demand</th>
+              <th className="text-right px-3 py-2">Received</th>
               <th className="text-right px-3 py-2">Regular Capacity</th>
+              <th className="text-right px-3 py-2">Workload Demand</th>
               <th className="text-right px-3 py-2">OT Required</th>
+              <th className="text-right px-3 py-2">OT / Person</th>
               <th className="text-right px-3 py-2">Req. Cost</th>
               <th className="text-right px-3 py-2">OT Done (Approved)</th>
               <th className="text-right px-3 py-2">Done Cost</th>
@@ -434,10 +471,22 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
                   <td className="px-3 py-2 text-center uppercase text-[10px] font-semibold" style={{ color: day.status === 'finalized' ? '#10b981' : day.status === 'draft' ? '#f59e0b' : '#64748b' }}>
                     {day.status}
                   </td>
+                  <td className="px-3 py-2 text-right font-mono text-white font-medium">
+                    {number(day.received)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono" style={{ color: '#93c5fd' }}>
+                    {number(day.regularUnitsCapacity)}
+                    <div className="text-[10px]" style={{ color: '#64748b' }}>
+                      {number(day.regularCapacityHours, 1)}h ({day.received > 0 ? Math.round((day.regularUnitsCapacity / day.received) * 100) : 100}%)
+                    </div>
+                  </td>
                   <td className="px-3 py-2 text-right font-mono" style={{ color: '#93c5fd' }}>{number(day.requiredHours, 1)}h</td>
-                  <td className="px-3 py-2 text-right font-mono" style={{ color: '#94a3b8' }}>{number(day.regularCapacityHours, 1)}h</td>
                   <td className="px-3 py-2 text-right font-mono font-medium" style={{ color: day.overtimeRecommendedHours > 0 ? '#8b5cf6' : '#64748b' }}>
                     {number(day.overtimeRecommendedHours, 1)}h
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono font-bold" style={{ color: day.otRequiredPerPerson > 0 ? '#c4b5fd' : '#64748b' }}>
+                    {number(day.otRequiredPerPerson, 1)}h
+                    <div className="text-[10px]" style={{ color: '#64748b' }}>{day.eligibleDlpCount || day.scheduledDlp} DLP</div>
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-[11px]" style={{ color: day.overtimeRecommendedCost > 0 ? '#c4b5fd' : '#64748b' }}>
                     {day.overtimeRecommendedCost > 0 ? `SAR ${number(day.overtimeRecommendedCost, 2)}` : '—'}
@@ -473,14 +522,20 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
           <tfoot>
             <tr className="border-t-2 font-semibold" style={{ borderColor: '#3b82f6', background: '#122338' }}>
               <td colSpan={2} className="px-3 py-2.5 text-white">Period Totals</td>
+              <td className="px-3 py-2.5 text-right font-mono text-white">{number(model.totalReceived)}</td>
+              <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#93c5fd' }}>
+                {number(model.totalRegularUnitsCapacity)}
+                <div className="text-[10px]" style={{ color: '#64748b' }}>({number(model.totalRegularCapacityHours, 1)}h)</div>
+              </td>
               <td className="px-3 py-2.5 text-right font-mono text-white">{number(model.totalRequiredHours, 1)}h</td>
-              <td className="px-3 py-2.5 text-right font-mono text-white">{number(model.totalRegularCapacityHours, 1)}h</td>
               <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#8b5cf6' }}>{number(model.overtimeRecommendedHours, 1)}h</td>
+              <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#c4b5fd' }}>{number(model.averageOtRequiredPerPerson, 1)}h</td>
+              <td className="px-3 py-2.5 text-right font-mono text-[11px]" style={{ color: '#c4b5fd' }}>SAR {number(model.overtimeRecommendedCost, 2)}</td>
               <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#10b981' }}>{number(model.actualOvertimeHours, 1)}h</td>
+              <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#f59e0b' }}>SAR {number(model.actualOvertimeCost, 2)}</td>
               <td className="px-3 py-2.5 text-right font-mono text-[11px]" style={{ color: model.actualOvertimeHours >= model.overtimeRecommendedHours ? '#10b981' : '#f59e0b' }}>
                 {`${model.actualOvertimeHours >= model.overtimeRecommendedHours ? '+' : ''}${number(model.actualOvertimeHours - model.overtimeRecommendedHours, 1)}h`}
               </td>
-              <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#f59e0b' }}>SAR {number(model.actualOvertimeCost, 2)}</td>
               <td className="px-3 py-2.5 text-center text-[10px]" style={{ color: '#93c5fd' }}>
                 {model.overtimeRecommendedHours > 0
                   ? `${Math.round((model.actualOvertimeHours / model.overtimeRecommendedHours) * 100)}% overall fulfillment`
@@ -543,7 +598,111 @@ function OperationsDashboard({ workspace, fromDate, toDate, today }: { workspace
       </div>
     )}
 
-    {model.overtimeAllocations.length > 0 && <div className="rounded-xl p-4" style={panelStyle}><div className="font-semibold text-sm text-white mb-3">Suggested overtime allocation using existing Mailroom DLP</div><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">{model.overtimeAllocations.map(item => <div key={item.employeeId} className="flex justify-between p-3 rounded-lg" style={{ background: '#122338' }}><span className="text-xs text-white">{item.employeeName}</span><span className="text-xs font-mono" style={{ color: '#c4b5fd' }}>{number(item.hours, 1)}h</span></div>)}</div></div>}
+    <div className="rounded-xl overflow-hidden" style={panelStyle}>
+      <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-3 border-b" style={{ borderColor: '#1e3a5a' }}>
+        <div>
+          <div className="font-semibold text-sm text-white">Suggested overtime allocation & capacity per person using existing Mailroom DLP</div>
+          <div className="text-xs mt-1" style={{ color: '#64748b' }}>
+            Workforce capacity achievable with regular hours vs overtime required per person to complete received volume ({number(model.totalReceived)} units).
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>Regular Capacity: </span>
+            <strong className="font-mono text-white">{number(model.totalRegularUnitsCapacity)} units</strong>
+            <span className="text-[10px] font-mono ml-1" style={{ color: '#93c5fd' }}>
+              ({model.totalReceived > 0 ? Math.round((model.totalRegularUnitsCapacity / model.totalReceived) * 100) : 100}%)
+            </span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>Unmet (Needs OT): </span>
+            <strong className="font-mono" style={{ color: model.totalShortageUnits > 0 ? '#f59e0b' : '#10b981' }}>
+              {number(model.totalShortageUnits)} units
+            </strong>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>OT Req. / Person: </span>
+            <strong className="font-mono" style={{ color: model.averageOtRequiredPerPerson > 0 ? '#c4b5fd' : '#10b981' }}>
+              {number(model.averageOtRequiredPerPerson, 1)}h / person
+            </strong>
+            <span className="text-[10px] font-mono ml-1" style={{ color: '#94a3b8' }}>
+              (Total {number(model.overtimeRecommendedHours, 1)}h)
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ background: '#122338', color: '#64748b' }}>
+              <th className="text-left px-3 py-2">Employee</th>
+              <th className="text-left px-3 py-2">Classification</th>
+              <th className="text-right px-3 py-2">Regular Hours</th>
+              <th className="text-right px-3 py-2">Regular Capacity (Units)</th>
+              <th className="text-right px-3 py-2">Required OT</th>
+              <th className="text-right px-3 py-2">Total Shift Hours</th>
+              <th className="text-right px-3 py-2">Max Daily OT Limit</th>
+              <th className="text-right px-3 py-2">Est. OT Cost</th>
+              <th className="text-center px-3 py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {model.overtimeAllocations.length === 0 ? (
+              <tr>
+                <td colSpan={9} className="p-4 text-center text-xs" style={{ color: '#64748b' }}>
+                  No scheduled Mailroom DLP employees found for this period.
+                </td>
+              </tr>
+            ) : (
+              model.overtimeAllocations.map(item => (
+                <tr key={item.employeeId} className="border-t" style={{ borderColor: '#1e3a5a' }}>
+                  <td className="px-3 py-2.5 text-white font-medium">
+                    {item.employeeName}
+                    <div className="text-[10px]" style={{ color: '#64748b' }}>{item.employeeCode}</div>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className="uppercase text-[10px] font-semibold px-2 py-0.5 rounded" style={{
+                      background: item.laborClass === 'dlp' ? 'rgba(37,99,235,0.12)' : 'rgba(100,116,139,0.12)',
+                      color: item.laborClass === 'dlp' ? '#93c5fd' : '#94a3b8',
+                      border: `1px solid ${item.laborClass === 'dlp' ? 'rgba(37,99,235,0.25)' : 'rgba(100,116,139,0.25)'}`,
+                    }}>
+                      {item.laborClass?.toUpperCase() ?? 'DLP'} · {item.employmentSource?.toUpperCase() ?? 'OWN'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#93c5fd' }}>
+                    {number(item.regularHours ?? 0, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#10b981' }}>
+                    {number(item.regularUnitsCapacity ?? 0)} units
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: item.hours > 0 ? '#c4b5fd' : '#64748b' }}>
+                    {number(item.hours, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono text-white">
+                    {number(item.totalShiftHours ?? (item.regularHours ?? 0) + item.hours, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#94a3b8' }}>
+                    {number(item.maxOtHours ?? 0, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: (item.totalCost ?? 0) > 0 ? '#f59e0b' : '#64748b' }}>
+                    {(item.totalCost ?? 0) > 0 ? `SAR ${number(item.totalCost ?? 0, 2)}` : '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold font-mono" style={{
+                      background: item.status === 'ineligible' ? 'rgba(239,68,68,0.12)' : item.status === 'capped' ? 'rgba(245,158,11,0.12)' : item.hours > 0 ? 'rgba(139,92,246,0.12)' : 'rgba(16,185,129,0.12)',
+                      color: item.status === 'ineligible' ? '#fca5a5' : item.status === 'capped' ? '#fcd34d' : item.hours > 0 ? '#c4b5fd' : '#6ee7b7',
+                      border: `1px solid ${item.status === 'ineligible' ? 'rgba(239,68,68,0.25)' : item.status === 'capped' ? 'rgba(245,158,11,0.25)' : item.hours > 0 ? 'rgba(139,92,246,0.25)' : 'rgba(16,185,129,0.25)'}`,
+                    }}>
+                      {item.status === 'ineligible' ? 'Ineligible' : item.status === 'capped' ? 'At Max Cap' : item.hours > 0 ? 'Within Cap' : 'Regular Only'}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>;
 }
 
@@ -1051,7 +1210,7 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
     {(invalidClients.length > 0 || invalidReturns) && <div className="p-3 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.25)', color: '#fca5a5' }}>{invalidClients.length > 0 ? `Processed volume exceeds available backlog for ${invalidClients.map(client => client.name).join(', ')}.` : 'Returns processed exceeds the available return backlog.'}</div>}
     {overAllocatedDspClients.length > 0 && activePartners.length > 0 && <div className="p-3 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.25)', color: '#fca5a5' }}>Reduce DSP allocation for: {overAllocatedDspClients.map(client => client.name).join(', ')}. Allocation cannot exceed processed volume.</div>}
 
-    <div className="rounded-xl overflow-hidden" style={panelStyle}><div className="px-4 py-3 flex flex-wrap items-center justify-between gap-2"><div><div className="font-semibold text-sm text-white">Live staffing impact</div><div className="text-xs" style={{ color: '#64748b' }}>Calculated before saving from the values above.</div></div><div className="flex flex-wrap gap-4 text-right"><div><div className="text-[10px]" style={{ color: '#64748b' }}>HOURS NEEDED</div><div className="font-mono font-bold text-white">{number(preview.requiredHours, 1)}h</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>EMPLOYEES</div><div className="font-mono font-bold" style={{ color: '#f59e0b' }}>{number(preview.requiredEmployees, 1)}</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>OT REQUIRED</div><div className="font-mono font-bold" style={{ color: '#8b5cf6' }}>{number(preview.overtimeHours, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#c4b5fd' }}>SAR {number(preview.overtimeCost, 2)}</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>OT DONE (APPROVED)</div><div className="font-mono font-bold" style={{ color: totalApprovedOtHours >= preview.overtimeHours ? '#10b981' : '#f59e0b' }}>{number(totalApprovedOtHours, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#10b981' }}>SAR {number(totalApprovedOtCost, 2)}</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>APPROVED OT COST</div><div className="font-mono font-bold" style={{ color: '#f59e0b' }}>SAR {number(totalApprovedOtCost, 2)}</div><div className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{number(totalApprovedOtHours, 1)}h × rate</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>EXTRA 3PL</div><div className="font-mono font-bold" style={{ color: preview.additionalEmployees ? '#ef4444' : '#10b981' }}>{preview.additionalEmployees}</div></div></div></div><div className="max-h-72 overflow-auto"><table className="w-full text-xs"><thead><tr style={{ background: '#122338', color: '#64748b' }}>{['Activity', 'Volume', 'Rate/hour', 'Hours', 'Employees required'].map(header => <th key={header} className="text-right first:text-left px-3 py-2">{header}</th>)}</tr></thead><tbody>{preview.activities.map(activity => <tr key={activity.id} className="border-t" style={{ borderColor: '#1e3a5a' }}><td className="px-3 py-2 text-white">{activity.name}</td><td className="px-3 py-2 text-right font-mono">{number(activity.volume)}</td><td className="px-3 py-2 text-right font-mono">{number(activity.rate)}</td><td className="px-3 py-2 text-right font-mono">{number(activity.laborHours, 1)}</td><td className="px-3 py-2 text-right font-mono" style={{ color: '#f59e0b' }}>{number(activity.averageEmployees, 1)}</td></tr>)}</tbody></table></div></div>
+    <div className="rounded-xl overflow-hidden" style={panelStyle}><div className="px-4 py-3 flex flex-wrap items-center justify-between gap-2"><div><div className="font-semibold text-sm text-white">Live staffing impact</div><div className="text-xs" style={{ color: '#64748b' }}>Calculated before saving from the values above.</div></div><div className="flex flex-wrap gap-4 text-right"><div><div className="text-[10px]" style={{ color: '#64748b' }}>RECEIVED</div><div className="font-mono font-bold text-white">{number(preview.totalReceived)}</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>REGULAR CAPACITY</div><div className="font-mono font-bold" style={{ color: '#93c5fd' }}>{number(preview.regularUnitsCapacity)}</div><div className="text-[10px] font-mono" style={{ color: '#64748b' }}>{number(preview.regularCapacityHours, 1)}h regular</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>UNMET (NEEDS OT)</div><div className="font-mono font-bold" style={{ color: preview.shortageUnits > 0 ? '#f59e0b' : '#10b981' }}>{number(preview.shortageUnits)}</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>HOURS NEEDED</div><div className="font-mono font-bold text-white">{number(preview.requiredHours, 1)}h</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>EMPLOYEES</div><div className="font-mono font-bold" style={{ color: '#f59e0b' }}>{number(preview.requiredEmployees, 1)}</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>OT REQUIRED</div><div className="font-mono font-bold" style={{ color: '#8b5cf6' }}>{number(preview.overtimeHours, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#c4b5fd' }}>SAR {number(preview.overtimeCost, 2)}</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>OT / PERSON</div><div className="font-mono font-bold" style={{ color: preview.otRequiredPerPerson > 0 ? '#c4b5fd' : '#10b981' }}>{number(preview.otRequiredPerPerson, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#64748b' }}>{preview.eligibleDlp || preview.scheduledDlp} DLP</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>OT DONE (APPROVED)</div><div className="font-mono font-bold" style={{ color: totalApprovedOtHours >= preview.overtimeHours ? '#10b981' : '#f59e0b' }}>{number(totalApprovedOtHours, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#10b981' }}>SAR {number(totalApprovedOtCost, 2)}</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>APPROVED OT COST</div><div className="font-mono font-bold" style={{ color: '#f59e0b' }}>SAR {number(totalApprovedOtCost, 2)}</div><div className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{number(totalApprovedOtHours, 1)}h × rate</div></div><div><div className="text-[10px]" style={{ color: '#64748b' }}>EXTRA 3PL</div><div className="font-mono font-bold" style={{ color: preview.additionalEmployees ? '#ef4444' : '#10b981' }}>{preview.additionalEmployees}</div></div></div></div><div className="max-h-72 overflow-auto"><table className="w-full text-xs"><thead><tr style={{ background: '#122338', color: '#64748b' }}>{['Activity', 'Volume', 'Rate/hour', 'Hours', 'Employees required'].map(header => <th key={header} className="text-right first:text-left px-3 py-2">{header}</th>)}</tr></thead><tbody>{preview.activities.map(activity => <tr key={activity.id} className="border-t" style={{ borderColor: '#1e3a5a' }}><td className="px-3 py-2 text-white">{activity.name}</td><td className="px-3 py-2 text-right font-mono">{number(activity.volume)}</td><td className="px-3 py-2 text-right font-mono">{number(activity.rate)}</td><td className="px-3 py-2 text-right font-mono">{number(activity.laborHours, 1)}</td><td className="px-3 py-2 text-right font-mono" style={{ color: '#f59e0b' }}>{number(activity.averageEmployees, 1)}</td></tr>)}</tbody></table></div></div>
 
     <div className="rounded-xl overflow-hidden" style={panelStyle}>
       <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-3 border-b" style={{ borderColor: '#1e3a5a' }}>
@@ -1061,9 +1220,18 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>Regular Capacity: </span>
+            <strong className="font-mono text-white">{number(preview.regularUnitsCapacity)} units</strong>
+            <span className="text-[10px] font-mono ml-1" style={{ color: '#93c5fd' }}>({number(preview.regularCapacityHours, 1)}h)</span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
             <span style={{ color: '#94a3b8' }}>OT Required: </span>
             <strong className="font-mono text-white">{number(preview.overtimeHours, 1)}h</strong>
             <span className="text-[10px] font-mono ml-1" style={{ color: '#c4b5fd' }}>(SAR {number(preview.overtimeCost, 2)})</span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>OT / Person: </span>
+            <strong className="font-mono" style={{ color: preview.otRequiredPerPerson > 0 ? '#c4b5fd' : '#10b981' }}>{number(preview.otRequiredPerPerson, 1)}h</strong>
           </div>
           <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
             <span style={{ color: '#94a3b8' }}>OT Done (Approved): </span>

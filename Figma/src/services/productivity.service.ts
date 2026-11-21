@@ -114,6 +114,8 @@ export interface MailroomDayCapacity {
   requiredHours: number;
   requiredFte: number;
   regularCapacityHours: number;
+  regularUnitsCapacity: number;
+  shortageUnits: number;
   gapHours: number;
   additional3pl: number;
   overtimeCapacityHours: number;
@@ -124,6 +126,8 @@ export interface MailroomDayCapacity {
   overtimeCostSaved: number;
   uncoveredHours: number;
   scheduledDlp: number;
+  eligibleDlpCount: number;
+  otRequiredPerPerson: number;
 }
 
 export interface MailroomClientSummary {
@@ -139,7 +143,17 @@ export interface MailroomClientSummary {
 export interface MailroomOvertimeAllocation {
   employeeId: string;
   employeeName: string;
+  employeeCode?: string;
+  laborClass?: string;
+  employmentSource?: string;
+  regularHours?: number;
+  regularUnitsCapacity?: number;
   hours: number;
+  maxOtHours?: number;
+  totalShiftHours?: number;
+  hourlyCost?: number;
+  totalCost?: number;
+  status?: 'active' | 'capped' | 'regular_only' | 'ineligible';
 }
 
 export interface MailroomEmployeeOvertimeSummary {
@@ -165,6 +179,8 @@ export interface MailroomOperationalModel {
   totalDspAllocated: number;
   totalRequiredHours: number;
   totalRegularCapacityHours: number;
+  totalRegularUnitsCapacity: number;
+  totalShortageUnits: number;
   averageRequiredFte: number;
   absenceReserveFte: number;
   totalPlannedFte: number;
@@ -182,6 +198,9 @@ export interface MailroomOperationalModel {
   ownDlp: number;
   threePlDlp: number;
   nonDlp: number;
+  scheduledDlpCount: number;
+  eligibleDlpCount: number;
+  averageOtRequiredPerPerson: number;
   days: MailroomDayCapacity[];
   clients: MailroomClientSummary[];
   activities: MailroomActivityCapacity[];
@@ -191,6 +210,12 @@ export interface MailroomOperationalModel {
 }
 
 export interface MailroomDayPreview {
+  totalReceived: number;
+  regularUnitsCapacity: number;
+  shortageUnits: number;
+  scheduledDlp: number;
+  eligibleDlp: number;
+  otRequiredPerPerson: number;
   requiredHours: number;
   requiredEmployees: number;
   regularCapacityHours: number;
@@ -320,7 +345,7 @@ export function buildMailroomOperationalModel(
   const requiredByDate = new Map<string, number>();
   dates.forEach(date => {
     const entry = entryByDate.get(date);
-    if (!entry || entry.status !== 'finalized') return;
+    if (!entry) return;
     const dailyActivity = new Map<string, { volume: number; hours: number }>();
     workspace.mappings.forEach(mapping => {
       const activity = activityById.get(mapping.activity_id);
@@ -345,22 +370,31 @@ export function buildMailroomOperationalModel(
       dailyActivity.set(activity.id, { volume, hours: volume / activity.units_per_labor_hour });
     });
     dailyActivity.forEach((daily, activityId) => {
-      const aggregate = activityTotals.get(activityId) ?? { volume: 0, hours: 0, peakHours: 0 };
-      aggregate.volume += daily.volume;
-      aggregate.hours += daily.hours;
-      aggregate.peakHours = Math.max(aggregate.peakHours, daily.hours);
-      activityTotals.set(activityId, aggregate);
+      if (entry.status === 'finalized') {
+        const aggregate = activityTotals.get(activityId) ?? { volume: 0, hours: 0, peakHours: 0 };
+        aggregate.volume += daily.volume;
+        aggregate.hours += daily.hours;
+        aggregate.peakHours = Math.max(aggregate.peakHours, daily.hours);
+        activityTotals.set(activityId, aggregate);
+      }
       requiredByDate.set(date, (requiredByDate.get(date) ?? 0) + daily.hours);
     });
   });
 
   const allocationTotals = new Map<string, number>();
+  const employeeRegularHoursMap = new Map<string, number>();
+  const employeeRegularUnitsMap = new Map<string, number>();
+  const employeeScheduledDaysMap = new Map<string, number>();
+  const employeeMaxOtCapMap = new Map<string, number>();
+
   const days = dates.map(date => {
-    const dayRows = selected.filter(row => row.work_date === date);
+    const dayRows = workspace.shipments.filter(row => row.work_date === date);
     let regularCapacityHours = 0;
     let overtimeCapacityHours = 0;
     let scheduledDlp = 0;
-    const eligible: Array<{ id: string; cap: number }> = [];
+    const eligible: Array<{ id: string; cap: number; regularHours: number }> = [];
+    const scheduledEmployees: Array<{ id: string; regularHours: number; cap: number; eligible: boolean }> = [];
+
     workspace.employees.forEach(employee => {
       if (!isEmployeeActiveOnDate(employee, date)) return;
       const setting = settingFor(employee);
@@ -369,36 +403,99 @@ export function buildMailroomOperationalModel(
       if (!schedule || schedule.state !== 'working') return;
       scheduledDlp += 1;
       const scheduledHours = shiftHours(schedule) * (1 - workspace.settings.planned_absence_percent / 100);
+      let workedRegularHours = scheduledHours;
       if (date < today) {
         const records = attendanceByEmployeeDate.get(`${employee.id}:${date}`) ?? [];
         const workedHours = records.reduce((sum, row) => sum + Math.max(0, row.worked_minutes - row.overtime_minutes) / 60, 0);
-        // If employee was absent on that day, scheduled labor must still be counted on that day
-        regularCapacityHours += workedHours > 0 ? workedHours : scheduledHours;
+        workedRegularHours = workedHours > 0 ? workedHours : scheduledHours;
+        regularCapacityHours += workedRegularHours;
       } else {
         regularCapacityHours += scheduledHours;
       }
+
+      const cap = setting.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
+      scheduledEmployees.push({ id: employee.id, regularHours: workedRegularHours, cap, eligible: setting.overtime_eligible });
       if (setting.overtime_eligible) {
-        const cap = setting.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
         overtimeCapacityHours += cap;
-        eligible.push({ id: employee.id, cap });
+        eligible.push({ id: employee.id, cap, regularHours: workedRegularHours });
       }
     });
 
     const entry = entryByDate.get(date);
     const isFinalized = entry?.status === 'finalized';
     const status: MailroomDayCapacity['status'] = entry?.status ?? 'missing';
-    const requiredHours = isFinalized ? (requiredByDate.get(date) ?? 0) : 0;
+    const requiredHours = requiredByDate.get(date) ?? 0;
+    const dayReceived = dayRows.reduce((sum, row) => sum + row.received_units, 0);
+    const dayProcessed = dayRows.reduce((sum, row) => sum + row.processed_units, 0);
+
+    // Calculate how much volume can be processed in regular hours
+    let regularUnitsCapacity = dayReceived;
+    if (requiredHours > 0) {
+      if (regularCapacityHours >= requiredHours) {
+        regularUnitsCapacity = dayReceived;
+      } else {
+        regularUnitsCapacity = Math.min(dayReceived, Math.round(dayReceived * (regularCapacityHours / requiredHours)));
+      }
+    } else if (dayReceived === 0 && dayProcessed > 0 && requiredHours > 0) {
+      if (regularCapacityHours >= requiredHours) {
+        regularUnitsCapacity = dayProcessed;
+      } else {
+        regularUnitsCapacity = Math.min(dayProcessed, Math.round(dayProcessed * (regularCapacityHours / requiredHours)));
+      }
+    }
+    const shortageUnits = Math.max(0, dayReceived - regularUnitsCapacity);
+
     const gapHours = Math.max(0, requiredHours - regularCapacityHours);
-    let remaining = Math.min(gapHours, overtimeCapacityHours);
-    eligible.sort((a, b) => (allocationTotals.get(a.id) ?? 0) - (allocationTotals.get(b.id) ?? 0) || a.id.localeCompare(b.id));
-    eligible.forEach(item => {
-      const assigned = Math.min(item.cap, remaining);
-      if (assigned > 0) allocationTotals.set(item.id, (allocationTotals.get(item.id) ?? 0) + assigned);
-      remaining -= assigned;
-    });
     const overtimeRecommendedHours = Math.min(gapHours, overtimeCapacityHours);
     const baseOtRate = getDepartmentBaseOtRate(workspace.settings);
     const overtimeRecommendedCost = overtimeRecommendedHours * baseOtRate;
+
+    // Overtime required per person
+    const eligibleDlpCount = eligible.length;
+    const otRequiredPerPerson = eligibleDlpCount > 0
+      ? overtimeRecommendedHours / eligibleDlpCount
+      : (scheduledDlp > 0 ? overtimeRecommendedHours / scheduledDlp : 0);
+
+    // Fair overtime allocation among eligible employees
+    let remainingOt = overtimeRecommendedHours;
+    let activeEligible = [...eligible];
+    const dayAssigned = new Map<string, number>();
+    eligible.forEach(item => dayAssigned.set(item.id, 0));
+
+    while (remainingOt > 0.001 && activeEligible.length > 0) {
+      const share = remainingOt / activeEligible.length;
+      let assignedAny = false;
+      const nextActive: typeof activeEligible = [];
+      for (const item of activeEligible) {
+        const current = dayAssigned.get(item.id) ?? 0;
+        const remainingCap = item.cap - current;
+        if (remainingCap <= 0.001) continue;
+        const assign = Math.min(remainingCap, share);
+        dayAssigned.set(item.id, current + assign);
+        remainingOt -= assign;
+        assignedAny = true;
+        if (item.cap - (current + assign) > 0.001) {
+          nextActive.push(item);
+        }
+      }
+      activeEligible = nextActive;
+      if (!assignedAny) break;
+    }
+
+    dayAssigned.forEach((assigned, empId) => {
+      if (assigned > 0) {
+        allocationTotals.set(empId, (allocationTotals.get(empId) ?? 0) + assigned);
+      }
+    });
+
+    const empRegularUnitsShare = scheduledDlp > 0 ? Math.round(regularUnitsCapacity / scheduledDlp) : 0;
+    scheduledEmployees.forEach(emp => {
+      employeeScheduledDaysMap.set(emp.id, (employeeScheduledDaysMap.get(emp.id) ?? 0) + 1);
+      employeeRegularHoursMap.set(emp.id, (employeeRegularHoursMap.get(emp.id) ?? 0) + emp.regularHours);
+      employeeRegularUnitsMap.set(emp.id, (employeeRegularUnitsMap.get(emp.id) ?? 0) + empRegularUnitsShare);
+      employeeMaxOtCapMap.set(emp.id, emp.cap);
+    });
+
     let dayApprovedOtHours = 0;
     let dayApprovedOtCost = 0;
     workspace.employees.forEach(employee => {
@@ -420,8 +517,8 @@ export function buildMailroomOperationalModel(
     const actualOvertimeCost = dayApprovedOtCost;
     return {
       date,
-      received: dayRows.reduce((sum, row) => sum + row.received_units, 0),
-      processed: dayRows.reduce((sum, row) => sum + row.processed_units, 0),
+      received: dayReceived,
+      processed: dayProcessed,
       returnsReceived: isFinalized ? (entry?.returns_received ?? 0) : 0,
       returnsProcessed: isFinalized ? (entry?.returns_processed ?? 0) : 0,
       dspAllocated: isFinalized && entry ? (dspByEntry.get(entry.id) ?? 0) : 0,
@@ -429,6 +526,8 @@ export function buildMailroomOperationalModel(
       requiredHours,
       requiredFte: requiredHours / workspace.settings.standard_hours_per_day,
       regularCapacityHours,
+      regularUnitsCapacity,
+      shortageUnits,
       gapHours,
       additional3pl: Math.ceil(Math.max(0, gapHours - overtimeCapacityHours) / workspace.settings.standard_hours_per_day),
       overtimeCapacityHours,
@@ -439,6 +538,8 @@ export function buildMailroomOperationalModel(
       overtimeCostSaved: Math.max(0, overtimeRecommendedHours - actualOvertimeHours) * baseOtRate,
       uncoveredHours: Math.max(0, gapHours - overtimeCapacityHours),
       scheduledDlp,
+      eligibleDlpCount,
+      otRequiredPerPerson,
     };
   });
 
@@ -479,13 +580,56 @@ export function buildMailroomOperationalModel(
   const nonDlp = activeInPeriod.length - ownDlp - threePlDlp;
   const totalRequiredHours = days.reduce((sum, day) => sum + day.requiredHours, 0);
   const officialDays = days.filter(day => day.status === 'finalized');
+  const targetDays = officialDays.length > 0 ? officialDays : (dates.length === 1 && days[0].received > 0 ? days : officialDays);
+  const totalReceived = targetDays.reduce((sum, day) => sum + day.received, 0);
+  const totalValidated = targetDays.reduce((sum, day) => sum + day.processed, 0);
+  const totalProcessed = targetDays.reduce((sum, day) => sum + day.processed, 0);
+  const totalRegularUnitsCapacity = targetDays.reduce((sum, day) => sum + day.regularUnitsCapacity, 0);
+  const totalShortageUnits = Math.max(0, totalReceived - totalRegularUnitsCapacity);
+  const scheduledDlpCount = targetDays.length > 0 ? Math.round(targetDays.reduce((sum, day) => sum + day.scheduledDlp, 0) / targetDays.length) : (ownDlp + threePlDlp);
+  const eligibleDlpCount = targetDays.length > 0 ? Math.round(targetDays.reduce((sum, day) => sum + day.eligibleDlpCount, 0) / targetDays.length) : scheduledDlpCount;
+  const averageOtRequiredPerPerson = targetDays.length === 1
+    ? targetDays[0].otRequiredPerPerson
+    : (eligibleDlpCount > 0 && targetDays.length > 0
+        ? targetDays.reduce((sum, day) => sum + day.overtimeRecommendedHours, 0) / (targetDays.length * eligibleDlpCount)
+        : 0);
+
   const averageRequiredFte = totalRequiredHours / (Math.max(1, officialDays.length) * workspace.settings.standard_hours_per_day);
   const absenceFactor = Math.max(0.01, 1 - workspace.settings.planned_absence_percent / 100);
-  const overtimeAllocations = [...allocationTotals.entries()].map(([employeeId, hours]) => ({
-    employeeId,
-    employeeName: employeeById.get(employeeId)?.full_name ?? 'Unknown employee',
-    hours,
-  })).sort((a, b) => b.hours - a.hours);
+
+  const overtimeAllocations: MailroomOvertimeAllocation[] = [...employeeScheduledDaysMap.keys()].map(employeeId => {
+    const employee = employeeById.get(employeeId);
+    const setting = employee ? settingFor(employee) : null;
+    const hours = allocationTotals.get(employeeId) ?? 0;
+    const regularHours = employeeRegularHoursMap.get(employeeId) ?? 0;
+    const regularUnitsCapacity = employeeRegularUnitsMap.get(employeeId) ?? 0;
+    const maxOtHours = employeeMaxOtCapMap.get(employeeId) ?? workspace.settings.max_overtime_hours_per_day;
+    const otRate = getEmployeeOtRate(setting, workspace.settings);
+    const daysWorked = employeeScheduledDaysMap.get(employeeId) ?? 1;
+    const maxPeriodCap = maxOtHours * daysWorked;
+    const status: 'active' | 'capped' | 'regular_only' | 'ineligible' = !setting?.overtime_eligible
+      ? 'ineligible'
+      : hours >= maxPeriodCap
+        ? 'capped'
+        : hours > 0
+          ? 'active'
+          : 'regular_only';
+    return {
+      employeeId,
+      employeeName: employee?.full_name ?? 'Unknown employee',
+      employeeCode: employee?.employee_code ?? '',
+      laborClass: setting?.labor_class ?? 'dlp',
+      employmentSource: setting?.employment_source ?? 'own',
+      regularHours,
+      regularUnitsCapacity,
+      hours,
+      maxOtHours: maxPeriodCap,
+      totalShiftHours: regularHours + hours,
+      hourlyCost: otRate,
+      totalCost: hours * otRate,
+      status,
+    };
+  }).sort((a, b) => b.hours - a.hours || b.regularUnitsCapacity - a.regularUnitsCapacity || a.employeeName.localeCompare(b.employeeName));
 
   const employeeOtMap = new Map<string, MailroomEmployeeOvertimeSummary>();
   const baseOtRate = getDepartmentBaseOtRate(workspace.settings);
@@ -524,14 +668,16 @@ export function buildMailroomOperationalModel(
   return {
     fromDate,
     toDate,
-    totalReceived: selected.reduce((sum, row) => sum + row.received_units, 0),
-    totalValidated: selected.reduce((sum, row) => sum + row.processed_units, 0),
-    totalProcessed: selected.reduce((sum, row) => sum + row.processed_units, 0),
+    totalReceived,
+    totalValidated,
+    totalProcessed,
     totalReturnsReceived: officialDays.reduce((sum, day) => sum + day.returnsReceived, 0),
     totalReturnsProcessed: officialDays.reduce((sum, day) => sum + day.returnsProcessed, 0),
     totalDspAllocated: officialDays.reduce((sum, day) => sum + day.dspAllocated, 0),
     totalRequiredHours,
     totalRegularCapacityHours: officialDays.reduce((sum, day) => sum + day.regularCapacityHours, 0),
+    totalRegularUnitsCapacity,
+    totalShortageUnits,
     averageRequiredFte,
     absenceReserveFte: averageRequiredFte / absenceFactor - averageRequiredFte,
     totalPlannedFte: averageRequiredFte / absenceFactor,
@@ -549,6 +695,9 @@ export function buildMailroomOperationalModel(
     ownDlp,
     threePlDlp,
     nonDlp,
+    scheduledDlpCount,
+    eligibleDlpCount,
+    averageOtRequiredPerPerson,
     days,
     clients,
     activities,
@@ -608,8 +757,42 @@ export function buildMailroomDayPreview(
       : scheduledHours;
     if (setting.overtime_eligible) overtimeCapacityHours += setting.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
   });
+  const totalReceived = clientInputs.reduce((sum, input) => sum + (input.received_units || 0), 0);
+  const totalProcessed = clientInputs.reduce((sum, input) => sum + (input.processed_units || 0), 0);
+
+  let regularUnitsCapacity = totalReceived;
+  if (requiredHours > 0) {
+    if (regularCapacityHours >= requiredHours) {
+      regularUnitsCapacity = totalReceived;
+    } else {
+      regularUnitsCapacity = Math.min(totalReceived, Math.round(totalReceived * (regularCapacityHours / requiredHours)));
+    }
+  } else if (totalReceived === 0 && totalProcessed > 0 && requiredHours > 0) {
+    if (regularCapacityHours >= requiredHours) {
+      regularUnitsCapacity = totalProcessed;
+    } else {
+      regularUnitsCapacity = Math.min(totalProcessed, Math.round(totalProcessed * (regularCapacityHours / requiredHours)));
+    }
+  }
+  const shortageUnits = Math.max(0, totalReceived - regularUnitsCapacity);
+
+  let scheduledDlp = 0;
+  let eligibleDlp = 0;
+  workspace.employees.forEach(employee => {
+    if (!isEmployeeActiveOnDate(employee, workDate)) return;
+    const setting = employeeSettingById.get(employee.id);
+    if (setting?.labor_class !== 'dlp') return;
+    const schedule = workspace.schedules[employee.id]?.find(row => row.work_date === workDate);
+    if (!schedule || schedule.state !== 'working') return;
+    scheduledDlp += 1;
+    if (setting.overtime_eligible) eligibleDlp += 1;
+  });
+
   const shortageHours = Math.max(0, requiredHours - regularCapacityHours);
   const overtimeHours = Math.min(shortageHours, overtimeCapacityHours);
+  const otRequiredPerPerson = eligibleDlp > 0
+    ? overtimeHours / eligibleDlp
+    : (scheduledDlp > 0 ? overtimeHours / scheduledDlp : 0);
   const uncoveredHours = Math.max(0, shortageHours - overtimeHours);
   const baseOtRate = getDepartmentBaseOtRate(workspace.settings);
   const overtimeCost = overtimeHours * baseOtRate;
@@ -631,6 +814,12 @@ export function buildMailroomDayPreview(
     }
   });
   return {
+    totalReceived,
+    regularUnitsCapacity,
+    shortageUnits,
+    scheduledDlp,
+    eligibleDlp,
+    otRequiredPerPerson,
     requiredHours,
     requiredEmployees: requiredHours / workspace.settings.standard_hours_per_day,
     regularCapacityHours,
