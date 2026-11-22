@@ -399,6 +399,20 @@ export const shiftService = {
     return data;
   },
 
+  /** Delete a single assignment row for employee+date. */
+  async deleteAssignment(organizationId: string, employeeId: string, workDate: string): Promise<void> {
+    try {
+      await getSupabaseClient()
+        .from('shift_assignments')
+        .delete()
+        .eq('organization_id', organizationId)
+        .eq('employee_id', employeeId)
+        .eq('work_date', workDate);
+    } catch (e) {
+      logger.warn('Failed to delete shift assignment.', { error: e });
+    }
+  },
+
   /**
    * Apply a rotating schedule for a list of employees for a date range.
    * rotationPattern: array of shift_ids (or null for OFF) that repeats.

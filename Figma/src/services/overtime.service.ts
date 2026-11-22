@@ -65,6 +65,7 @@ export interface OvertimeReviewDay {
   requested_minutes: number;
   approved_minutes: number | null;
   overtime_status: ApprovalStatus | null;
+  review_note?: string | null;
   device_minutes: number;
   device_usage_percent: number | null;
   device_data_status: string;
@@ -134,6 +135,21 @@ export const overtimeService = {
     return executeQuery(
       getSupabaseClient().rpc('review_overtime_batch', { p_decisions: decisions as unknown as Json }),
       'Unable to review the selected overtime records.',
+    );
+  },
+
+  async updateApprovedOvertime(input: {
+    id: string;
+    approvedMinutes: number;
+    reviewNote?: string | null;
+  }): Promise<OvertimeRecordRow> {
+    return executeQuery(
+      getSupabaseClient().rpc('update_approved_overtime', {
+        p_overtime_id: input.id,
+        p_approved_minutes: input.approvedMinutes,
+        p_review_note: input.reviewNote ?? null,
+      }).single(),
+      'Unable to update approved overtime hours.',
     );
   },
 

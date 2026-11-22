@@ -145,4 +145,40 @@ test('Off-Day Work Tracking & Compensation Record Structure', () => {
   };
   assert.equal(compOffRecord.compensation_type, 'comp_off');
   assert.equal(compOffRecord.comp_off_date, '2026-11-25');
+
+  // Reverting from OT to Comp-Off (saving OT cost when workload eased):
+  const revertedRecord: OffDayCompensationRecord = {
+    ...otRecord,
+    compensation_type: 'comp_off',
+    comp_off_date: '2026-11-26',
+    notes: 'Reverted from OT to comp-off as workload dropped',
+  };
+  assert.equal(revertedRecord.compensation_type, 'comp_off');
+  assert.equal(revertedRecord.comp_off_date, '2026-11-26');
+});
+
+test('Productivity Overtime Tracking accurately credits employee active Nov 1-17 before Nov 18 deactivation', () => {
+  const employeeDeactivatedNov18 = {
+    id: 'emp-nov18',
+    employment_status: 'inactive' as const,
+    joining_date: '2025-01-01',
+    status_effective_date: '2026-11-18',
+  };
+
+  // Check worked period (Nov 1-17): employee was active!
+  assert.equal(isEmployeeActiveOnDate(employeeDeactivatedNov18, '2026-11-05'), true);
+  assert.equal(isEmployeeActiveOnDate(employeeDeactivatedNov18, '2026-11-17'), true);
+
+  // On 18 Nov (last day active): active!
+  assert.equal(isEmployeeActiveOnDate(employeeDeactivatedNov18, '2026-11-18'), true);
+
+  // After 18 Nov: inactive!
+  assert.equal(isEmployeeActiveOnDate(employeeDeactivatedNov18, '2026-11-19'), false);
+  assert.equal(isEmployeeActiveOnDate(employeeDeactivatedNov18, '2026-11-20'), false);
+
+  // Month check: was active in November!
+  assert.equal(isEmployeeActiveInMonth(employeeDeactivatedNov18, 2026, 10), true);
+
+  // But not active in December:
+  assert.equal(isEmployeeActiveInMonth(employeeDeactivatedNov18, 2026, 11), false);
 });

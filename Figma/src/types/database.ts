@@ -870,6 +870,14 @@ export interface Database {
         Args: { p_decisions: Json };
         Returns: OvertimeRecordRow[];
       };
+      update_approved_overtime: {
+        Args: {
+          p_overtime_id: string;
+          p_approved_minutes: number;
+          p_review_note?: string | null;
+        };
+        Returns: OvertimeRecordRow;
+      };
       get_dashboard_trends: {
         Args: {
           p_organization_id: string;

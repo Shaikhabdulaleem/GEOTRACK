@@ -123,6 +123,7 @@ export interface MailroomDayCapacity {
   overtimeRecommendedCost: number;
   actualOvertimeHours: number;
   actualOvertimeCost: number;
+  actualOtEmployeesCount: number;
   overtimeCostSaved: number;
   uncoveredHours: number;
   scheduledDlp: number;
@@ -190,6 +191,9 @@ export interface MailroomOperationalModel {
   overtimeRecommendedCost: number;
   actualOvertimeHours: number;
   actualOvertimeCost: number;
+  actualOtEmployeesCount: number;
+  totalApprovedOtEmployees: number;
+  totalActivePeriodDlpEmployees: number;
   overtimeCostSaved: number;
   uncoveredHours: number;
   shortageHours: number;
@@ -621,6 +625,7 @@ export function buildMailroomOperationalModel(
 
     let dayApprovedOtHours = 0;
     let dayApprovedOtCost = 0;
+    const dayOtEmployeeIds = new Set<string>();
     workspace.employees.forEach(employee => {
       const setting = settingFor(employee);
       if (setting.labor_class !== 'dlp') return;
@@ -634,10 +639,12 @@ export function buildMailroomOperationalModel(
         const rate = getEmployeeOtRate(setting, workspace.settings);
         dayApprovedOtHours += hours;
         dayApprovedOtCost += hours * rate;
+        dayOtEmployeeIds.add(employee.id);
       }
     });
     const actualOvertimeHours = dayApprovedOtHours;
     const actualOvertimeCost = dayApprovedOtCost;
+    const actualOtEmployeesCount = dayOtEmployeeIds.size;
     return {
       date,
       received: dayReceived,
@@ -658,6 +665,7 @@ export function buildMailroomOperationalModel(
       overtimeRecommendedCost,
       actualOvertimeHours,
       actualOvertimeCost,
+      actualOtEmployeesCount,
       overtimeCostSaved: Math.max(0, overtimeRecommendedHours - actualOvertimeHours) * baseOtRate,
       uncoveredHours: Math.max(0, gapHours - overtimeCapacityHours),
       scheduledDlp,
@@ -788,6 +796,33 @@ export function buildMailroomOperationalModel(
   });
   const approvedOvertimeByEmployee = [...employeeOtMap.values()].sort((a, b) => b.approvedHours - a.approvedHours);
 
+  const allPeriodOtEmployeeIds = new Set<string>();
+  const allPeriodActiveDlpIds = new Set<string>();
+
+  workspace.employees.forEach(employee => {
+    const setting = settingFor(employee);
+    if (setting.labor_class !== 'dlp') return;
+
+    // Check if active on at least 1 day in this period (e.g. active Nov 1-17, deactivated on Nov 18)
+    const wasActiveInPeriod = officialDays.some(day => isEmployeeActiveOnDate(employee, day.date));
+    if (wasActiveInPeriod) {
+      allPeriodActiveDlpIds.add(employee.id);
+    }
+
+    officialDays.forEach(day => {
+      if (!isEmployeeActiveOnDate(employee, day.date)) return;
+      const { effectiveMinutes, status } = getEffectiveApprovedOvertimeMinutes(
+        employee.id,
+        day.date,
+        workspace.attendance,
+        workspace.overtimeRecords ?? [],
+      );
+      if (status !== 'rejected' && effectiveMinutes > 0) {
+        allPeriodOtEmployeeIds.add(employee.id);
+      }
+    });
+  });
+
   return {
     fromDate,
     toDate,
@@ -810,6 +845,9 @@ export function buildMailroomOperationalModel(
     overtimeRecommendedCost: officialDays.reduce((sum, day) => sum + day.overtimeRecommendedCost, 0),
     actualOvertimeHours: officialDays.reduce((sum, day) => sum + day.actualOvertimeHours, 0),
     actualOvertimeCost: officialDays.reduce((sum, day) => sum + day.actualOvertimeCost, 0),
+    actualOtEmployeesCount: allPeriodOtEmployeeIds.size,
+    totalApprovedOtEmployees: allPeriodOtEmployeeIds.size,
+    totalActivePeriodDlpEmployees: allPeriodActiveDlpIds.size,
     overtimeCostSaved: Math.max(0, officialDays.reduce((sum, day) => sum + day.overtimeRecommendedHours - day.actualOvertimeHours, 0)) * baseOtRate,
     uncoveredHours: officialDays.reduce((sum, day) => sum + day.uncoveredHours, 0),
     shortageHours: officialDays.reduce((sum, day) => sum + day.gapHours, 0),

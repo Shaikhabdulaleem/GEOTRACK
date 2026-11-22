@@ -431,6 +431,11 @@ function CellAssignModal({
                 <Clock size={13} className="text-amber-400" />
                 <span>Compensation for Off-Day Work</span>
               </div>
+              {initialCompensation?.compensation_type === 'overtime' && (
+                <div className="p-2 rounded-lg text-[11px]" style={{ background: 'rgba(37,99,235,0.12)', border: '1px solid rgba(37,99,235,0.3)', color: '#93c5fd' }}>
+                  💡 Currently set to <strong>Keep for OT</strong>. If workload dropped, switch to <strong>Grant Comp-Off</strong> below to give them an off day and save OT payroll cost!
+                </div>
+              )}
               <div className="space-y-1.5 text-xs" style={{ color: '#94a3b8' }}>
                 <label className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-white/5 cursor-pointer">
                   <input
@@ -544,6 +549,17 @@ function CompOffModal({ offRecord, employeeName, onSave, onClose }: CompOffModal
         </div>
         <div className="p-5 space-y-4">
           {error && <ErrorBanner message={error} />}
+          {offRecord.compensation_type === 'overtime' && (
+            <div className="p-2.5 rounded-lg text-xs space-y-1" style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', color: '#6ee7b7' }}>
+              <div className="font-semibold flex items-center gap-1 text-white">
+                <Clock size={12} className="text-amber-400" />
+                Reverting from Overtime (OT)
+              </div>
+              <div className="text-[11px] opacity-90">
+                Workload dropped! Granting an off-day here converts their compensation from OT to Comp-Off and automatically assigns their leave on the selected date, saving overtime payroll expense.
+              </div>
+            </div>
+          )}
           <div className="text-xs" style={{ color: '#94a3b8' }}>
             This employee worked on their regular off-day (<span className="text-amber-400 font-semibold">{offRecord.work_date}</span>).
             Select a date when load is off to grant them compensatory leave (Comp-Off). This will automatically assign a leave day for them.
@@ -584,7 +600,7 @@ function CompOffModal({ offRecord, employeeName, onSave, onClose }: CompOffModal
               style={{ background: '#059669', color: '#fff', opacity: saving ? 0.6 : 1 }}
             >
               {saving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle size={13} />}
-              {saving ? 'Scheduling…' : 'Confirm Comp-Off'}
+              {saving ? 'Scheduling…' : offRecord.compensation_type === 'overtime' ? 'Confirm Revert & Grant Leave' : 'Confirm Comp-Off'}
             </button>
           </div>
         </div>
@@ -887,12 +903,35 @@ export default function ShiftScheduler() {
 
   // ── Off-Day Compensation Action Handlers ────
   const handleSaveCompensation = async (record: OffDayCompensationRecord) => {
+    const prev = offDayCompensations[record.id];
+
+    // If changing away from comp_off or changing leave date, clear previous leave assignment
+    if (prev?.compensation_type === 'comp_off' && prev.comp_off_date && prev.comp_off_date !== record.comp_off_date) {
+      await shiftService.deleteAssignment(organizationId, record.employee_id, prev.comp_off_date);
+    }
+
+    // If granting comp_off on a target date, assign leave on that date automatically
+    if (record.compensation_type === 'comp_off' && record.comp_off_date) {
+      await shiftService.assignShift({
+        organization_id: organizationId,
+        employee_id: record.employee_id,
+        shift_id: null,
+        work_date: record.comp_off_date,
+        status: 'leave',
+        force: true,
+      });
+    }
+
     await shiftService.saveOffDayCompensation(record);
     setOffDayCompensations(prev => ({ ...prev, [record.id]: record }));
     void loadData();
   };
 
   const handleDeleteCompensation = async (id: string) => {
+    const prev = offDayCompensations[id];
+    if (prev?.compensation_type === 'comp_off' && prev.comp_off_date) {
+      await shiftService.deleteAssignment(organizationId, prev.employee_id, prev.comp_off_date);
+    }
     await shiftService.deleteOffDayCompensation(organizationId, id);
     setOffDayCompensations(prev => {
       const next = { ...prev };
@@ -1040,9 +1079,54 @@ export default function ShiftScheduler() {
     return items;
   }, [visibleEmployees, weeklyOffs, weekDates, getAssignment, getShift, offDayCompensations]);
 
+  const [offDayPanelFilter, setOffDayPanelFilter] = useState<'all' | 'pending' | 'overtime' | 'comp_off'>('all');
+
+  const allTrackedOffDayItems = useMemo(() => {
+    const map = new Map<string, {
+      key: string;
+      employee: EmployeeProfileRow;
+      workDate: string;
+      shiftId: string | null;
+      shift: ShiftRow | undefined;
+      compensation?: OffDayCompensationRecord;
+    }>();
+
+    for (const item of offDayWorkItems) {
+      map.set(item.key, item);
+    }
+
+    for (const comp of Object.values(offDayCompensations)) {
+      if (!map.has(comp.id)) {
+        const emp = visibleEmployees.find(e => e.id === comp.employee_id);
+        if (emp) {
+          map.set(comp.id, {
+            key: comp.id,
+            employee: emp,
+            workDate: comp.work_date,
+            shiftId: comp.shift_id ?? null,
+            shift: getShift(comp.shift_id ?? null),
+            compensation: comp,
+          });
+        }
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.workDate.localeCompare(a.workDate));
+  }, [offDayWorkItems, offDayCompensations, visibleEmployees, getShift]);
+
   const pendingOffDayWork = useMemo(() => {
-    return offDayWorkItems.filter(item => !item.compensation || item.compensation.compensation_type === 'pending');
-  }, [offDayWorkItems]);
+    return allTrackedOffDayItems.filter(item => !item.compensation || item.compensation.compensation_type === 'pending');
+  }, [allTrackedOffDayItems]);
+
+  const filteredOffDayItems = useMemo(() => {
+    return allTrackedOffDayItems.filter(item => {
+      const type = item.compensation?.compensation_type ?? 'pending';
+      if (offDayPanelFilter === 'pending') return type === 'pending';
+      if (offDayPanelFilter === 'overtime') return type === 'overtime';
+      if (offDayPanelFilter === 'comp_off') return type === 'comp_off';
+      return true;
+    });
+  }, [allTrackedOffDayItems, offDayPanelFilter]);
 
   const visibleConflicts = useMemo(
     () => departmentId ? conflicts.filter(conflict => visibleEmployeeIds.has(conflict.employeeId)) : conflicts,
@@ -1551,18 +1635,54 @@ export default function ShiftScheduler() {
                     Off-Day Work Compensation Tracker
                   </div>
                   <p className="opacity-90">
-                    When employees work on their configured weekly off day, decide whether to keep the work hours for Overtime (OT) or schedule a Compensatory Leave (Comp-Off) when the load eases.
+                    When employees work on their configured weekly off day, decide whether to keep the work hours for Overtime (OT) or schedule a Compensatory Leave (Comp-Off) when the load eases. You can revert an OT decision anytime.
                   </p>
                 </div>
 
-                {offDayWorkItems.length === 0 ? (
+                {/* Filter tabs */}
+                <div className="flex gap-1 p-1 rounded-lg text-xs" style={{ background: '#0a1626', border: '1px solid #1e3a5a' }}>
+                  <button
+                    onClick={() => setOffDayPanelFilter('all')}
+                    className={`flex-1 py-1 px-1 rounded text-[10px] font-semibold transition-colors ${
+                      offDayPanelFilter === 'all' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    All ({allTrackedOffDayItems.length})
+                  </button>
+                  <button
+                    onClick={() => setOffDayPanelFilter('pending')}
+                    className={`flex-1 py-1 px-1 rounded text-[10px] font-semibold transition-colors ${
+                      offDayPanelFilter === 'pending' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Pending ({allTrackedOffDayItems.filter(i => !i.compensation || i.compensation.compensation_type === 'pending').length})
+                  </button>
+                  <button
+                    onClick={() => setOffDayPanelFilter('overtime')}
+                    className={`flex-1 py-1 px-1 rounded text-[10px] font-semibold transition-colors ${
+                      offDayPanelFilter === 'overtime' ? 'bg-blue-700 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Kept OT ({allTrackedOffDayItems.filter(i => i.compensation?.compensation_type === 'overtime').length})
+                  </button>
+                  <button
+                    onClick={() => setOffDayPanelFilter('comp_off')}
+                    className={`flex-1 py-1 px-1 rounded text-[10px] font-semibold transition-colors ${
+                      offDayPanelFilter === 'comp_off' ? 'bg-emerald-700 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Comp ({allTrackedOffDayItems.filter(i => i.compensation?.compensation_type === 'comp_off').length})
+                  </button>
+                </div>
+
+                {filteredOffDayItems.length === 0 ? (
                   <div className="flex flex-col items-center py-8 gap-2" style={{ color: '#4b6a8a' }}>
                     <CheckCircle size={24} style={{ color: '#10b981' }} />
-                    <div className="text-xs text-center">No employees scheduled on off days this week.</div>
+                    <div className="text-xs text-center">No off-day records match this filter.</div>
                   </div>
                 ) : (
                   <div className="space-y-2.5 max-h-[70vh] overflow-y-auto pr-1">
-                    {offDayWorkItems.map(item => {
+                    {filteredOffDayItems.map(item => {
                       const comp = item.compensation;
                       const isPending = !comp || comp.compensation_type === 'pending';
                       const isOT = comp?.compensation_type === 'overtime';
@@ -1573,8 +1693,8 @@ export default function ShiftScheduler() {
                           key={item.key}
                           className="p-3.5 rounded-xl border space-y-2.5 transition-all"
                           style={{
-                            background: isPending ? 'rgba(245,158,11,0.08)' : '#122338',
-                            borderColor: isPending ? 'rgba(245,158,11,0.35)' : '#1e3a5a',
+                            background: isPending ? 'rgba(245,158,11,0.08)' : isOT ? 'rgba(37,99,235,0.07)' : '#122338',
+                            borderColor: isPending ? 'rgba(245,158,11,0.35)' : isOT ? 'rgba(37,99,235,0.4)' : '#1e3a5a',
                           }}
                         >
                           <div className="flex items-start justify-between">
@@ -1601,34 +1721,78 @@ export default function ShiftScheduler() {
                             {item.shift && <span className="opacity-80">({item.shift.name})</span>}
                           </div>
 
-                          {/* Action buttons */}
-                          <div className="flex gap-1.5 pt-1">
-                            <button
-                              onClick={() => void handleKeepForOT(item.employee, item.workDate, item.shiftId)}
-                              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
-                                isOT ? 'ring-1 ring-blue-500' : 'opacity-85 hover:opacity-100'
-                              }`}
-                              style={{ background: '#1d4ed8', color: '#fff' }}
-                              title="Keep whole day / hours for Overtime"
-                            >
-                              <Clock size={11} />
-                              Keep for OT
-                            </button>
-                            <button
-                              onClick={() => handleOpenCompOffModal(item.employee, item.workDate, item.shiftId)}
-                              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
-                                isCompOff ? 'ring-1 ring-emerald-500' : 'opacity-85 hover:opacity-100'
-                              }`}
-                              style={{ background: '#059669', color: '#fff' }}
-                              title="Schedule compensatory leave date"
-                            >
-                              <CalendarDays size={11} />
-                              Grant Comp-Off
-                            </button>
-                          </div>
+                          {/* Specific UI for Kept for OT: Revert & Grant Comp-Off */}
+                          {isOT && (
+                            <div className="p-2.5 rounded-lg text-[11px] space-y-2" style={{ background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(37,99,235,0.25)', color: '#93c5fd' }}>
+                              <div className="opacity-90">
+                                💡 Previously kept for OT. Now that workload dropped, click below to revert and grant their off-day (saves OT payroll cost).
+                              </div>
+                              <button
+                                onClick={() => handleOpenCompOffModal(item.employee, item.workDate, item.shiftId)}
+                                className="w-full py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all hover:brightness-110 shadow-sm"
+                                style={{ background: '#059669', color: '#fff' }}
+                                title="Revert OT decision and schedule compensatory leave date"
+                              >
+                                <CalendarDays size={12} />
+                                Revert & Grant Comp-Off (Save OT Cost)
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Specific UI for Comp-Off */}
+                          {isCompOff && (
+                            <div className="p-2.5 rounded-lg text-[11px] space-y-2" style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', color: '#6ee7b7' }}>
+                              <div className="opacity-90">
+                                🏖️ Off-day leave assigned on <strong>{comp?.comp_off_date}</strong>.
+                              </div>
+                              <div className="flex gap-1.5">
+                                <button
+                                  onClick={() => handleOpenCompOffModal(item.employee, item.workDate, item.shiftId)}
+                                  className="flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 hover:brightness-110"
+                                  style={{ background: '#0d9488', color: '#fff' }}
+                                >
+                                  <CalendarDays size={11} />
+                                  Change Date
+                                </button>
+                                <button
+                                  onClick={() => void handleKeepForOT(item.employee, item.workDate, item.shiftId)}
+                                  className="flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 hover:brightness-110"
+                                  style={{ background: '#1d4ed8', color: '#fff' }}
+                                  title="Switch back to Overtime if employee must work instead"
+                                >
+                                  <Clock size={11} />
+                                  Switch to OT
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Specific UI for Pending */}
+                          {isPending && (
+                            <div className="flex gap-1.5 pt-1">
+                              <button
+                                onClick={() => void handleKeepForOT(item.employee, item.workDate, item.shiftId)}
+                                className="flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all opacity-90 hover:opacity-100"
+                                style={{ background: '#1d4ed8', color: '#fff' }}
+                                title="Keep whole day / hours for Overtime"
+                              >
+                                <Clock size={11} />
+                                Keep for OT
+                              </button>
+                              <button
+                                onClick={() => handleOpenCompOffModal(item.employee, item.workDate, item.shiftId)}
+                                className="flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all opacity-90 hover:opacity-100"
+                                style={{ background: '#059669', color: '#fff' }}
+                                title="Schedule compensatory leave date"
+                              >
+                                <CalendarDays size={11} />
+                                Grant Comp-Off
+                              </button>
+                            </div>
+                          )}
 
                           {!isPending && (
-                            <div className="flex justify-end">
+                            <div className="flex justify-end pt-0.5">
                               <button
                                 onClick={() => void handleResetCompensation(item.employee, item.workDate, item.shiftId)}
                                 className="text-[10px] hover:underline"
