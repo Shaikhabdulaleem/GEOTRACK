@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "node scripts/lint.mjs",
-    "test": "node --experimental-strip-types --test tests/production-config.test.mjs tests/aymakan-import.test.ts tests/inactive-employee-attendance-productivity.test.ts",
+    "test": "node --experimental-strip-types --test tests/production-config.test.mjs tests/aymakan-import.test.ts tests/inactive-employee-attendance-productivity.test.ts tests/shift-scheduler-inactive-offday.test.ts",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "test:supabase": "node --env-file-if-exists=.env.local scripts/check-supabase.mjs",
     "format": "oxfmt"

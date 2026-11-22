@@ -57,6 +57,22 @@ export interface ShiftSummary {
   employeeCount: number;
 }
 
+export type OffDayCompensationType = 'pending' | 'overtime' | 'comp_off';
+
+export interface OffDayCompensationRecord {
+  id: string; // `${employee_id}_${work_date}`
+  organization_id: string;
+  employee_id: string;
+  work_date: string;
+  shift_id: string | null;
+  shift_name?: string;
+  compensation_type: OffDayCompensationType;
+  comp_off_date?: string | null;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 // ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
@@ -681,5 +697,149 @@ export const shiftService = {
       shift,
       employeeCount: counts[shift.id] ?? 0,
     }));
+  },
+
+  // ── Off-Day Work & Compensation Tracking ──────────
+
+  /** List configured off days (weekdays 0..6) across weekly_offs and recurring schedules */
+  async listAllEmployeeOffDays(organizationId: string): Promise<Record<string, number[]>> {
+    const offMap: Record<string, number[]> = {};
+    const client = getSupabaseClient();
+
+    try {
+      // 1. Check legacy weekly_offs
+      const { data: legacyOffs } = await client
+        .from('weekly_offs')
+        .select('employee_id, weekday')
+        .eq('organization_id', organizationId);
+
+      for (const row of legacyOffs ?? []) {
+        if (!offMap[row.employee_id]) offMap[row.employee_id] = [];
+        if (!offMap[row.employee_id].includes(row.weekday)) {
+          offMap[row.employee_id].push(row.weekday);
+        }
+      }
+    } catch (e) {
+      logger.warn('Failed to load legacy weekly_offs', { error: e });
+    }
+
+    try {
+      // 2. Check active recurring schedules & rules
+      const { data: recurringData } = await client
+        .from('recurring_schedules')
+        .select('id, employee_id, recurring_schedule_rules(weekday, is_off)')
+        .eq('organization_id', organizationId)
+        .eq('status', 'active');
+
+      for (const sched of recurringData ?? []) {
+        const rules = (sched as any).recurring_schedule_rules ?? [];
+        for (const rule of rules) {
+          if (rule.is_off) {
+            if (!offMap[sched.employee_id]) offMap[sched.employee_id] = [];
+            if (!offMap[sched.employee_id].includes(rule.weekday)) {
+              offMap[sched.employee_id].push(rule.weekday);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn('Failed to load recurring schedule rules', { error: e });
+    }
+
+    return offMap;
+  },
+
+  /** List off-day compensation records (OT vs Comp-Off decisions) */
+  async listOffDayCompensations(organizationId: string): Promise<OffDayCompensationRecord[]> {
+    const storageKey = `off_day_compensations_${organizationId}`;
+    let localList: OffDayCompensationRecord[] = [];
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (raw) localList = JSON.parse(raw);
+      } catch (e) {
+        logger.warn('Failed to parse local off-day compensations', { error: e });
+      }
+    }
+
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('off_day_compensations' as any)
+        .select('*')
+        .eq('organization_id', organizationId);
+
+      if (!error && data) {
+        const map = new Map<string, OffDayCompensationRecord>();
+        for (const item of localList) map.set(item.id, item);
+        for (const item of (data as any[]) as OffDayCompensationRecord[]) map.set(item.id, item);
+        return Array.from(map.values());
+      }
+    } catch {
+      // Table may not exist yet in remote DB, fallback to localStorage
+    }
+
+    return localList;
+  },
+
+  /** Save an off-day compensation record (Overtime vs Comp-Off Leave) */
+  async saveOffDayCompensation(record: OffDayCompensationRecord): Promise<OffDayCompensationRecord> {
+    const storageKey = `off_day_compensations_${record.organization_id}`;
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        const list: OffDayCompensationRecord[] = raw ? JSON.parse(raw) : [];
+        const idx = list.findIndex(r => r.id === record.id);
+        if (idx >= 0) list[idx] = record;
+        else list.push(record);
+        localStorage.setItem(storageKey, JSON.stringify(list));
+      } catch (e) {
+        logger.warn('Failed to persist off-day compensation to localStorage', { error: e });
+      }
+    }
+
+    // If comp-off date is specified, automatically grant leave on that date
+    if (record.compensation_type === 'comp_off' && record.comp_off_date) {
+      try {
+        await this.assignShift({
+          organization_id: record.organization_id,
+          employee_id: record.employee_id,
+          shift_id: null,
+          work_date: record.comp_off_date,
+          status: 'leave',
+          force: true,
+        });
+      } catch (e) {
+        logger.warn('Failed to auto-assign comp-off leave day', { error: e });
+      }
+    }
+
+    // Try saving to Supabase if table exists
+    try {
+      await getSupabaseClient()
+        .from('off_day_compensations' as any)
+        .upsert(record as any, { onConflict: 'id' });
+    } catch {
+      // Table may not be migrated yet on remote DB
+    }
+
+    return record;
+  },
+
+  /** Delete an off-day compensation record */
+  async deleteOffDayCompensation(organizationId: string, id: string): Promise<void> {
+    const storageKey = `off_day_compensations_${organizationId}`;
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (raw) {
+          const list: OffDayCompensationRecord[] = JSON.parse(raw);
+          const filtered = list.filter(r => r.id !== id);
+          localStorage.setItem(storageKey, JSON.stringify(filtered));
+        }
+      } catch {}
+    }
+    try {
+      await getSupabaseClient().from('off_day_compensations' as any).delete().eq('id', id);
+    } catch {}
   },
 };

@@ -37,6 +37,41 @@ export function isEmployeeActiveOnDate(employee: EmployeeProfileRow, date: strin
   return true;
 }
 
+/**
+ * Checks if an employee was active on at least one day in the given month (0-indexed month: 0=Jan..11=Dec).
+ * If employee became inactive on Nov 18, they were active Nov 1-18, so this returns true for November (month=10),
+ * but false for December (month=11) where they are inactive for the whole month.
+ */
+export function isEmployeeActiveInMonth(employee: EmployeeProfileRow, year: number, month: number): boolean {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dayStr = String(day).padStart(2, '0');
+    const mStr = String(month + 1).padStart(2, '0');
+    const date = `${year}-${mStr}-${dayStr}`;
+    if (isEmployeeActiveOnDate(employee, date)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Checks if an employee was active on at least one day within the given date range (inclusive).
+ */
+export function isEmployeeActiveInRange(employee: EmployeeProfileRow, startDate: string, endDate: string): boolean {
+  const start = new Date(startDate + 'T00:00:00');
+  const end = new Date(endDate + 'T00:00:00');
+  const curr = new Date(start);
+  while (curr <= end) {
+    const iso = curr.toISOString().slice(0, 10);
+    if (isEmployeeActiveOnDate(employee, iso)) {
+      return true;
+    }
+    curr.setDate(curr.getDate() + 1);
+  }
+  return false;
+}
+
 export interface EmployeeApprovedOvertimeResult {
   approvedMinutes: number;
   requestedMinutes: number;

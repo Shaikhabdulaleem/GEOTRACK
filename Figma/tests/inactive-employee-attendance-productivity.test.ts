@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   isEmployeeActiveOnDate,
+  isEmployeeActiveInMonth,
+  isEmployeeActiveInRange,
   getApprovedOvertimeMinutes,
   getEffectiveApprovedOvertimeMinutes,
 } from '../src/lib/employee-status.ts';
@@ -40,6 +42,15 @@ test('isEmployeeActiveOnDate handles inactive employee with effective date 18 No
   // After 18 Nov: inactive! Should NOT be active in productivity
   assert.equal(isEmployeeActiveOnDate(inactiveEmp, '2026-11-19'), false);
   assert.equal(isEmployeeActiveOnDate(inactiveEmp, '2026-11-20'), false);
+
+  // Month check: In November (month 10), they were active Nov 1-18, so they can be shown in November!
+  assert.equal(isEmployeeActiveInMonth(inactiveEmp, 2026, 10), true);
+
+  // In December (month 11), they are inactive for the WHOLE month (not active on any day): do not show!
+  assert.equal(isEmployeeActiveInMonth(inactiveEmp, 2026, 11), false);
+
+  // In October (month 9), they were active: can be shown!
+  assert.equal(isEmployeeActiveInMonth(inactiveEmp, 2026, 9), true);
 });
 
 test('isEmployeeActiveOnDate handles active employees correctly', () => {

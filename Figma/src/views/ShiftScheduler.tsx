@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertCircle,
   AlertTriangle,
+  Bell,
+  Calendar,
   CalendarDays,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
   Clock,
   Edit2,
+  HelpCircle,
   Moon,
   Plus,
   RefreshCw,
@@ -16,6 +20,7 @@ import {
   Trash2,
   User,
   X,
+  Zap,
   ZapOff,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
@@ -30,9 +35,16 @@ import {
   shiftDurationMinutes,
   type ConflictResult,
   type ShiftSummary,
+  type OffDayCompensationType,
+  type OffDayCompensationRecord,
 } from '../services/shift.service';
 import { employeeService } from '../services/employee.service';
 import { organizationService } from '../services/organization.service';
+import {
+  isEmployeeActiveOnDate,
+  isEmployeeActiveInMonth,
+  isEmployeeActiveInRange,
+} from '../lib/employee-status';
 import type { ShiftRow, ShiftAssignmentRow, EmployeeProfileRow, ResolvedScheduleRow, DepartmentRow } from '../types/database';
 import { scheduleData } from '../data/mockData';
 import { ShiftEditorModal as ShiftModal } from '../components/ShiftEditorModal';
@@ -229,7 +241,12 @@ interface CellModalProps {
   shifts: ShiftRow[];
   organizationId: string;
   userId: string | null;
+  isRegularOffDay?: boolean;
+  isInactiveOnDate?: boolean;
+  initialCompensation?: OffDayCompensationRecord;
   onSaved: () => void;
+  onSaveCompensation?: (comp: OffDayCompensationRecord) => Promise<void>;
+  onDeleteCompensation?: (id: string) => Promise<void>;
   onClose: () => void;
 }
 
@@ -241,11 +258,25 @@ function CellAssignModal({
   shifts,
   organizationId,
   userId,
+  isRegularOffDay = false,
+  isInactiveOnDate = false,
+  initialCompensation,
   onSaved,
+  onSaveCompensation,
+  onDeleteCompensation,
   onClose,
 }: CellModalProps) {
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(currentShiftId);
   const [status, setStatus] = useState<'scheduled' | 'off' | 'leave' | 'cancelled'>(currentStatus);
+  const [compType, setCompType] = useState<OffDayCompensationType>(
+    initialCompensation?.compensation_type ?? 'pending'
+  );
+  const [targetCompOffDate, setTargetCompOffDate] = useState<string>(
+    initialCompensation?.comp_off_date ?? ''
+  );
+  const [compNotes, setCompNotes] = useState<string>(
+    initialCompensation?.notes ?? ''
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -262,6 +293,29 @@ function CellAssignModal({
         created_by: userId,
         force: true,
       });
+
+      // Handle off-day work compensation tracking
+      const compId = `${employee.id}_${workDate}`;
+      if (status === 'scheduled' && isRegularOffDay) {
+        if (onSaveCompensation) {
+          const shiftObj = shifts.find(s => s.id === selectedShiftId);
+          await onSaveCompensation({
+            id: compId,
+            organization_id: organizationId,
+            employee_id: employee.id,
+            work_date: workDate,
+            shift_id: selectedShiftId,
+            shift_name: shiftObj?.name,
+            compensation_type: compType,
+            comp_off_date: compType === 'comp_off' ? (targetCompOffDate || null) : null,
+            notes: compNotes.trim() || null,
+            updated_at: new Date().toISOString(),
+          });
+        }
+      } else if (status !== 'scheduled' && onDeleteCompensation) {
+        await onDeleteCompensation(compId);
+      }
+
       onSaved();
       onClose();
     } catch (e: unknown) {
@@ -273,8 +327,8 @@ function CellAssignModal({
   const empName = 'full_name' in employee ? employee.full_name : (employee as { full_name: string }).full_name;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(6,13,26,0.85)' }}>
-      <div className="rounded-2xl w-80" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(6,13,26,0.85)' }}>
+      <div className="rounded-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #1e3a5a' }}>
           <div>
             <div className="font-semibold text-sm text-white">Edit Assignment</div>
@@ -282,10 +336,42 @@ function CellAssignModal({
               {empName} · {workDate}
             </div>
           </div>
-        <button onClick={onClose} aria-label="Close shift assignment" style={{ color: '#4b6a8a' }}><X size={15} /></button>
+          <button onClick={onClose} aria-label="Close shift assignment" style={{ color: '#4b6a8a' }}><X size={15} /></button>
         </div>
         <div className="p-5 space-y-4">
           {error && <ErrorBanner message={error} />}
+
+          {/* Inactive employee notice */}
+          {isInactiveOnDate && (
+            <div
+              className="p-3 rounded-xl flex items-start gap-2.5 text-xs"
+              style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5' }}
+            >
+              <AlertCircle size={15} className="flex-shrink-0 mt-0.5 text-red-400" />
+              <div>
+                <span className="font-semibold">Employee Inactive on this date.</span>
+                <p className="mt-0.5 opacity-90">
+                  {empName} has an inactive or terminated status for {workDate}. Scheduling work after deactivation is generally discouraged.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Regular off day notice */}
+          {isRegularOffDay && (
+            <div
+              className="p-3 rounded-xl flex items-start gap-2.5 text-xs"
+              style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', color: '#fcd34d' }}
+            >
+              <Zap size={15} className="flex-shrink-0 mt-0.5 text-amber-400" />
+              <div>
+                <span className="font-semibold">Weekly Off-Day Override</span>
+                <p className="mt-0.5 opacity-90">
+                  {workDate} is normally {empName}&apos;s configured weekly off. If scheduled due to heavy workload, define whether to keep for OT or grant a compensatory leave (Comp-Off).
+                </p>
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="text-xs block mb-2" style={{ color: '#4b6a8a' }}>Status</label>
@@ -310,7 +396,7 @@ function CellAssignModal({
           {status === 'scheduled' && (
             <div>
               <label className="text-xs block mb-2" style={{ color: '#4b6a8a' }}>Shift Template</label>
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-40 overflow-y-auto">
                 {shifts.map(shift => {
                   const c = shiftBadgeColor(shift);
                   return (
@@ -338,6 +424,60 @@ function CellAssignModal({
             </div>
           )}
 
+          {/* Off-Day Compensation Option when scheduling on an off-day */}
+          {status === 'scheduled' && isRegularOffDay && (
+            <div className="p-3.5 rounded-xl space-y-2.5" style={{ background: '#0a1626', border: '1px solid #1e3a5a' }}>
+              <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                <Clock size={13} className="text-amber-400" />
+                <span>Compensation for Off-Day Work</span>
+              </div>
+              <div className="space-y-1.5 text-xs" style={{ color: '#94a3b8' }}>
+                <label className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-white/5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="modalCompType"
+                    checked={compType === 'pending'}
+                    onChange={() => setCompType('pending')}
+                  />
+                  <span>⚠️ Pending (Keep as reminder to decide later)</span>
+                </label>
+                <label className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-white/5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="modalCompType"
+                    checked={compType === 'overtime'}
+                    onChange={() => setCompType('overtime')}
+                  />
+                  <span>⏱️ Keep whole day / hours for Overtime (OT)</span>
+                </label>
+                <label className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-white/5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="modalCompType"
+                    checked={compType === 'comp_off'}
+                    onChange={() => setCompType('comp_off')}
+                  />
+                  <span>🏖️ Grant Compensatory Leave (Comp-Off)</span>
+                </label>
+              </div>
+
+              {compType === 'comp_off' && (
+                <div className="pt-2 space-y-2">
+                  <label className="text-xs block" style={{ color: '#94a3b8' }}>
+                    Compensatory Leave Date
+                    <input
+                      type="date"
+                      value={targetCompOffDate}
+                      onChange={e => setTargetCompOffDate(e.target.value)}
+                      className="w-full mt-1 px-3 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#fff' }}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 py-2 rounded-lg text-sm" style={{ background: '#122338', color: '#4b6a8a', border: '1px solid #1e3a5a' }}>Cancel</button>
             <button
@@ -348,6 +488,103 @@ function CellAssignModal({
             >
               {saving ? <RefreshCw size={13} className="animate-spin" /> : <Save size={13} />}
               {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Compensatory Leave Modal ────────────────
+interface CompOffModalProps {
+  offRecord: OffDayCompensationRecord;
+  employeeName: string;
+  onSave: (comp: OffDayCompensationRecord) => Promise<void>;
+  onClose: () => void;
+}
+
+function CompOffModal({ offRecord, employeeName, onSave, onClose }: CompOffModalProps) {
+  const [targetDate, setTargetDate] = useState(offRecord.comp_off_date ?? '');
+  const [notes, setNotes] = useState(offRecord.notes ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async () => {
+    if (!targetDate) {
+      setError('Please select a date for the compensatory leave.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      await onSave({
+        ...offRecord,
+        compensation_type: 'comp_off',
+        comp_off_date: targetDate,
+        notes: notes.trim() || null,
+        updated_at: new Date().toISOString(),
+      });
+      onClose();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to schedule compensatory leave.');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(6,13,26,0.85)' }}>
+      <div className="w-full max-w-sm rounded-2xl overflow-hidden" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #1e3a5a' }}>
+          <div>
+            <div className="text-sm font-semibold text-white">Schedule Compensatory Leave</div>
+            <div className="text-xs mt-0.5" style={{ color: '#4b6a8a' }}>{employeeName} · Worked on {offRecord.work_date}</div>
+          </div>
+          <button onClick={onClose} aria-label="Close compensatory leave modal" style={{ color: '#4b6a8a' }}><X size={15} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          {error && <ErrorBanner message={error} />}
+          <div className="text-xs" style={{ color: '#94a3b8' }}>
+            This employee worked on their regular off-day (<span className="text-amber-400 font-semibold">{offRecord.work_date}</span>).
+            Select a date when load is off to grant them compensatory leave (Comp-Off). This will automatically assign a leave day for them.
+          </div>
+          <div>
+            <label className="text-xs block mb-1.5 font-medium" style={{ color: '#94a3b8' }}>Leave Date (Comp-Off Day)</label>
+            <input
+              type="date"
+              value={targetDate}
+              onChange={e => setTargetDate(e.target.value)}
+              className="w-full text-xs px-3 py-2 rounded-lg outline-none"
+              style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#fff' }}
+            />
+          </div>
+          <div>
+            <label className="text-xs block mb-1.5 font-medium" style={{ color: '#94a3b8' }}>Notes (optional)</label>
+            <input
+              type="text"
+              placeholder="e.g. Granted comp-off as load eased"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              className="w-full text-xs px-3 py-2 rounded-lg outline-none"
+              style={{ background: '#122338', border: '1px solid #1e3a5a', color: '#fff' }}
+            />
+          </div>
+          <div className="flex gap-2 pt-2">
+            <button
+              onClick={onClose}
+              className="flex-1 py-2 rounded-lg text-xs font-medium"
+              style={{ background: '#122338', color: '#94a3b8', border: '1px solid #1e3a5a' }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => void handleSubmit()}
+              disabled={saving}
+              className="flex-1 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5"
+              style={{ background: '#059669', color: '#fff', opacity: saving ? 0.6 : 1 }}
+            >
+              {saving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+              {saving ? 'Scheduling…' : 'Confirm Comp-Off'}
             </button>
           </div>
         </div>
@@ -411,10 +648,25 @@ function WeeklyOffBadge({ weekdays }: { weekdays: number[] }) {
 // ─────────────────────────────────────────────
 
 type ViewMode = 'weekly' | 'daily' | 'monthly';
-type RightPanel = 'templates' | 'rotating' | 'weekly-off' | 'conflicts' | null;
+type RightPanel = 'templates' | 'rotating' | 'weekly-off' | 'conflicts' | 'reminders' | null;
 
 interface MockAssignments {
   [empName: string]: string[];
+}
+
+export interface CellDisplayInfo {
+  label: string;
+  abbr: string;
+  c: ReturnType<typeof shiftBadgeColor>;
+  shiftId: string | null;
+  status: 'scheduled' | 'off' | 'leave' | 'cancelled';
+  isInactive?: boolean;
+  isRegularOff?: boolean;
+  isOffDayWork?: boolean;
+  compensationType?: OffDayCompensationType;
+  compOffDate?: string | null;
+  isCompOffLeaveDay?: boolean;
+  compOffSourceDate?: string | null;
 }
 
 const MOCK_DEPARTMENTS = ['Mailroom', 'Warehouse', 'Mailroom', 'Operations', 'Warehouse', 'Mailroom', 'Operations', 'Warehouse'];
@@ -429,6 +681,7 @@ export default function ShiftScheduler() {
   const [weekStart, setWeekStart] = useState<Date>(() => getMondayOfWeek(new Date()));
   const [rightPanel, setRightPanel] = useState<RightPanel>(null);
   const [departmentId, setDepartmentId] = useState('');
+  const [showAllInactive, setShowAllInactive] = useState(false);
 
   // ── Data ────────────────────────────────────
   const [shifts, setShifts] = useState<ShiftRow[]>(MOCK_SHIFTS);
@@ -440,6 +693,7 @@ export default function ShiftScheduler() {
   // pattern rather than a dated shift_assignments row, which the grid alone misses.
   const [resolvedSchedule, setResolvedSchedule] = useState<Record<string, ResolvedScheduleRow>>({});
   const [weeklyOffs, setWeeklyOffs] = useState<Record<string, number[]>>({});
+  const [offDayCompensations, setOffDayCompensations] = useState<Record<string, OffDayCompensationRecord>>({});
   const [summaries, setSummaries] = useState<ShiftSummary[]>([]);
   const [conflicts, setConflicts] = useState<ConflictResult[]>([]);
 
@@ -453,6 +707,13 @@ export default function ShiftScheduler() {
     workDate: string;
     currentShiftId: string | null;
     currentStatus: 'scheduled' | 'off' | 'leave' | 'cancelled';
+    isRegularOffDay?: boolean;
+    isInactiveOnDate?: boolean;
+    initialCompensation?: OffDayCompensationRecord;
+  } | null>(null);
+  const [compOffModal, setCompOffModal] = useState<{
+    offRecord: OffDayCompensationRecord;
+    employeeName: string;
   } | null>(null);
 
   // Mock state (no Supabase)
@@ -471,12 +732,13 @@ export default function ShiftScheduler() {
     setLoading(true);
     setError('');
     try {
-      const [empResult, departmentList, shiftList, rawAssignments, offs, summary] = await Promise.all([
+      const [empResult, departmentList, shiftList, rawAssignments, allOffs, compList, summary] = await Promise.all([
         employeeService.listAll({ organizationId }),
         organizationService.listDepartments(organizationId),
         shiftService.listShifts(organizationId),
         shiftService.listAssignments({ organization_id: organizationId, from_date: fromDate, to_date: toDate }),
-        shiftService.listWeeklyOffs(organizationId),
+        shiftService.listAllEmployeeOffDays(organizationId),
+        shiftService.listOffDayCompensations(organizationId),
         shiftService.getWeeklySummary({ organization_id: organizationId, from_date: fromDate, to_date: toDate }),
       ]);
 
@@ -484,6 +746,8 @@ export default function ShiftScheduler() {
       setDepartments(departmentList.filter(department => department.status === 'active'));
       setShifts(shiftList);
       setAssignments(rawAssignments);
+      setWeeklyOffs(allOffs);
+      setOffDayCompensations(Object.fromEntries(compList.map(c => [c.id, c])));
       setSummaries(summary);
 
       // Resolve each employee's effective schedule for the week so the grid can
@@ -499,13 +763,6 @@ export default function ShiftScheduler() {
         }),
       );
       setResolvedSchedule(Object.fromEntries(resolvedEntries.flat()));
-
-      // Build weeklyOffs map: employeeId → weekday[]
-      const offMap: Record<string, number[]> = {};
-      for (const off of offs) {
-        (offMap[off.employee_id] ??= []).push(off.weekday);
-      }
-      setWeeklyOffs(offMap);
 
       // Conflict detection
       const detected = await shiftService.detectConflicts({
@@ -543,33 +800,162 @@ export default function ShiftScheduler() {
     [shifts],
   );
 
-  /** Returns a display badge for a given assignment. */
+  /** Returns display and metadata for a given cell. */
   const getCellDisplay = useCallback(
-    (employeeId: string, workDate: string): { label: string; abbr: string; c: ReturnType<typeof shiftBadgeColor>; shiftId: string | null; status: 'scheduled' | 'off' | 'leave' | 'cancelled' } => {
-      const a = getAssignment(employeeId, workDate);
-      // No dated assignment: fall back to the resolved recurring schedule so
-      // recurring-pattern shifts (and their off/leave/holiday days) still show.
+    (employee: EmployeeProfileRow, workDate: string): CellDisplayInfo => {
+      const activeOnDate = isEmployeeActiveOnDate(employee, workDate);
+      const d = new Date(workDate + 'T00:00:00');
+      const dow = d.getDay(); // 0=Sun..6=Sat
+      const isRegularOff = (weeklyOffs[employee.id] ?? []).includes(dow);
+
+      // Check if this date is granted as compensatory leave for an off-day shift
+      const grantedComp = Object.values(offDayCompensations).find(
+        c => c.employee_id === employee.id && c.compensation_type === 'comp_off' && c.comp_off_date === workDate
+      );
+      if (grantedComp) {
+        return {
+          label: `Comp-Off Leave (for ${grantedComp.work_date})`,
+          abbr: '🏖️',
+          c: { bg: 'rgba(16,185,129,0.2)', color: '#6ee7b7', border: '#10b981' },
+          shiftId: null,
+          status: 'leave',
+          isCompOffLeaveDay: true,
+          compOffSourceDate: grantedComp.work_date,
+        };
+      }
+
+      // Inactive check on specific date
+      if (!activeOnDate) {
+        return {
+          label: 'Inactive',
+          abbr: '—',
+          c: { bg: 'rgba(51,65,85,0.25)', color: '#64748b', border: '#334155' },
+          shiftId: null,
+          status: 'off',
+          isInactive: true,
+          isRegularOff,
+        };
+      }
+
+      const a = getAssignment(employee.id, workDate);
+      const compRecord = offDayCompensations[`${employee.id}_${workDate}`];
+
+      // No dated assignment: fall back to the resolved recurring schedule
       if (!a) {
-        const r = resolvedSchedule[`${employeeId}_${workDate}`];
+        const r = resolvedSchedule[`${employee.id}_${workDate}`];
         if (r && r.state === 'working' && r.shift_id) {
           const abbr = r.crosses_midnight ? 'N' : 'D';
           const c = r.crosses_midnight ? SHIFT_COLORS.Night : SHIFT_COLORS.Day;
-          return { label: r.shift_name ?? 'Scheduled', abbr, c, shiftId: r.shift_id, status: 'scheduled' };
+          return {
+            label: r.shift_name ?? 'Scheduled',
+            abbr,
+            c,
+            shiftId: r.shift_id,
+            status: 'scheduled',
+            isRegularOff,
+            isOffDayWork: isRegularOff,
+            compensationType: compRecord?.compensation_type ?? (isRegularOff ? 'pending' : undefined),
+            compOffDate: compRecord?.comp_off_date,
+          };
         }
-        if (r && r.state === 'leave') return { label: 'Leave', abbr: 'L', c: SHIFT_COLORS.Leave, shiftId: null, status: 'leave' };
-        return { label: 'OFF', abbr: '—', c: SHIFT_COLORS.OFF, shiftId: null, status: 'off' };
+        if (r && r.state === 'leave') return { label: 'Leave', abbr: 'L', c: SHIFT_COLORS.Leave, shiftId: null, status: 'leave', isRegularOff };
+        return { label: 'OFF', abbr: '—', c: SHIFT_COLORS.OFF, shiftId: null, status: 'off', isRegularOff };
       }
-      if (a.status === 'off') return { label: 'OFF', abbr: '—', c: SHIFT_COLORS.OFF, shiftId: null, status: 'off' };
-      if (a.status === 'leave') return { label: 'Leave', abbr: 'L', c: SHIFT_COLORS.Leave, shiftId: null, status: 'leave' };
-      if (a.status === 'cancelled') return { label: 'Cancelled', abbr: '✕', c: SHIFT_COLORS.OFF, shiftId: null, status: 'cancelled' };
+
+      if (a.status === 'off') return { label: 'OFF', abbr: '—', c: SHIFT_COLORS.OFF, shiftId: null, status: 'off', isRegularOff };
+      if (a.status === 'leave') return { label: 'Leave', abbr: 'L', c: SHIFT_COLORS.Leave, shiftId: null, status: 'leave', isRegularOff };
+      if (a.status === 'cancelled') return { label: 'Cancelled', abbr: '✕', c: SHIFT_COLORS.OFF, shiftId: null, status: 'cancelled', isRegularOff };
+
       const shift = getShift(a.shift_id);
-      if (!shift) return { label: 'Scheduled', abbr: 'S', c: SHIFT_COLORS.Day, shiftId: a.shift_id, status: 'scheduled' };
-      const c = shiftBadgeColor(shift);
-      const abbr = shift.crosses_midnight ? 'N' : 'D';
-      return { label: shift.name, abbr, c, shiftId: a.shift_id, status: 'scheduled' };
+      const c = shift ? shiftBadgeColor(shift) : SHIFT_COLORS.Day;
+      const abbr = shift?.crosses_midnight ? 'N' : 'D';
+
+      return {
+        label: shift?.name ?? 'Scheduled',
+        abbr,
+        c,
+        shiftId: a.shift_id,
+        status: 'scheduled',
+        isRegularOff,
+        isOffDayWork: isRegularOff,
+        compensationType: compRecord?.compensation_type ?? (isRegularOff ? 'pending' : undefined),
+        compOffDate: compRecord?.comp_off_date,
+      };
     },
-    [getAssignment, getShift, resolvedSchedule],
+    [getAssignment, getShift, resolvedSchedule, weeklyOffs, offDayCompensations],
   );
+
+  // ── Off-Day Compensation Action Handlers ────
+  const handleSaveCompensation = async (record: OffDayCompensationRecord) => {
+    await shiftService.saveOffDayCompensation(record);
+    setOffDayCompensations(prev => ({ ...prev, [record.id]: record }));
+    void loadData();
+  };
+
+  const handleDeleteCompensation = async (id: string) => {
+    await shiftService.deleteOffDayCompensation(organizationId, id);
+    setOffDayCompensations(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    void loadData();
+  };
+
+  const handleKeepForOT = async (emp: EmployeeProfileRow, workDate: string, shiftId: string | null) => {
+    const id = `${emp.id}_${workDate}`;
+    const shift = getShift(shiftId);
+    await handleSaveCompensation({
+      id,
+      organization_id: organizationId,
+      employee_id: emp.id,
+      work_date: workDate,
+      shift_id: shiftId,
+      shift_name: shift?.name,
+      compensation_type: 'overtime',
+      comp_off_date: null,
+      notes: 'Kept for Overtime (OT)',
+      updated_at: new Date().toISOString(),
+    });
+  };
+
+  const handleOpenCompOffModal = (emp: EmployeeProfileRow, workDate: string, shiftId: string | null) => {
+    const id = `${emp.id}_${workDate}`;
+    const existing = offDayCompensations[id];
+    const shift = getShift(shiftId);
+    setCompOffModal({
+      offRecord: existing ?? {
+        id,
+        organization_id: organizationId,
+        employee_id: emp.id,
+        work_date: workDate,
+        shift_id: shiftId,
+        shift_name: shift?.name,
+        compensation_type: 'comp_off',
+        comp_off_date: null,
+        notes: null,
+        updated_at: new Date().toISOString(),
+      },
+      employeeName: emp.full_name,
+    });
+  };
+
+  const handleResetCompensation = async (emp: EmployeeProfileRow, workDate: string, shiftId: string | null) => {
+    const id = `${emp.id}_${workDate}`;
+    const shift = getShift(shiftId);
+    await handleSaveCompensation({
+      id,
+      organization_id: organizationId,
+      employee_id: emp.id,
+      work_date: workDate,
+      shift_id: shiftId,
+      shift_name: shift?.name,
+      compensation_type: 'pending',
+      comp_off_date: null,
+      notes: null,
+      updated_at: new Date().toISOString(),
+    });
+  };
 
   // ── Mock cycle (no Supabase) ─────────────────
   const cycleMockShift = (empName: string, dayIdx: number) => {
@@ -587,23 +973,77 @@ export default function ShiftScheduler() {
   const goToday = () => setWeekStart(getMondayOfWeek(new Date()));
 
   // ── Monthly view helpers ─────────────────────
+  const viewYear = weekStart.getFullYear();
+  const viewMonth = weekStart.getMonth();
+
   const monthDates = useMemo(() => {
-    const year = weekStart.getFullYear();
-    const month = weekStart.getMonth();
     const days: Date[] = [];
-    const d = new Date(year, month, 1);
-    while (d.getMonth() === month) {
+    const d = new Date(viewYear, viewMonth, 1);
+    while (d.getMonth() === viewMonth) {
       days.push(new Date(d));
       d.setDate(d.getDate() + 1);
     }
     return days;
-  }, [weekStart]);
+  }, [viewYear, viewMonth]);
 
-  const visibleEmployees = useMemo(
-    () => departmentId ? employees.filter(employee => employee.department_id === departmentId) : employees,
-    [departmentId, employees],
-  );
+  // ── Inactive Employee Filtering ─────────────
+  // If an employee is inactive for the WHOLE month (no active days in the viewed month),
+  // do not show them unless the user explicitly checks "Show all-month inactive".
+  const visibleEmployees = useMemo(() => {
+    let list = employees;
+    if (departmentId) {
+      list = list.filter(employee => employee.department_id === departmentId);
+    }
+    if (!showAllInactive) {
+      list = list.filter(emp => {
+        const activeInMonth = isEmployeeActiveInMonth(emp, viewYear, viewMonth);
+        const activeInWeek = isEmployeeActiveInRange(emp, fromDate, toDate);
+        return activeInMonth || activeInWeek;
+      });
+    }
+    return list;
+  }, [departmentId, employees, showAllInactive, viewYear, viewMonth, fromDate, toDate]);
+
   const visibleEmployeeIds = useMemo(() => new Set(visibleEmployees.map(employee => employee.id)), [visibleEmployees]);
+
+  // ── Off-Day Work Tracker & Reminders ────────
+  const offDayWorkItems = useMemo(() => {
+    const items: Array<{
+      key: string;
+      employee: EmployeeProfileRow;
+      workDate: string;
+      shiftId: string | null;
+      shift: ShiftRow | undefined;
+      compensation?: OffDayCompensationRecord;
+    }> = [];
+
+    for (const emp of visibleEmployees) {
+      const offDays = weeklyOffs[emp.id] ?? [];
+      for (const iso of weekDates) {
+        const dow = new Date(iso + 'T00:00:00').getDay();
+        if (offDays.includes(dow)) {
+          const a = getAssignment(emp.id, iso);
+          if (a && a.status === 'scheduled') {
+            const key = `${emp.id}_${iso}`;
+            items.push({
+              key,
+              employee: emp,
+              workDate: iso,
+              shiftId: a.shift_id,
+              shift: getShift(a.shift_id),
+              compensation: offDayCompensations[key],
+            });
+          }
+        }
+      }
+    }
+    return items;
+  }, [visibleEmployees, weeklyOffs, weekDates, getAssignment, getShift, offDayCompensations]);
+
+  const pendingOffDayWork = useMemo(() => {
+    return offDayWorkItems.filter(item => !item.compensation || item.compensation.compensation_type === 'pending');
+  }, [offDayWorkItems]);
+
   const visibleConflicts = useMemo(
     () => departmentId ? conflicts.filter(conflict => visibleEmployeeIds.has(conflict.employeeId)) : conflicts,
     [conflicts, departmentId, visibleEmployeeIds],
@@ -641,7 +1081,7 @@ export default function ShiftScheduler() {
               : 'Preview mode — click any cell to cycle: Day → Night → OFF → Leave'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <select
             aria-label="Filter shifts by department"
             value={departmentId}
@@ -654,6 +1094,22 @@ export default function ShiftScheduler() {
               ? departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)
               : [...new Set(MOCK_DEPARTMENTS)].map(department => <option key={department} value={department}>{department}</option>)}
           </select>
+
+          {/* Inactive employee visibility toggle */}
+          <label
+            className="flex items-center gap-1.5 text-xs cursor-pointer select-none px-2.5 py-1.5 rounded-lg transition-colors hover:bg-white/5"
+            style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: showAllInactive ? '#93c5fd' : '#94a3b8' }}
+            title="By default, employees inactive for the whole month are hidden. Check this to show all."
+          >
+            <input
+              type="checkbox"
+              checked={showAllInactive}
+              onChange={e => setShowAllInactive(e.target.checked)}
+              className="rounded"
+            />
+            <span>Show all-month inactive</span>
+          </label>
+
           {/* View toggle */}
           <div className="flex rounded-lg overflow-hidden border" style={{ borderColor: '#1e3a5a' }}>
             {(['daily', 'weekly', 'monthly'] as const).map(v => (
@@ -669,6 +1125,20 @@ export default function ShiftScheduler() {
           </div>
 
           {/* Panel toggles */}
+          <button
+            onClick={() => setRightPanel(p => p === 'reminders' ? null : 'reminders')}
+            className="px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 transition-all"
+            style={{
+              background: rightPanel === 'reminders' ? 'rgba(245,158,11,0.2)' : '#0d1b2e',
+              color: pendingOffDayWork.length ? '#f59e0b' : '#94a3b8',
+              border: `1px solid ${pendingOffDayWork.length ? 'rgba(245,158,11,0.4)' : '#1e3a5a'}`,
+            }}
+            title="Review employees who worked on their regular off-days"
+          >
+            <Bell size={12} className={pendingOffDayWork.length ? 'text-amber-400' : ''} />
+            Off-Day Reminders {pendingOffDayWork.length > 0 ? `(${pendingOffDayWork.length})` : ''}
+          </button>
+
           <button
             onClick={() => setRightPanel(p => p === 'templates' ? null : 'templates')}
             className="px-3 py-2 rounded-lg text-xs transition-all"
@@ -708,6 +1178,33 @@ export default function ShiftScheduler() {
 
       {/* Conflicts */}
       {supabaseReady && <ConflictsBanner conflicts={visibleConflicts} />}
+
+      {/* Off-Day Work Reminders Banner */}
+      {pendingOffDayWork.length > 0 && (
+        <div
+          className="flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-all"
+          style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)', color: '#fcd34d' }}
+        >
+          <div className="flex items-center gap-3">
+            <Bell size={16} className="text-amber-400 flex-shrink-0 animate-pulse" />
+            <div>
+              <div className="font-semibold text-xs text-amber-200">
+                {pendingOffDayWork.length} Off-Day Shift{pendingOffDayWork.length > 1 ? 's' : ''} Need Compensation Decision
+              </div>
+              <div className="text-[11px] opacity-80 mt-0.5">
+                Employees were scheduled or worked on their regular OFF days. Choose whether to keep the whole day for Overtime (OT) or grant Compensatory Leave (Comp-Off) when workload eases.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => setRightPanel('reminders')}
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all hover:brightness-110 flex-shrink-0"
+            style={{ background: '#f59e0b', color: '#0f172a' }}
+          >
+            Review Reminders ({pendingOffDayWork.length})
+          </button>
+        </div>
+      )}
 
       {/* Legend */}
       <div className="flex items-center gap-4 flex-wrap">
@@ -788,7 +1285,7 @@ export default function ShiftScheduler() {
                                 <div className="text-xs" style={{ color: '#4b6a8a' }}>{emp.job_title ?? 'Employee'}</div>
                               </td>
                               {weekDates.map(iso => {
-                                const cell = getCellDisplay(emp.id, iso);
+                                const cell = getCellDisplay(emp, iso);
                                 return (
                                   <td key={iso} className="px-2 py-2 text-center">
                                     <button
@@ -797,12 +1294,65 @@ export default function ShiftScheduler() {
                                         workDate: iso,
                                         currentShiftId: cell.shiftId,
                                         currentStatus: cell.status,
+                                        isRegularOffDay: cell.isRegularOff,
+                                        isInactiveOnDate: cell.isInactive,
+                                        initialCompensation: offDayCompensations[`${emp.id}_${iso}`],
                                       })}
-                                      className="rounded-md px-2 py-1.5 text-xs font-medium w-full transition-all hover:opacity-80 active:scale-95"
-                                      title={`${cell.label} — click to edit`}
-                                      style={{ background: cell.c.bg, color: cell.c.color, border: `1px solid ${cell.c.border}30`, cursor: 'pointer' }}
+                                      className="rounded-md px-1.5 py-1 text-xs font-medium w-full transition-all hover:opacity-85 active:scale-95 flex flex-col items-center justify-center min-h-[38px] relative"
+                                      title={
+                                        cell.isInactive
+                                          ? `${emp.full_name} is inactive on this date`
+                                          : cell.isCompOffLeaveDay
+                                          ? `Compensatory leave granted for working on ${cell.compOffSourceDate}`
+                                          : cell.isOffDayWork
+                                          ? `⚡ Scheduled on Weekly OFF! Status: ${
+                                              cell.compensationType === 'overtime'
+                                                ? 'Kept for OT'
+                                                : cell.compensationType === 'comp_off'
+                                                ? `Comp-Off leave on ${cell.compOffDate}`
+                                                : 'Pending (Define OT or Comp-Off)'
+                                            }`
+                                          : `${cell.label} — click to edit`
+                                      }
+                                      style={{
+                                        background: cell.c.bg,
+                                        color: cell.c.color,
+                                        border: `1px solid ${cell.isOffDayWork && cell.compensationType === 'pending' ? '#f59e0b' : cell.c.border + '40'}`,
+                                        cursor: 'pointer',
+                                      }}
                                     >
-                                      {cell.abbr}
+                                      <span className="font-bold">{cell.abbr}</span>
+
+                                      {cell.isOffDayWork && (
+                                        <span
+                                          className="text-[9px] px-1 rounded font-semibold mt-0.5 leading-tight"
+                                          style={{
+                                            background:
+                                              cell.compensationType === 'overtime'
+                                                ? '#2563eb'
+                                                : cell.compensationType === 'comp_off'
+                                                ? '#059669'
+                                                : '#d97706',
+                                            color: '#fff',
+                                          }}
+                                        >
+                                          {cell.compensationType === 'overtime'
+                                            ? 'OT'
+                                            : cell.compensationType === 'comp_off'
+                                            ? 'Comp'
+                                            : '⚡ Off-Work'}
+                                        </span>
+                                      )}
+
+                                      {cell.isCompOffLeaveDay && (
+                                        <span className="text-[9px] px-1 rounded font-semibold text-emerald-300 mt-0.5 leading-tight">
+                                          Comp-Off
+                                        </span>
+                                      )}
+
+                                      {cell.isInactive && (
+                                        <span className="text-[9px] opacity-70 mt-0.5 leading-tight">Inactive</span>
+                                      )}
                                     </button>
                                   </td>
                                 );
@@ -854,7 +1404,7 @@ export default function ShiftScheduler() {
                   {supabaseReady
                     ? visibleEmployees.map(emp => {
                         const today = toISODate(new Date());
-                        const cell = getCellDisplay(emp.id, today);
+                        const cell = getCellDisplay(emp, today);
                         return (
                           <div key={emp.id} className="flex items-center gap-3 p-3 rounded-lg" style={{ background: '#122338' }}>
                             <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'linear-gradient(135deg,#2563eb,#06b6d4)' }}>
@@ -862,11 +1412,27 @@ export default function ShiftScheduler() {
                             </div>
                             <div className="text-xs font-medium text-white w-36 truncate">{emp.full_name}</div>
                             <button
-                              onClick={() => setCellModal({ employee: emp, workDate: today, currentShiftId: cell.shiftId, currentStatus: cell.status })}
-                              className="px-3 py-1 rounded text-xs font-medium transition-opacity hover:opacity-80"
+                              onClick={() => setCellModal({
+                                employee: emp,
+                                workDate: today,
+                                currentShiftId: cell.shiftId,
+                                currentStatus: cell.status,
+                                isRegularOffDay: cell.isRegularOff,
+                                isInactiveOnDate: cell.isInactive,
+                                initialCompensation: offDayCompensations[`${emp.id}_${today}`],
+                              })}
+                              className="px-3 py-1 rounded text-xs font-medium transition-opacity hover:opacity-80 flex items-center gap-1.5"
                               style={{ background: cell.c.bg, color: cell.c.color, border: `1px solid ${cell.c.border}30` }}
                             >
-                              {cell.label}
+                              <span>{cell.label}</span>
+                              {cell.isOffDayWork && (
+                                <span className="text-[9px] px-1 rounded font-bold bg-amber-500 text-slate-900">
+                                  {cell.compensationType === 'overtime' ? 'OT' : cell.compensationType === 'comp_off' ? 'Comp' : 'Off-Work'}
+                                </span>
+                              )}
+                              {cell.isCompOffLeaveDay && (
+                                <span className="text-[9px] px-1 rounded font-bold bg-emerald-500 text-white">Comp-Off</span>
+                              )}
                             </button>
                             <div className="text-xs" style={{ color: '#4b6a8a' }}>
                               {cell.status === 'scheduled' && cell.shiftId
@@ -966,7 +1532,7 @@ export default function ShiftScheduler() {
 
         {/* ────── Right Panel ─────────────────────── */}
         {rightPanel && (
-          <div className="w-72 flex-shrink-0 space-y-3">
+          <div className="w-80 flex-shrink-0 space-y-3">
             {/* Panel header */}
             <div
               className="flex items-center justify-between px-4 py-3 rounded-xl"
@@ -975,6 +1541,110 @@ export default function ShiftScheduler() {
               <div className="text-sm font-semibold text-white capitalize">{rightPanel.replace('-', ' ')}</div>
               <button onClick={() => setRightPanel(null)} aria-label="Close shift details" style={{ color: '#4b6a8a' }}><X size={14} /></button>
             </div>
+
+            {/* Reminders Panel */}
+            {rightPanel === 'reminders' && (
+              <div className="space-y-3">
+                <div className="p-3 rounded-xl text-xs space-y-1" style={{ background: '#0a1626', border: '1px solid #1e3a5a', color: '#94a3b8' }}>
+                  <div className="font-semibold text-white flex items-center gap-1.5">
+                    <Zap size={13} className="text-amber-400" />
+                    Off-Day Work Compensation Tracker
+                  </div>
+                  <p className="opacity-90">
+                    When employees work on their configured weekly off day, decide whether to keep the work hours for Overtime (OT) or schedule a Compensatory Leave (Comp-Off) when the load eases.
+                  </p>
+                </div>
+
+                {offDayWorkItems.length === 0 ? (
+                  <div className="flex flex-col items-center py-8 gap-2" style={{ color: '#4b6a8a' }}>
+                    <CheckCircle size={24} style={{ color: '#10b981' }} />
+                    <div className="text-xs text-center">No employees scheduled on off days this week.</div>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-[70vh] overflow-y-auto pr-1">
+                    {offDayWorkItems.map(item => {
+                      const comp = item.compensation;
+                      const isPending = !comp || comp.compensation_type === 'pending';
+                      const isOT = comp?.compensation_type === 'overtime';
+                      const isCompOff = comp?.compensation_type === 'comp_off';
+
+                      return (
+                        <div
+                          key={item.key}
+                          className="p-3.5 rounded-xl border space-y-2.5 transition-all"
+                          style={{
+                            background: isPending ? 'rgba(245,158,11,0.08)' : '#122338',
+                            borderColor: isPending ? 'rgba(245,158,11,0.35)' : '#1e3a5a',
+                          }}
+                        >
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="text-xs font-bold text-white">{item.employee.full_name}</div>
+                              <div className="text-[11px]" style={{ color: '#4b6a8a' }}>
+                                {item.employee.job_title ?? 'Employee'} · {item.employee.employee_code}
+                              </div>
+                            </div>
+                            <span
+                              className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
+                              style={{
+                                background: isPending ? 'rgba(245,158,11,0.2)' : isOT ? 'rgba(37,99,235,0.2)' : 'rgba(16,185,129,0.2)',
+                                color: isPending ? '#fcd34d' : isOT ? '#93c5fd' : '#6ee7b7',
+                              }}
+                            >
+                              {isPending ? '⚠️ Action Required' : isOT ? '⏱️ Kept for OT' : `🏖️ Comp-Off (${comp?.comp_off_date})`}
+                            </span>
+                          </div>
+
+                          <div className="text-xs flex items-center gap-1.5" style={{ color: '#94a3b8' }}>
+                            <Calendar size={12} style={{ color: '#4b6a8a' }} />
+                            <span>Off-day worked: <strong className="text-white">{item.workDate}</strong></span>
+                            {item.shift && <span className="opacity-80">({item.shift.name})</span>}
+                          </div>
+
+                          {/* Action buttons */}
+                          <div className="flex gap-1.5 pt-1">
+                            <button
+                              onClick={() => void handleKeepForOT(item.employee, item.workDate, item.shiftId)}
+                              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
+                                isOT ? 'ring-1 ring-blue-500' : 'opacity-85 hover:opacity-100'
+                              }`}
+                              style={{ background: '#1d4ed8', color: '#fff' }}
+                              title="Keep whole day / hours for Overtime"
+                            >
+                              <Clock size={11} />
+                              Keep for OT
+                            </button>
+                            <button
+                              onClick={() => handleOpenCompOffModal(item.employee, item.workDate, item.shiftId)}
+                              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
+                                isCompOff ? 'ring-1 ring-emerald-500' : 'opacity-85 hover:opacity-100'
+                              }`}
+                              style={{ background: '#059669', color: '#fff' }}
+                              title="Schedule compensatory leave date"
+                            >
+                              <CalendarDays size={11} />
+                              Grant Comp-Off
+                            </button>
+                          </div>
+
+                          {!isPending && (
+                            <div className="flex justify-end">
+                              <button
+                                onClick={() => void handleResetCompensation(item.employee, item.workDate, item.shiftId)}
+                                className="text-[10px] hover:underline"
+                                style={{ color: '#4b6a8a' }}
+                              >
+                                Reset decision to pending
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Templates Panel */}
             {rightPanel === 'templates' && (
@@ -1057,8 +1727,22 @@ export default function ShiftScheduler() {
           shifts={shifts}
           organizationId={organizationId}
           userId={user?.id ?? null}
+          isRegularOffDay={cellModal.isRegularOffDay}
+          isInactiveOnDate={cellModal.isInactiveOnDate}
+          initialCompensation={cellModal.initialCompensation}
           onSaved={() => void loadData()}
+          onSaveCompensation={handleSaveCompensation}
+          onDeleteCompensation={handleDeleteCompensation}
           onClose={() => setCellModal(null)}
+        />
+      )}
+
+      {compOffModal && (
+        <CompOffModal
+          offRecord={compOffModal.offRecord}
+          employeeName={compOffModal.employeeName}
+          onSave={handleSaveCompensation}
+          onClose={() => setCompOffModal(null)}
         />
       )}
     </div>
