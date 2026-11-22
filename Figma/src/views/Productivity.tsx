@@ -1606,6 +1606,20 @@ export default function Productivity() {
   };
 
   useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [organizationId, loadFrom, loadTo]);
+
+  useEffect(() => {
+    const handleCompUpdate = () => {
+      void load();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('geotrack:off_day_compensation_updated', handleCompUpdate);
+      window.addEventListener('storage', handleCompUpdate);
+      return () => {
+        window.removeEventListener('geotrack:off_day_compensation_updated', handleCompUpdate);
+        window.removeEventListener('storage', handleCompUpdate);
+      };
+    }
+  }, [organizationId, loadFrom, loadTo]);
   const initialize = async () => { setSaving(true); setError(null); try { await productivityService.initializeMailroom(organizationId); setNotice('Mailroom clients, rates, workflows, and workforce defaults were initialized.'); await load(); } catch (e) { setError(e instanceof Error ? e.message : 'Unable to initialize Mailroom productivity.'); } finally { setSaving(false); } };
   const saveDay = async (input: Parameters<typeof productivityService.saveMailroomDay>[1]) => {
     setSaving(true); setError(null); setNotice(null);

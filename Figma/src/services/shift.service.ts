@@ -57,21 +57,7 @@ export interface ShiftSummary {
   employeeCount: number;
 }
 
-export type OffDayCompensationType = 'pending' | 'overtime' | 'comp_off';
-
-export interface OffDayCompensationRecord {
-  id: string; // `${employee_id}_${work_date}`
-  organization_id: string;
-  employee_id: string;
-  work_date: string;
-  shift_id: string | null;
-  shift_name?: string;
-  compensation_type: OffDayCompensationType;
-  comp_off_date?: string | null;
-  notes?: string | null;
-  created_at?: string;
-  updated_at?: string;
-}
+export type { OffDayCompensationType, OffDayCompensationRecord } from '../lib/employee-status';
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -829,11 +815,37 @@ export const shiftService = {
 
     // Try saving to Supabase if table exists
     try {
-      await getSupabaseClient()
+      const payload: Record<string, unknown> = {
+        id: record.id,
+        organization_id: record.organization_id,
+        employee_id: record.employee_id,
+        work_date: record.work_date,
+        shift_id: record.shift_id ?? null,
+        compensation_type: record.compensation_type,
+        comp_off_date: record.comp_off_date ?? null,
+        notes: record.notes ?? null,
+        updated_at: new Date().toISOString(),
+      };
+      if (record.shift_name) payload.shift_name = record.shift_name;
+
+      const { error } = await getSupabaseClient()
         .from('off_day_compensations' as any)
-        .upsert(record as any, { onConflict: 'id' });
-    } catch {
-      // Table may not be migrated yet on remote DB
+        .upsert(payload as any, { onConflict: 'id' });
+
+      if (error && error.message?.includes('shift_name')) {
+        delete payload.shift_name;
+        await getSupabaseClient()
+          .from('off_day_compensations' as any)
+          .upsert(payload as any, { onConflict: 'id' });
+      }
+    } catch (e) {
+      logger.warn('Failed to upsert off_day_compensation to Supabase', { error: e });
+    }
+
+    if (typeof window !== 'undefined') {
+      try {
+        window.dispatchEvent(new CustomEvent('geotrack:off_day_compensation_updated', { detail: record }));
+      } catch {}
     }
 
     return record;
@@ -850,6 +862,9 @@ export const shiftService = {
           const filtered = list.filter(r => r.id !== id);
           localStorage.setItem(storageKey, JSON.stringify(filtered));
         }
+      } catch {}
+      try {
+        window.dispatchEvent(new CustomEvent('geotrack:off_day_compensation_updated', { detail: { id, deleted: true } }));
       } catch {}
     }
     try {

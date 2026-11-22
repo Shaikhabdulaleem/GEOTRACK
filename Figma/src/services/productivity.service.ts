@@ -1,16 +1,23 @@
 import { getSupabaseClient } from '../lib/supabase';
 import { executeQuery } from './database.service';
+import { shiftService } from './shift.service';
 import {
   isEmployeeActiveOnDate,
   getApprovedOvertimeMinutes,
   getEffectiveApprovedOvertimeMinutes,
+  getOffDayOvertimeHours,
   type EmployeeApprovedOvertimeResult,
+  type OffDayCompensationRecord,
+  type OffDayCompensationType,
 } from '../lib/employee-status';
 export {
   isEmployeeActiveOnDate,
   getApprovedOvertimeMinutes,
   getEffectiveApprovedOvertimeMinutes,
+  getOffDayOvertimeHours,
   type EmployeeApprovedOvertimeResult,
+  type OffDayCompensationRecord,
+  type OffDayCompensationType,
 };
 import type {
   AttendanceRecordRow,
@@ -91,6 +98,7 @@ export interface MailroomWorkspace {
   dspAllocations: MailroomDailyDspAllocationRow[];
   turnaroundMetrics: MailroomDailyTurnaroundMetricRow[];
   overtimeRecords: OvertimeRecordRow[];
+  offDayCompensations?: OffDayCompensationRecord[];
 }
 
 export interface MailroomActivityCapacity {
@@ -519,6 +527,39 @@ export function buildMailroomOperationalModel(
   const employeeScheduledDaysMap = new Map<string, number>();
   const employeeMaxOtCapMap = new Map<string, number>();
 
+  let offDayCompensations = workspace.offDayCompensations ?? [];
+  if (typeof window !== 'undefined' && workspace.settings?.organization_id) {
+    try {
+      const raw = localStorage.getItem(`off_day_compensations_${workspace.settings.organization_id}`);
+      if (raw) {
+        const localList: OffDayCompensationRecord[] = JSON.parse(raw);
+        const map = new Map<string, OffDayCompensationRecord>();
+        offDayCompensations.forEach(item => map.set(item.id, item));
+        localList.forEach(item => map.set(item.id, item));
+        offDayCompensations = Array.from(map.values());
+      }
+    } catch {}
+  }
+  const offDayCompMap = new Map<string, OffDayCompensationRecord>();
+  offDayCompensations.forEach(comp => {
+    offDayCompMap.set(`${comp.employee_id}:${comp.work_date}`, comp);
+    offDayCompMap.set(`${comp.employee_id}_${comp.work_date}`, comp);
+    offDayCompMap.set(comp.id, comp);
+  });
+
+  const getOffDayOtHours = (employeeId: string, date: string): number => {
+    const comp = offDayCompMap.get(`${employeeId}:${date}`) ?? offDayCompMap.get(`${employeeId}_${date}`);
+    if (!comp || comp.compensation_type !== 'overtime') return 0;
+
+    const schedule = workspace.schedules[employeeId]?.find(row => row.work_date === date);
+    const shiftBase = schedule ? shiftHours(schedule) : 0;
+    const scheduledHours = shiftBase > 0 ? shiftBase : workspace.settings.standard_hours_per_day;
+
+    const records = attendanceByEmployeeDate.get(`${employeeId}:${date}`) ?? [];
+    const workedMinutes = records.reduce((sum, row) => sum + row.worked_minutes, 0);
+    return workedMinutes > 0 ? workedMinutes / 60 : scheduledHours;
+  };
+
   const days = dates.map(date => {
     const dayRows = workspace.shipments.filter(row => row.work_date === date);
     let regularCapacityHours = 0;
@@ -545,22 +586,30 @@ export function buildMailroomOperationalModel(
       const schedule = workspace.schedules[employee.id]?.find(row => row.work_date === date);
       if (!schedule || schedule.state !== 'working') return;
       scheduledDlp += 1;
-      const scheduledHours = shiftHours(schedule) * (1 - workspace.settings.planned_absence_percent / 100);
-      let workedRegularHours = scheduledHours;
-      if (date < today) {
-        const records = attendanceByEmployeeDate.get(`${employee.id}:${date}`) ?? [];
-        const workedHours = records.reduce((sum, row) => sum + Math.max(0, row.worked_minutes - row.overtime_minutes) / 60, 0);
-        workedRegularHours = workedHours > 0 ? workedHours : scheduledHours;
-        regularCapacityHours += workedRegularHours;
-      } else {
-        regularCapacityHours += scheduledHours;
-      }
 
-      const cap = setting.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
-      scheduledEmployees.push({ id: employee.id, regularHours: workedRegularHours, cap, eligible: setting.overtime_eligible });
-      if (setting.overtime_eligible) {
-        overtimeCapacityHours += cap;
-        eligible.push({ id: employee.id, cap, regularHours: workedRegularHours });
+      const offDayOt = getOffDayOtHours(employee.id, date);
+      const isOffDayKeptForOt = offDayOt > 0;
+
+      // If the employee came on their off-day and is being compensated as Overtime ("Keep for OT"),
+      // their hours on this day are Overtime to cover the workload shortage, NOT regular capacity.
+      if (!isOffDayKeptForOt) {
+        const scheduledHours = shiftHours(schedule) * (1 - workspace.settings.planned_absence_percent / 100);
+        let workedRegularHours = scheduledHours;
+        if (date < today) {
+          const records = attendanceByEmployeeDate.get(`${employee.id}:${date}`) ?? [];
+          const workedHours = records.reduce((sum, row) => sum + Math.max(0, row.worked_minutes - row.overtime_minutes) / 60, 0);
+          workedRegularHours = workedHours > 0 ? workedHours : scheduledHours;
+          regularCapacityHours += workedRegularHours;
+        } else {
+          regularCapacityHours += scheduledHours;
+        }
+
+        const cap = setting.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
+        scheduledEmployees.push({ id: employee.id, regularHours: workedRegularHours, cap, eligible: setting.overtime_eligible });
+        if (setting.overtime_eligible) {
+          overtimeCapacityHours += cap;
+          eligible.push({ id: employee.id, cap, regularHours: workedRegularHours });
+        }
       }
     });
 
@@ -659,9 +708,14 @@ export function buildMailroomOperationalModel(
       if (!isEmployeeActiveOnDate(employee, date)) return;
 
       const { effectiveMinutes, status } = getEffectiveApprovedOvertimeMinutes(employee.id, date, workspace.attendance, workspace.overtimeRecords ?? []);
-      if (status === 'rejected') return;
+      let hours = status === 'rejected' ? 0 : effectiveMinutes / 60;
 
-      const hours = effectiveMinutes / 60;
+      // Include off-day work kept for Overtime
+      const offDayOt = getOffDayOtHours(employee.id, date);
+      if (offDayOt > 0) {
+        hours = Math.max(hours, offDayOt);
+      }
+
       if (hours > 0) {
         const rate = getEmployeeOtRate(setting, workspace.settings);
         dayApprovedOtHours += hours;
@@ -803,9 +857,14 @@ export function buildMailroomOperationalModel(
       if (!isEmployeeActiveOnDate(employee, day.date)) return;
 
       const { effectiveMinutes, status } = getEffectiveApprovedOvertimeMinutes(employee.id, day.date, workspace.attendance, workspace.overtimeRecords ?? []);
-      if (status === 'rejected') return;
+      let hours = status === 'rejected' ? 0 : effectiveMinutes / 60;
 
-      const hours = effectiveMinutes / 60;
+      // Include off-day work kept for Overtime
+      const offDayOt = getOffDayOtHours(employee.id, day.date);
+      if (offDayOt > 0) {
+        hours = Math.max(hours, offDayOt);
+      }
+
       if (hours > 0) {
         const rate = getEmployeeOtRate(setting, workspace.settings);
         const current = employeeOtMap.get(employee.id) ?? {
@@ -849,7 +908,8 @@ export function buildMailroomOperationalModel(
         workspace.attendance,
         workspace.overtimeRecords ?? [],
       );
-      if (status !== 'rejected' && effectiveMinutes > 0) {
+      const offDayOt = getOffDayOtHours(employee.id, day.date);
+      if ((status !== 'rejected' && effectiveMinutes > 0) || offDayOt > 0) {
         allPeriodOtEmployeeIds.add(employee.id);
       }
     });
@@ -934,6 +994,39 @@ export function buildMailroomDayPreview(
   }).filter(activity => activity.volume > 0).sort((a, b) => b.laborHours - a.laborHours);
   const requiredHours = activities.reduce((sum, activity) => sum + activity.laborHours, 0);
   const employeeSettingById = new Map(workspace.employeeSettings.map(setting => [setting.employee_id, setting]));
+  let offDayCompensations = workspace.offDayCompensations ?? [];
+  if (typeof window !== 'undefined' && workspace.settings?.organization_id) {
+    try {
+      const raw = localStorage.getItem(`off_day_compensations_${workspace.settings.organization_id}`);
+      if (raw) {
+        const localList: OffDayCompensationRecord[] = JSON.parse(raw);
+        const map = new Map<string, OffDayCompensationRecord>();
+        offDayCompensations.forEach(item => map.set(item.id, item));
+        localList.forEach(item => map.set(item.id, item));
+        offDayCompensations = Array.from(map.values());
+      }
+    } catch {}
+  }
+  const offDayCompMap = new Map<string, OffDayCompensationRecord>();
+  offDayCompensations.forEach(comp => {
+    offDayCompMap.set(`${comp.employee_id}:${comp.work_date}`, comp);
+    offDayCompMap.set(`${comp.employee_id}_${comp.work_date}`, comp);
+    offDayCompMap.set(comp.id, comp);
+  });
+
+  const getOffDayOtHours = (employeeId: string, date: string): number => {
+    const comp = offDayCompMap.get(`${employeeId}:${date}`) ?? offDayCompMap.get(`${employeeId}_${date}`);
+    if (!comp || comp.compensation_type !== 'overtime') return 0;
+
+    const schedule = workspace.schedules[employeeId]?.find(row => row.work_date === date);
+    const shiftBase = schedule ? shiftHours(schedule) : 0;
+    const scheduledHours = shiftBase > 0 ? shiftBase : workspace.settings.standard_hours_per_day;
+
+    const attendance = workspace.attendance.filter(row => row.employee_id === employeeId && row.attendance_date === date);
+    const workedMinutes = attendance.reduce((sum, row) => sum + row.worked_minutes, 0);
+    return workedMinutes > 0 ? workedMinutes / 60 : scheduledHours;
+  };
+
   let regularCapacityHours = 0;
   let overtimeCapacityHours = 0;
   workspace.employees.forEach(employee => {
@@ -942,13 +1035,19 @@ export function buildMailroomDayPreview(
     if (setting?.labor_class !== 'dlp') return;
     const schedule = workspace.schedules[employee.id]?.find(row => row.work_date === workDate);
     if (!schedule || schedule.state !== 'working') return;
-    const attendance = workspace.attendance.filter(row => row.employee_id === employee.id && row.attendance_date === workDate);
-    const scheduledHours = shiftHours(schedule) * (1 - workspace.settings.planned_absence_percent / 100);
-    const workedHours = attendance.reduce((sum, row) => sum + Math.max(0, row.worked_minutes - row.overtime_minutes) / 60, 0);
-    regularCapacityHours += workDate < today
-      ? (workedHours > 0 ? workedHours : scheduledHours)
-      : scheduledHours;
-    if (setting.overtime_eligible) overtimeCapacityHours += setting.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
+
+    const offDayOt = getOffDayOtHours(employee.id, workDate);
+    const isOffDayKeptForOt = offDayOt > 0;
+
+    if (!isOffDayKeptForOt) {
+      const attendance = workspace.attendance.filter(row => row.employee_id === employee.id && row.attendance_date === workDate);
+      const scheduledHours = shiftHours(schedule) * (1 - workspace.settings.planned_absence_percent / 100);
+      const workedHours = attendance.reduce((sum, row) => sum + Math.max(0, row.worked_minutes - row.overtime_minutes) / 60, 0);
+      regularCapacityHours += workDate < today
+        ? (workedHours > 0 ? workedHours : scheduledHours)
+        : scheduledHours;
+      if (setting.overtime_eligible) overtimeCapacityHours += setting.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
+    }
   });
   const totalReceived = clientInputs.reduce((sum, input) => sum + (input.received_units || 0), 0);
   const totalProcessed = clientInputs.reduce((sum, input) => sum + (input.processed_units || 0), 0);
@@ -997,9 +1096,13 @@ export function buildMailroomDayPreview(
     if (!isEmployeeActiveOnDate(employee, workDate)) return;
 
     const { effectiveMinutes, status } = getEffectiveApprovedOvertimeMinutes(employee.id, workDate, workspace.attendance, workspace.overtimeRecords ?? []);
-    if (status === 'rejected') return;
+    let hours = status === 'rejected' ? 0 : effectiveMinutes / 60;
 
-    const hours = effectiveMinutes / 60;
+    const offDayOt = getOffDayOtHours(employee.id, workDate);
+    if (offDayOt > 0) {
+      hours = Math.max(hours, offDayOt);
+    }
+
     if (hours > 0) {
       const rate = getEmployeeOtRate(setting, workspace.settings);
       approvedOvertimeHours += hours;
@@ -1217,7 +1320,7 @@ export const productivityService = {
     const department = departmentRows[0];
     if (!department) return null;
 
-    const [settingsRows, clients, activities, mappings, shipments, employees, employeeSettings, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords] = await Promise.all([
+    const [settingsRows, clients, activities, mappings, shipments, employees, employeeSettings, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations] = await Promise.all([
       executeQuery(client.from('mailroom_productivity_settings').select('*').eq('organization_id', organizationId).limit(1), 'Unable to load Mailroom settings.'),
       executeQuery(client.from('mailroom_clients').select('*').eq('organization_id', organizationId).order('sort_order'), 'Unable to load Mailroom clients.'),
       executeQuery(client.from('mailroom_activities').select('*').eq('organization_id', organizationId).order('sort_order'), 'Unable to load Mailroom activities.'),
@@ -1231,6 +1334,7 @@ export const productivityService = {
       executeQuery(client.from('mailroom_daily_dsp_allocations').select('*').eq('organization_id', organizationId), 'Unable to load DSP allocations.'),
       executeQuery(client.from('mailroom_daily_turnaround_metrics').select('*').eq('organization_id', organizationId).gte('work_date', fromDate).lte('work_date', toDate), 'Unable to load turnaround metrics.'),
       executeQuery(client.from('overtime_records').select('*').eq('organization_id', organizationId), 'Unable to load Overtime records.'),
+      shiftService.listOffDayCompensations(organizationId).catch(() => []),
     ]);
     const settings = settingsRows[0];
     if (!settings) return null;
@@ -1264,7 +1368,7 @@ export const productivityService = {
       employee.id,
       await executeQuery(client.rpc('resolve_employee_schedule', { p_employee_id: employee.id, p_start_date: fromDate, p_end_date: toDate }), 'Unable to resolve Mailroom schedules.'),
     ])));
-    return { settings, clients, activities, mappings, shipments, employees, employeeSettings, schedules, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords };
+    return { settings, clients, activities, mappings, shipments, employees, employeeSettings, schedules, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations };
   },
 
   async updateMailroomSettings(id: string, updates: Record<string, unknown>) {

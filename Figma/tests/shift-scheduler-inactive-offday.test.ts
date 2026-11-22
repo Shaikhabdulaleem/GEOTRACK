@@ -4,9 +4,11 @@ import {
   isEmployeeActiveOnDate,
   isEmployeeActiveInMonth,
   isEmployeeActiveInRange,
+  getOffDayOvertimeHours,
+  type OffDayCompensationRecord,
+  type OffDayCompensationType,
 } from '../src/lib/employee-status.ts';
 import type { EmployeeProfileRow } from '../src/types/database.ts';
-import type { OffDayCompensationRecord, OffDayCompensationType } from '../src/services/shift.service.ts';
 
 test('Shift Scheduler Inactive Employee Visibility Filter: Nov 18 deactivation example', () => {
   const nov18Emp: EmployeeProfileRow = {
@@ -181,4 +183,81 @@ test('Productivity Overtime Tracking accurately credits employee active Nov 1-17
 
   // But not active in December:
   assert.equal(isEmployeeActiveInMonth(employeeDeactivatedNov18, 2026, 11), false);
+});
+
+test('Overtime tracking reflects Keep for OT off-day work in OT Done (Approved)', () => {
+  const compensations: OffDayCompensationRecord[] = [
+    {
+      id: 'emp-palash_2026-11-20',
+      organization_id: 'org-test',
+      employee_id: 'emp-palash',
+      work_date: '2026-11-20',
+      shift_id: 'shift-night',
+      shift_name: 'Night',
+      compensation_type: 'overtime', // Kept for OT!
+      comp_off_date: null,
+      notes: 'Kept for Overtime (OT)',
+    },
+    {
+      id: 'emp-alal_2026-11-16',
+      organization_id: 'org-test',
+      employee_id: 'emp-alal',
+      work_date: '2026-11-16',
+      shift_id: 'shift-night',
+      shift_name: 'Night',
+      compensation_type: 'overtime', // Kept for OT!
+      comp_off_date: null,
+      notes: 'Kept for Overtime (OT)',
+    },
+    {
+      id: 'emp-other_2026-11-21',
+      organization_id: 'org-test',
+      employee_id: 'emp-other',
+      work_date: '2026-11-21',
+      shift_id: 'shift-day',
+      shift_name: 'Day',
+      compensation_type: 'comp_off', // Granted Comp-off!
+      comp_off_date: '2026-11-25',
+      notes: null,
+    },
+    {
+      id: 'emp-pending_2026-11-22',
+      organization_id: 'org-test',
+      employee_id: 'emp-pending',
+      work_date: '2026-11-22',
+      shift_id: 'shift-day',
+      shift_name: 'Day',
+      compensation_type: 'pending', // Decision still pending
+      comp_off_date: null,
+      notes: null,
+    },
+  ];
+
+  // 1. MD PALASH HOSSAIN on 2026-11-20: Kept for OT with default scheduled shift duration (7.5h)
+  const palashOtHours = getOffDayOvertimeHours('emp-palash', '2026-11-20', compensations, 7.5, 0);
+  assert.equal(palashOtHours, 7.5);
+
+  // 2. MD ALAL HOSSAIN on 2026-11-16: Kept for OT with actual biometric attendance worked hours (8.2h)
+  const alalOtHours = getOffDayOvertimeHours('emp-alal', '2026-11-16', compensations, 7.5, 8.2);
+  assert.equal(alalOtHours, 8.2);
+
+  // 3. Comp-off granted: should NOT count as OT Done (0 hours)
+  const compOffHours = getOffDayOvertimeHours('emp-other', '2026-11-21', compensations, 7.5, 7.5);
+  assert.equal(compOffHours, 0);
+
+  // 4. Pending decision: should NOT count as OT Done (0 hours)
+  const pendingHours = getOffDayOvertimeHours('emp-pending', '2026-11-22', compensations, 7.5, 7.5);
+  assert.equal(pendingHours, 0);
+
+  // 5. Unrelated employee or regular day: 0 hours
+  const regularHours = getOffDayOvertimeHours('emp-regular', '2026-11-20', compensations, 7.5, 7.5);
+  assert.equal(regularHours, 0);
+
+  // 6. Map lookup support (fast O(1) in operational model loops)
+  const compMap = new Map<string, OffDayCompensationRecord>();
+  compensations.forEach(c => compMap.set(`${c.employee_id}:${c.work_date}`, c));
+
+  assert.equal(getOffDayOvertimeHours('emp-palash', '2026-11-20', compMap, 7.5, 0), 7.5);
+  assert.equal(getOffDayOvertimeHours('emp-alal', '2026-11-16', compMap, 7.5, 8.2), 8.2);
+  assert.equal(getOffDayOvertimeHours('emp-other', '2026-11-21', compMap, 7.5, 0), 0);
 });

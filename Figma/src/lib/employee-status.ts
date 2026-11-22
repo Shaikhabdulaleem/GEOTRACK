@@ -149,3 +149,44 @@ export function getEffectiveApprovedOvertimeMinutes(
   }
   return { effectiveMinutes, ...result };
 }
+
+export type OffDayCompensationType = 'pending' | 'overtime' | 'comp_off';
+
+export interface OffDayCompensationRecord {
+  id: string; // `${employee_id}_${work_date}`
+  organization_id: string;
+  employee_id: string;
+  work_date: string;
+  shift_id: string | null;
+  shift_name?: string;
+  compensation_type: OffDayCompensationType;
+  comp_off_date?: string | null;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * Calculates approved overtime hours resulting from working on an off-day that is kept for Overtime.
+ * If compensation_type is 'overtime', returns the worked hours (or scheduled shift duration fallback).
+ * If compensation_type is 'comp_off' or 'pending', returns 0.
+ */
+export function getOffDayOvertimeHours(
+  employeeId: string,
+  workDate: string,
+  compensations: OffDayCompensationRecord[] | Map<string, OffDayCompensationRecord>,
+  scheduledShiftHours: number = 7.5,
+  workedAttendanceHours: number = 0,
+): number {
+  let match: OffDayCompensationRecord | undefined;
+  if (compensations instanceof Map) {
+    match = compensations.get(`${employeeId}:${workDate}`) ?? compensations.get(`${employeeId}_${workDate}`) ?? compensations.get(`${employeeId}_${workDate}`);
+  } else {
+    match = (compensations ?? []).find(
+      c => c.employee_id === employeeId && c.work_date === workDate
+    );
+  }
+
+  if (!match || match.compensation_type !== 'overtime') return 0;
+  return workedAttendanceHours > 0 ? workedAttendanceHours : scheduledShiftHours;
+}
