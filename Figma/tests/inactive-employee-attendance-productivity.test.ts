@@ -256,3 +256,57 @@ test('approved overtime uses approved minutes', () => {
   assert.equal(effectiveResult.effectiveMinutes, 132);
   assert.equal(effectiveResult.approvedMinutes, 132);
 });
+
+test('Overtime tracking active DLP count breaks down into Own and 3PL', () => {
+  const ownActiveEmp: EmployeeProfileRow = {
+    id: 'emp-own-1',
+    organization_id: 'org-1',
+    employee_code: 'EMP-001',
+    full_name: 'Own Employee 1',
+    department: 'Mailroom',
+    job_title: 'Operations Assistant',
+    employment_status: 'active',
+    status_effective_date: null,
+    joining_date: '2026-01-01',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  };
+
+  const threePlActiveEmp: EmployeeProfileRow = {
+    id: 'emp-3pl-1',
+    organization_id: 'org-1',
+    employee_code: '3PL-001',
+    full_name: '3PL Contractor 1',
+    department: 'Mailroom',
+    job_title: 'Laborer',
+    employment_status: 'active',
+    status_effective_date: null,
+    joining_date: '2026-01-01',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  };
+
+  const inactiveEmpDeactivatedNov18: EmployeeProfileRow = {
+    id: 'emp-own-2',
+    organization_id: 'org-1',
+    employee_code: 'EMP-002',
+    full_name: 'Own Employee 2',
+    department: 'Mailroom',
+    job_title: 'Operations Assistant',
+    employment_status: 'inactive',
+    status_effective_date: '2026-11-18',
+    joining_date: '2026-01-01',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-11-18T10:00:00Z',
+  };
+
+  // Active on Nov 15: all 3 employees
+  assert.equal(isEmployeeActiveOnDate(ownActiveEmp, '2026-11-15'), true);
+  assert.equal(isEmployeeActiveOnDate(threePlActiveEmp, '2026-11-15'), true);
+  assert.equal(isEmployeeActiveOnDate(inactiveEmpDeactivatedNov18, '2026-11-15'), true);
+
+  // Active on Nov 19: inactiveEmpDeactivatedNov18 is not active
+  assert.equal(isEmployeeActiveOnDate(ownActiveEmp, '2026-11-19'), true);
+  assert.equal(isEmployeeActiveOnDate(threePlActiveEmp, '2026-11-19'), true);
+  assert.equal(isEmployeeActiveOnDate(inactiveEmpDeactivatedNov18, '2026-11-19'), false);
+});

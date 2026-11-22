@@ -124,6 +124,11 @@ export interface MailroomDayCapacity {
   actualOvertimeHours: number;
   actualOvertimeCost: number;
   actualOtEmployeesCount: number;
+  activeDlpCount: number;
+  activeOwnCount: number;
+  activeThreePlCount: number;
+  scheduledOwnCount: number;
+  scheduledThreePlCount: number;
   overtimeCostSaved: number;
   uncoveredHours: number;
   scheduledDlp: number;
@@ -519,6 +524,9 @@ export function buildMailroomOperationalModel(
     let regularCapacityHours = 0;
     let overtimeCapacityHours = 0;
     let scheduledDlp = 0;
+    let activeDlpCount = 0;
+    let activeOwnCount = 0;
+    let activeThreePlCount = 0;
     const eligible: Array<{ id: string; cap: number; regularHours: number }> = [];
     const scheduledEmployees: Array<{ id: string; regularHours: number; cap: number; eligible: boolean }> = [];
 
@@ -526,6 +534,14 @@ export function buildMailroomOperationalModel(
       if (!isEmployeeActiveOnDate(employee, date)) return;
       const setting = settingFor(employee);
       if (setting.labor_class !== 'dlp') return;
+
+      activeDlpCount += 1;
+      if (setting.employment_source === '3pl') {
+        activeThreePlCount += 1;
+      } else {
+        activeOwnCount += 1;
+      }
+
       const schedule = workspace.schedules[employee.id]?.find(row => row.work_date === date);
       if (!schedule || schedule.state !== 'working') return;
       scheduledDlp += 1;
@@ -545,6 +561,17 @@ export function buildMailroomOperationalModel(
       if (setting.overtime_eligible) {
         overtimeCapacityHours += cap;
         eligible.push({ id: employee.id, cap, regularHours: workedRegularHours });
+      }
+    });
+
+    let scheduledOwnCount = 0;
+    let scheduledThreePlCount = 0;
+    scheduledEmployees.forEach(emp => {
+      const empObj = workspace.employees.find(e => e.id === emp.id);
+      if (empObj && settingFor(empObj).employment_source === '3pl') {
+        scheduledThreePlCount += 1;
+      } else {
+        scheduledOwnCount += 1;
       }
     });
 
@@ -666,6 +693,11 @@ export function buildMailroomOperationalModel(
       actualOvertimeHours,
       actualOvertimeCost,
       actualOtEmployeesCount,
+      activeDlpCount,
+      activeOwnCount,
+      activeThreePlCount,
+      scheduledOwnCount,
+      scheduledThreePlCount,
       overtimeCostSaved: Math.max(0, overtimeRecommendedHours - actualOvertimeHours) * baseOtRate,
       uncoveredHours: Math.max(0, gapHours - overtimeCapacityHours),
       scheduledDlp,

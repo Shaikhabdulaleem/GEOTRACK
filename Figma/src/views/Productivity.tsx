@@ -403,16 +403,26 @@ function OperationsDashboard({
       <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-3 border-b" style={{ borderColor: '#1e3a5a' }}>
         <div>
           <div className="font-semibold text-sm text-white">Overtime tracking — Required vs Done (Approved)</div>
-          <div className="text-xs mt-1" style={{ color: '#64748b' }}>
-            Workload shortage hours requiring overtime compared with actual manager-approved overtime performed by Mailroom employees.
-            Employee counts accurately include all DLP employees active on their worked dates (e.g. active Nov 1–17 before deactivation on Nov 18).
-          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+          <div className="px-3 py-1.5 rounded-lg group relative cursor-help" style={{ background: '#122338', border: '1px solid #1e3a5a' }} title={`Own: ${model.ownDlp} · 3PL: ${model.threePlDlp}`}>
             <span style={{ color: '#94a3b8' }}>Active DLP: </span>
             <strong className="font-mono text-white">{model.totalActivePeriodDlpEmployees ?? model.eligibleDlpCount} employees</strong>
             <span className="text-[10px] font-mono ml-1" style={{ color: '#4b6a8a' }}>(period active)</span>
+            <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col items-center z-30 whitespace-nowrap">
+              <div className="px-2.5 py-1.5 rounded-lg shadow-xl text-[11px] font-sans font-medium text-white flex items-center gap-2 border" style={{ background: '#0b1623', borderColor: '#3b82f6' }}>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                  <span>Own: <strong className="font-mono text-blue-300">{model.ownDlp}</strong></span>
+                </span>
+                <span style={{ color: '#475569' }}>·</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                  <span>3PL: <strong className="font-mono text-amber-300">{model.threePlDlp}</strong></span>
+                </span>
+              </div>
+              <div className="w-2 h-1 border-x-4 border-t-4 border-x-transparent" style={{ borderTopColor: '#3b82f6' }}></div>
+            </div>
           </div>
           <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
             <span style={{ color: '#94a3b8' }}>Regular Capacity: </span>
@@ -454,6 +464,7 @@ function OperationsDashboard({
             <tr style={{ background: '#122338', color: '#64748b' }}>
               <th className="text-left px-3 py-2">Date</th>
               <th className="text-center px-3 py-2">Status</th>
+              <th className="text-center px-3 py-2">Employees</th>
               <th className="text-right px-3 py-2">Received</th>
               <th className="text-right px-3 py-2">Regular Capacity</th>
               <th className="text-right px-3 py-2">Workload Demand</th>
@@ -491,6 +502,29 @@ function OperationsDashboard({
                   </td>
                   <td className="px-3 py-2 text-center uppercase text-[10px] font-semibold" style={{ color: day.status === 'finalized' ? '#10b981' : day.status === 'draft' ? '#f59e0b' : '#64748b' }}>
                     {day.status}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <div
+                      className="group relative inline-flex items-center justify-center cursor-help px-2 py-0.5 rounded text-[11px] font-mono transition-colors"
+                      style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', color: '#93c5fd' }}
+                      title={`Active DLP: ${day.activeDlpCount} employees (Own: ${day.activeOwnCount} · 3PL: ${day.activeThreePlCount})`}
+                    >
+                      <span className="font-medium">{day.activeDlpCount} {day.activeDlpCount === 1 ? 'employee' : 'employees'}</span>
+                      <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col items-center z-30 whitespace-nowrap">
+                        <div className="px-2.5 py-1.5 rounded-lg shadow-xl text-[11px] font-sans font-medium text-white flex items-center gap-2 border" style={{ background: '#0b1623', borderColor: '#3b82f6' }}>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                            <span>Own: <strong className="font-mono text-blue-300">{day.activeOwnCount}</strong></span>
+                          </span>
+                          <span style={{ color: '#475569' }}>·</span>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                            <span>3PL: <strong className="font-mono text-amber-300">{day.activeThreePlCount}</strong></span>
+                          </span>
+                        </div>
+                        <div className="w-2 h-1 border-x-4 border-t-4 border-x-transparent" style={{ borderTopColor: '#3b82f6' }}></div>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-white font-medium">
                     {number(day.received)}
@@ -548,6 +582,29 @@ function OperationsDashboard({
           <tfoot>
             <tr className="border-t-2 font-semibold" style={{ borderColor: '#3b82f6', background: '#122338' }}>
               <td colSpan={2} className="px-3 py-2.5 text-white">Period Totals</td>
+              <td className="px-3 py-2.5 text-center">
+                <div
+                  className="group relative inline-flex items-center justify-center cursor-help px-2 py-0.5 rounded text-[11px] font-mono transition-colors"
+                  style={{ background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.35)', color: '#93c5fd' }}
+                  title={`Active DLP: ${model.totalActivePeriodDlpEmployees ?? (model.ownDlp + model.threePlDlp)} employees (Own: ${model.ownDlp} · 3PL: ${model.threePlDlp})`}
+                >
+                  <span className="font-medium">{model.totalActivePeriodDlpEmployees ?? (model.ownDlp + model.threePlDlp)} employees</span>
+                  <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col items-center z-30 whitespace-nowrap">
+                    <div className="px-2.5 py-1.5 rounded-lg shadow-xl text-[11px] font-sans font-medium text-white flex items-center gap-2 border" style={{ background: '#0b1623', borderColor: '#3b82f6' }}>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                        <span>Own: <strong className="font-mono text-blue-300">{model.ownDlp}</strong></span>
+                      </span>
+                      <span style={{ color: '#475569' }}>·</span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                        <span>3PL: <strong className="font-mono text-amber-300">{model.threePlDlp}</strong></span>
+                      </span>
+                    </div>
+                    <div className="w-2 h-1 border-x-4 border-t-4 border-x-transparent" style={{ borderTopColor: '#3b82f6' }}></div>
+                  </div>
+                </div>
+              </td>
               <td className="px-3 py-2.5 text-right font-mono text-white">{number(model.totalReceived)}</td>
               <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#93c5fd' }}>
                 {number(model.totalRegularUnitsCapacity)}
