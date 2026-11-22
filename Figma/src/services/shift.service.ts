@@ -57,7 +57,8 @@ export interface ShiftSummary {
   employeeCount: number;
 }
 
-export type { OffDayCompensationType, OffDayCompensationRecord } from '../lib/employee-status';
+import type { OffDayCompensationType, OffDayCompensationRecord } from '../lib/employee-status';
+export type { OffDayCompensationType, OffDayCompensationRecord };
 
 // ─────────────────────────────────────────────
 // Helpers
