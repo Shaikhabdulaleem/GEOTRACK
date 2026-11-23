@@ -68,10 +68,56 @@ export const organizationService = {
 
   async listManagers(organizationId: string): Promise<OrganizationManagerItem[]> {
     const client = getSupabaseClient();
-    return await executeQuery<OrganizationManagerItem[]>(
-      client.rpc('list_organization_managers', { p_organization_id: organizationId }),
-      'Unable to load organization managers.',
-    );
+    try {
+      return await executeQuery<OrganizationManagerItem[]>(
+        client.rpc('list_organization_managers', { p_organization_id: organizationId }),
+        'Unable to load organization managers.',
+      );
+    } catch (caught: unknown) {
+      const err = caught as { code?: string; message?: string };
+      if (err?.code === 'PGRST202' || err?.message?.includes('schema cache') || err?.code === '42883') {
+        const [profiles, scopes, departments] = await Promise.all([
+          executeQuery(
+            client.from('manager_profiles').select('*').eq('organization_id', organizationId).order('created_at', { ascending: false }),
+            'Unable to load manager profiles.',
+          ),
+          executeQuery(
+            client.from('manager_scopes').select('*').eq('organization_id', organizationId),
+            'Unable to load manager scopes.',
+          ),
+          executeQuery(
+            client.from('departments').select('*').eq('organization_id', organizationId),
+            'Unable to load departments.',
+          ),
+        ]);
+        const deptMap = new Map(departments.map(d => [d.id, d]));
+        return profiles.map(mp => {
+          const userScopes = scopes.filter(s => s.manager_user_id === mp.user_id && s.department_id);
+          const deptIds = userScopes.map(s => s.department_id as string);
+          const deptNames = deptIds.map(id => deptMap.get(id)?.name || 'Unknown department');
+          const primaryDept = departments.find(d => d.manager_user_id === mp.user_id) ?? null;
+          return {
+            id: mp.id,
+            organization_id: mp.organization_id,
+            user_id: mp.user_id,
+            manager_code: mp.manager_code,
+            full_name: mp.full_name,
+            email: mp.email,
+            phone: mp.phone,
+            status: mp.status,
+            must_change_password: mp.must_change_password,
+            login_last_reset_at: mp.login_last_reset_at,
+            created_at: mp.created_at,
+            updated_at: mp.updated_at,
+            assigned_department_ids: deptIds,
+            assigned_department_names: deptNames,
+            primary_department_id: primaryDept?.id ?? null,
+            primary_department_name: primaryDept?.name ?? null,
+          };
+        });
+      }
+      throw caught;
+    }
   },
 
   async updateManagerStatus(organizationId: string, managerProfileId: string, newStatus: MembershipStatus): Promise<void> {
