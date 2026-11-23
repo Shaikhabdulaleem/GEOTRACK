@@ -18,12 +18,21 @@ insert into public.organization_memberships (organization_id, user_id, role_code
   ('11000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000003', 'employee', 'active'),
   ('21000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'employee', 'active');
 
+insert into public.manager_profiles (
+  organization_id, user_id, manager_code, full_name, status, must_change_password
+) values (
+  '11000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000002', 'MGR-1', 'Manager One', 'active', false
+);
+
 insert into public.branches (id, organization_id, code, name) values
   ('12000000-0000-0000-0000-000000000001', '11000000-0000-0000-0000-000000000001', 'ONE', 'One'),
   ('22000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', 'TWO', 'Two');
 insert into public.departments (id, organization_id, branch_id, code, name) values
   ('13000000-0000-0000-0000-000000000001', '11000000-0000-0000-0000-000000000001', '12000000-0000-0000-0000-000000000001', 'ONE', 'One'),
   ('23000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '22000000-0000-0000-0000-000000000001', 'TWO', 'Two');
+
+insert into public.manager_scopes (organization_id, manager_user_id, department_id, branch_id) values
+  ('11000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000002', '13000000-0000-0000-0000-000000000001', '12000000-0000-0000-0000-000000000001');
 
 insert into public.employee_profiles (
   id, organization_id, user_id, employee_code, iqama_number, full_name,

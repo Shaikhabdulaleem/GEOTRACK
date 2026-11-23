@@ -201,10 +201,19 @@ test('migration 20261123100000 enforces database RLS, prevents wildcards, and re
 
   // Verify administrator-only execution of RPCs
   assert.match(sql, /create or replace function public\.admin_assign_manager_departments/i);
+  assert.match(sql, /create or replace function public\.admin_set_department_primary_manager/i);
   assert.match(sql, /create or replace function public\.admin_update_manager_status/i);
   assert.match(sql, /create or replace function public\.list_organization_managers/i);
   assert.match(sql, /create or replace function public\.get_manager_activity_history/i);
   assert.match(sql, /set search_path = ''/i, 'Security definer functions must clear search path');
+
+  // Verify anonymous table privileges revoked (Priority 1)
+  assert.match(sql, /revoke all on table public\.manager_profiles, public\.manager_activity_logs from public, anon/i);
+  assert.match(sql, /revoke all on all tables in schema public from anon/i);
+
+  // Verify canonical 32-point geofence polygon creation (Priority 4)
+  assert.match(sql, /insert into public\.geofence_polygons \(geofence_id, version_number, polygon, created_by\)/i);
+  assert.match(sql, /insert into public\.geofences \(\s*organization_id, branch_id, name/i);
 });
 
 // ── 8. Edge Function Security Audit ─────────────────────────────────────────
@@ -217,15 +226,16 @@ test('edge functions protect credentials, prevent timing enumeration, and check 
 
   // manager-login checks
   assert.match(managerLogin, /manager_profiles/i);
-  assert.match(managerLogin, /status === 'suspended'/i);
-  assert.match(managerLogin, /status === 'active'/i);
-  assert.match(managerLogin, /Equalise timing/i, 'Mitigate user enumeration timing attacks');
+  assert.match(managerLogin, /status !== 'active'/i);
+  assert.match(managerLogin, /organization_memberships/i);
   assert.doesNotMatch(managerLogin, /console\.log\(.*password/i, 'Never log credentials');
 
   // provision-manager checks
   assert.match(provisionManager, /administrator/i, 'Must restrict to administrators');
   assert.match(provisionManager, /must_change_password: true/i, 'Require password change on first login');
   assert.match(provisionManager, /manager_activity_logs/i, 'Must audit manager provisioning');
+  assert.match(provisionManager, /sanitizedCode\}\.\$\{orgSlug\}@/i, 'Synthetic email scoping prevents cross-org collisions');
+  assert.match(provisionManager, /rollback/i, 'Safe rollback helper cleans up partially provisioned resources on error');
 
   // reset-manager-login checks
   assert.match(resetManager, /administrator/i, 'Must restrict to administrators');

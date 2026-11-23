@@ -59,9 +59,10 @@ Deno.serve(async (request) => {
     return json(request, { error: 'Login service is not configured' }, 503);
   }
 
-  const body = (await request.json().catch(() => null)) as { identifier?: string; password?: string } | null;
+  const body = (await request.json().catch(() => null)) as { identifier?: string; password?: string; organization_id?: string } | null;
   const identifier = body?.identifier?.trim();
   const password = body?.password;
+  const orgId = body?.organization_id?.trim();
 
   if (
     !identifier ||
@@ -76,40 +77,43 @@ Deno.serve(async (request) => {
   const admin = createClient(url, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const anon = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
-  // 1. Resolve manager_code in manager_profiles
-  const { data: managers, error: lookupError } = await admin
+  // 1. Resolve manager_code in manager_profiles within organization if provided
+  let managerQuery = admin
     .from('manager_profiles')
-    .select('id, user_id, manager_code, status')
-    .ilike('manager_code', identifier)
-    .limit(2);
+    .select('id, organization_id, user_id, manager_code, status')
+    .ilike('manager_code', identifier);
+
+  if (orgId) {
+    managerQuery = managerQuery.eq('organization_id', orgId);
+  }
+
+  const { data: managers, error: lookupError } = await managerQuery.limit(2);
 
   let userId: string | null = null;
-  let isSuspended = false;
+  let isManagerAccount = false;
+  let managerRecord: { id: string; organization_id: string; user_id: string | null; status: string } | null = null;
 
   if (!lookupError && managers && managers.length === 1) {
-    if (managers[0].status === 'suspended') {
-      isSuspended = true;
-    } else if (managers[0].status === 'active' && managers[0].user_id) {
-      userId = managers[0].user_id;
-    } else if (managers[0].status !== 'active') {
-      return INVALID(request);
-    }
+    managerRecord = managers[0];
+    userId = managers[0].user_id;
+    isManagerAccount = true;
   }
 
   // 2. Fallback check for employee_profiles if not found in manager_profiles
-  if (!userId && !isSuspended) {
-    const { data: emps } = await admin
+  if (!userId) {
+    let empQuery = admin
       .from('employee_profiles')
-      .select('user_id, employment_status')
-      .or(`employee_code.ilike.${identifier},iqama_number.eq.${identifier}`)
-      .limit(2);
+      .select('user_id, employment_status, organization_id')
+      .or(`employee_code.ilike.${identifier},iqama_number.eq.${identifier}`);
+
+    if (orgId) {
+      empQuery = empQuery.eq('organization_id', orgId);
+    }
+
+    const { data: emps } = await empQuery.limit(2);
     if (emps && emps.length === 1 && emps[0].user_id && emps[0].employment_status === 'active') {
       userId = emps[0].user_id;
     }
-  }
-
-  if (isSuspended) {
-    return SUSPENDED(request);
   }
 
   let email: string | null = null;
@@ -124,9 +128,29 @@ Deno.serve(async (request) => {
     return INVALID(request);
   }
 
+  // 3. Authenticate credentials BEFORE checking status to prevent account enumeration
   const { data: signIn, error: signInError } = await anon.auth.signInWithPassword({ email, password });
   if (signInError || !signIn.session) {
     return INVALID(request);
+  }
+
+  // 4. Verify account status and active organization membership within correct org
+  if (isManagerAccount && managerRecord) {
+    if (managerRecord.status !== 'active') {
+      return SUSPENDED(request);
+    }
+
+    const { data: membership } = await admin
+      .from('organization_memberships')
+      .select('status')
+      .eq('organization_id', managerRecord.organization_id)
+      .eq('user_id', managerRecord.user_id)
+      .eq('role_code', 'manager')
+      .maybeSingle();
+
+    if (!membership || membership.status !== 'active') {
+      return SUSPENDED(request);
+    }
   }
 
   const s = signIn.session;

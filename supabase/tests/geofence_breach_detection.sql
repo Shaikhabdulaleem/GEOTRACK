@@ -36,6 +36,10 @@ begin
   values (v_org, 'BR', 'Branch') returning id into v_branch;
   insert into public.departments (organization_id, branch_id, code, name)
   values (v_org, v_branch, 'DP', 'Department') returning id into v_department;
+  insert into public.manager_profiles (organization_id, user_id, manager_code, full_name, status, must_change_password)
+  values (v_org, v_manager, 'MGR-BREACH', 'Breach Manager', 'active', false);
+  insert into public.manager_scopes (organization_id, manager_user_id, department_id, branch_id)
+  values (v_org, v_manager, v_department, v_branch);
   insert into public.employee_profiles (
     id, organization_id, user_id, employee_code, iqama_number, full_name,
     branch_id, department_id, manager_user_id

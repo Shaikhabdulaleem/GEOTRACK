@@ -455,38 +455,36 @@ begin
   end if;
 
   insert into public.branches (
-    organization_id, code, name, timezone, address, latitude, longitude,
-    location_point, status
+    organization_id, code, name, timezone, address, location_point,
+    latitude, longitude, created_by
   ) values (
     p_organization_id, upper(btrim(p_code)), btrim(p_name), coalesce(nullif(btrim(p_timezone), ''), 'UTC'),
-    nullif(btrim(p_address), ''), p_latitude, p_longitude,
+    nullif(btrim(p_address), ''),
     case when p_latitude is not null and p_longitude is not null
          then jsonb_build_object('type', 'Point', 'coordinates', jsonb_build_array(p_longitude, p_latitude))
          else null end,
-    'active'
+    p_latitude, p_longitude, (select auth.uid())
   ) returning * into v_site;
 
   if p_create_geofence then
-    v_points := jsonb_build_array(
-      jsonb_build_array(round((p_longitude - 0.00035)::numeric, 6), round((p_latitude - 0.00035)::numeric, 6)),
-      jsonb_build_array(round((p_longitude + 0.00035)::numeric, 6), round((p_latitude - 0.00035)::numeric, 6)),
-      jsonb_build_array(round((p_longitude + 0.00035)::numeric, 6), round((p_latitude + 0.00035)::numeric, 6)),
-      jsonb_build_array(round((p_longitude - 0.00035)::numeric, 6), round((p_latitude + 0.00035)::numeric, 6)),
-      jsonb_build_array(round((p_longitude - 0.00035)::numeric, 6), round((p_latitude - 0.00035)::numeric, 6))
-    );
-
     insert into public.geofences (
-      organization_id, branch_id, name, description, geofence_type,
-      validation_mode, is_active, status
+      organization_id, branch_id, name, status, required_accuracy_meters,
+      latitude, longitude, created_by
     ) values (
-      p_organization_id, v_site.id, v_site.name || ' Geofence',
-      'Initial geofence for ' || v_site.name, 'site', 'strict', true, 'active'
+      p_organization_id, v_site.id, v_site.name || ' geofence', 'active',
+      greatest(5, p_geofence_radius_meters), p_latitude, p_longitude, (select auth.uid())
     ) returning id into v_geofence_id;
 
-    insert into public.geofence_polygons (
-      organization_id, geofence_id, polygon_type, coordinates
-    ) values (
-      p_organization_id, v_geofence_id, 'polygon', v_points
+    select jsonb_agg(jsonb_build_array(
+      p_longitude + (p_geofence_radius_meters / (111320.0 * cos(radians(p_latitude)))) * sin(radians(i * 360.0 / 32.0)),
+      p_latitude + (p_geofence_radius_meters / 110540.0) * cos(radians(i * 360.0 / 32.0))
+    ) order by i) into v_points from generate_series(0, 32) i;
+
+    insert into public.geofence_polygons (geofence_id, version_number, polygon, created_by)
+    values (
+      v_geofence_id, 1,
+      jsonb_build_object('type', 'MultiPolygon', 'coordinates', jsonb_build_array(jsonb_build_array(v_points))),
+      (select auth.uid())
     );
   end if;
 
@@ -563,8 +561,12 @@ using (
 );
 
 -- Table grants for authenticated role (enforced via RLS policies above)
+-- Explicitly revoke all privileges from anon to enforce zero-privilege invariant
+revoke all on table public.manager_profiles, public.manager_activity_logs from public, anon;
 grant select, insert, update, delete on public.manager_profiles to authenticated;
 grant select, insert on public.manager_activity_logs to authenticated;
+revoke all on all tables in schema public from anon;
+alter default privileges in schema public revoke all on tables from anon;
 
 -- ----------------------------------------------------------------------------
 -- 10. Administrator RPCs for Manager Lifecycle and Department Assignment
@@ -586,6 +588,7 @@ declare
   v_caller_id uuid := (select auth.uid());
   v_dept_id uuid;
   v_profile_id uuid;
+  v_is_active_manager boolean;
 begin
   if not private.has_org_role(p_organization_id, array['administrator']) then
     raise exception 'Administrator permission required' using errcode = '42501';
@@ -594,6 +597,49 @@ begin
   select id into v_profile_id
   from public.manager_profiles
   where organization_id = p_organization_id and user_id = p_manager_user_id;
+
+  if v_profile_id is null then
+    raise exception 'Manager profile not found' using errcode = 'P0002';
+  end if;
+
+  select exists (
+    select 1
+    from public.organization_memberships
+    where organization_id = p_organization_id
+      and user_id = p_manager_user_id
+      and role_code = 'manager'
+      and status = 'active'
+  ) into v_is_active_manager;
+
+  if not v_is_active_manager then
+    raise exception 'Target user is not an active manager in this organization' using errcode = '42501';
+  end if;
+
+  -- Verify all department IDs belong to this organization
+  if p_department_ids is not null and cardinality(p_department_ids) > 0 then
+    if exists (
+      select 1
+      from unnest(p_department_ids) as did
+      left join public.departments d on d.id = did and d.organization_id = p_organization_id
+      where d.id is null
+    ) then
+      raise exception 'One or more departments do not belong to this organization' using errcode = '22023';
+    end if;
+  end if;
+
+  -- If primary department specified, verify it belongs to this org and is in p_department_ids
+  if p_primary_department_id is not null then
+    if not exists (
+      select 1 from public.departments
+      where id = p_primary_department_id and organization_id = p_organization_id
+    ) then
+      raise exception 'Primary department not found in this organization' using errcode = '22023';
+    end if;
+
+    if p_department_ids is null or not (p_primary_department_id = any(p_department_ids)) then
+      p_department_ids := array_append(coalesce(p_department_ids, array[]::uuid[]), p_primary_department_id);
+    end if;
+  end if;
 
   -- 1. Remove old department scopes for this manager
   delete from public.manager_scopes
@@ -612,7 +658,22 @@ begin
     end loop;
   end if;
 
-  -- 3. If primary department specified, link to departments.manager_user_id
+  -- 3. Clear stale primary-manager references:
+  -- Any department where this manager was previously assigned as primary manager,
+  -- but which is NO LONGER in p_department_ids (or is not the designated primary),
+  -- must have manager_user_id cleared so the old manager loses primary access immediately.
+  update public.departments
+  set manager_user_id = null,
+      updated_at = clock_timestamp()
+  where organization_id = p_organization_id
+    and manager_user_id = p_manager_user_id
+    and (
+      p_department_ids is null
+      or id <> all(p_department_ids)
+      or (p_primary_department_id is not null and id <> p_primary_department_id)
+    );
+
+  -- 4. If primary department specified, link to departments.manager_user_id
   if p_primary_department_id is not null then
     update public.departments
     set manager_user_id = p_manager_user_id,
@@ -620,20 +681,100 @@ begin
     where id = p_primary_department_id and organization_id = p_organization_id;
   end if;
 
-  -- 4. Audit activity
-  if v_profile_id is not null then
-    insert into public.manager_activity_logs (
-      organization_id, manager_profile_id, actor_user_id, action, details
-    ) values (
-      p_organization_id, v_profile_id, v_caller_id, 'departments_assigned',
-      jsonb_build_object('department_ids', p_department_ids, 'primary_department_id', p_primary_department_id)
-    );
-  end if;
+  -- 5. Audit activity
+  insert into public.manager_activity_logs (
+    organization_id, manager_profile_id, actor_user_id, action, details
+  ) values (
+    p_organization_id, v_profile_id, v_caller_id, 'departments_assigned',
+    jsonb_build_object('department_ids', p_department_ids, 'primary_department_id', p_primary_department_id)
+  );
 end;
 $$;
 
 revoke all on function public.admin_assign_manager_departments(uuid, uuid, uuid[], uuid) from public, anon;
 grant execute on function public.admin_assign_manager_departments(uuid, uuid, uuid[], uuid) to authenticated;
+
+-- A2. Set or update a single department's primary manager without wiping other assigned department scopes
+create or replace function public.admin_set_department_primary_manager(
+  p_organization_id uuid,
+  p_department_id uuid,
+  p_manager_user_id uuid default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_caller_id uuid := (select auth.uid());
+  v_old_manager_user_id uuid;
+  v_branch_id uuid;
+  v_profile_id uuid;
+begin
+  if not private.has_org_role(p_organization_id, array['administrator']) then
+    raise exception 'Administrator permission required' using errcode = '42501';
+  end if;
+
+  select manager_user_id, branch_id into v_old_manager_user_id, v_branch_id
+  from public.departments
+  where id = p_department_id and organization_id = p_organization_id;
+
+  if not found then
+    raise exception 'Department not found' using errcode = 'P0002';
+  end if;
+
+  -- If assigning a manager, verify they are an active manager in this organization
+  if p_manager_user_id is not null then
+    if not exists (
+      select 1 from public.organization_memberships
+      where organization_id = p_organization_id
+        and user_id = p_manager_user_id
+        and role_code = 'manager'
+        and status = 'active'
+    ) then
+      raise exception 'Target user is not an active manager in this organization' using errcode = '42501';
+    end if;
+
+    select id into v_profile_id
+    from public.manager_profiles
+    where organization_id = p_organization_id and user_id = p_manager_user_id;
+  end if;
+
+  -- 1. If old manager was different, clear their scope for this department
+  if v_old_manager_user_id is not null and v_old_manager_user_id is distinct from p_manager_user_id then
+    delete from public.manager_scopes
+    where organization_id = p_organization_id
+      and manager_user_id = v_old_manager_user_id
+      and department_id = p_department_id;
+  end if;
+
+  -- 2. Update department primary manager
+  update public.departments
+  set manager_user_id = p_manager_user_id,
+      updated_at = clock_timestamp()
+  where id = p_department_id and organization_id = p_organization_id;
+
+  -- 3. If new manager assigned, ensure this department is in their manager_scopes
+  -- without modifying any of their other department scopes!
+  if p_manager_user_id is not null then
+    insert into public.manager_scopes (organization_id, manager_user_id, department_id, branch_id)
+    values (p_organization_id, p_manager_user_id, p_department_id, v_branch_id)
+    on conflict do nothing;
+
+    if v_profile_id is not null then
+      insert into public.manager_activity_logs (
+        organization_id, manager_profile_id, actor_user_id, action, details
+      ) values (
+        p_organization_id, v_profile_id, v_caller_id, 'primary_department_assigned',
+        jsonb_build_object('department_id', p_department_id)
+      );
+    end if;
+  end if;
+end;
+$$;
+
+revoke all on function public.admin_set_department_primary_manager(uuid, uuid, uuid) from public, anon;
+grant execute on function public.admin_set_department_primary_manager(uuid, uuid, uuid) to authenticated;
 
 -- B. Update Manager Status (Active, Suspended, Removed)
 create or replace function public.admin_update_manager_status(

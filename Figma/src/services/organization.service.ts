@@ -180,6 +180,39 @@ export const organizationService = {
     }
   },
 
+  async setDepartmentPrimaryManager(
+    organizationId: string,
+    departmentId: string,
+    managerUserId: string | null,
+  ): Promise<void> {
+    const client = getSupabaseClient();
+    try {
+      await executeQuery(
+        client.rpc('admin_set_department_primary_manager', {
+          p_organization_id: organizationId,
+          p_department_id: departmentId,
+          p_manager_user_id: managerUserId || null,
+        }),
+        'Unable to set the department primary manager.',
+      );
+    } catch {
+      // Direct fallback
+      const { data: dept } = await client.from('departments').select('manager_user_id, branch_id').eq('id', departmentId).maybeSingle();
+      if (dept?.manager_user_id && dept.manager_user_id !== managerUserId) {
+        await client.from('manager_scopes').delete().eq('organization_id', organizationId).eq('manager_user_id', dept.manager_user_id).eq('department_id', departmentId);
+      }
+      await client.from('departments').update({ manager_user_id: managerUserId || null }).eq('id', departmentId);
+      if (managerUserId && dept?.branch_id) {
+        await client.from('manager_scopes').insert({
+          organization_id: organizationId,
+          manager_user_id: managerUserId,
+          department_id: departmentId,
+          branch_id: dept.branch_id,
+        });
+      }
+    }
+  },
+
   async getManagerActivityHistory(organizationId: string, managerProfileId: string): Promise<ManagerActivityHistoryItem[]> {
     const client = getSupabaseClient();
     try {

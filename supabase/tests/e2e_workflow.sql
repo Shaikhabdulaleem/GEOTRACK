@@ -41,6 +41,9 @@ BEGIN
     (v_org, v_empC, 'employee', 'active'),
     (v_org, v_empD, 'employee', 'active');
 
+  INSERT INTO public.manager_profiles (organization_id, user_id, manager_code, full_name, status, must_change_password)
+  VALUES (v_org, v_manager, 'MGR-E2E', 'E2E Manager', 'active', false);
+
   INSERT INTO public.branches (organization_id, code, name, timezone)
   VALUES (v_org, 'B1', 'Test Branch', 'UTC')
   RETURNING id INTO v_branch;

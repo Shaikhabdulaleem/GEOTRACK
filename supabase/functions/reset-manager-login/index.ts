@@ -124,7 +124,7 @@ Deno.serve(async (request) => {
   }
 
   // 4. Update manager_profiles must_change_password flag
-  await admin
+  const { error: profileUpdateErr } = await admin
     .from('manager_profiles')
     .update({
       must_change_password: true,
@@ -132,6 +132,10 @@ Deno.serve(async (request) => {
       updated_at: new Date().toISOString(),
     })
     .eq('id', manager.id);
+
+  if (profileUpdateErr) {
+    return json(request, { error: `Unable to update manager profile: ${profileUpdateErr.message}` }, 500);
+  }
 
   // 5. Log activity in manager_activity_logs
   await admin.from('manager_activity_logs').insert({

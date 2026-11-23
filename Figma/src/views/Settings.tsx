@@ -74,16 +74,15 @@ export default function Settings() {
     }} />}
     {siteForm && <SiteDialog initial={siteForm.data} editing={siteForm.row} close={() => setSiteForm(null)} save={async value => { if (siteForm.row) await organizationService.updateSite(siteForm.row.id, { name: value.name, code: value.code, timezone: value.timezone, address: value.address || null, latitude: value.latitude, longitude: value.longitude, location_point: value.latitude == null ? null : { type: 'Point', coordinates: [value.longitude!, value.latitude] } }); else await organizationService.createSite(value); setSiteForm(null); await load(); }} />}
     {departmentForm && <DepartmentDialog initial={departmentForm} sites={sites.filter(row => row.status === 'active')} managers={managers.filter(m => m.status === 'active')} close={() => setDepartmentForm(null)} save={async value => {
+      let deptId = value.id;
       if (value.id) {
         await organizationService.updateDepartment(value.id, { branch_id: value.branch_id, name: value.name, code: value.code, manager_user_id: value.manager_user_id || null });
-        if (value.manager_user_id) {
-          await organizationService.assignManagerDepartments(org, value.manager_user_id, [value.id], value.id);
-        }
       } else {
         const created = await organizationService.createDepartment({ organization_id: org, branch_id: value.branch_id!, name: value.name!, code: value.code!, manager_user_id: value.manager_user_id || null });
-        if (value.manager_user_id) {
-          await organizationService.assignManagerDepartments(org, value.manager_user_id, [created.id], created.id);
-        }
+        deptId = created.id;
+      }
+      if (deptId && value.manager_user_id !== undefined) {
+        await organizationService.setDepartmentPrimaryManager(org, deptId, value.manager_user_id || null);
       }
       setDepartmentForm(null); await load();
     }} />}

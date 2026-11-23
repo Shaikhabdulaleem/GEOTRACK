@@ -1120,6 +1120,14 @@ export interface Database {
         };
         Returns: void;
       };
+      admin_set_department_primary_manager: {
+        Args: {
+          p_organization_id: string;
+          p_department_id: string;
+          p_manager_user_id?: string | null;
+        };
+        Returns: void;
+      };
       get_manager_activity_history: {
         Args: {
           p_organization_id: string;

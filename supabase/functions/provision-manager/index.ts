@@ -135,7 +135,9 @@ Deno.serve(async (request) => {
     return json(request, { error: `Manager ID '${rawCode}' is already in use in this organization` }, 409);
   }
 
-  const email = rawEmail || `${rawCode.toLowerCase().replace(/[^a-z0-9]/g, '')}@${SYNTHETIC_EMAIL_DOMAIN}`;
+  const sanitizedCode = rawCode.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const orgSlug = orgId.replace(/[^a-z0-9]/gi, '').slice(0, 8).toLowerCase();
+  const email = rawEmail || `${sanitizedCode}.${orgSlug}@${SYNTHETIC_EMAIL_DOMAIN}`;
   const temporaryPassword = generateTemporaryPassword();
 
   // 3. Create auth user in Supabase Auth
@@ -161,6 +163,31 @@ Deno.serve(async (request) => {
   }
 
   const newUserId = createdAuth.user.id;
+
+  const rollback = async () => {
+    if (primaryDeptId) {
+      await admin
+        .from('departments')
+        .update({ manager_user_id: null, updated_at: new Date().toISOString() })
+        .eq('id', primaryDeptId)
+        .eq('manager_user_id', newUserId)
+        .catch(() => undefined);
+    }
+    await admin
+      .from('manager_scopes')
+      .delete()
+      .eq('organization_id', orgId)
+      .eq('manager_user_id', newUserId)
+      .catch(() => undefined);
+    await admin
+      .from('organization_memberships')
+      .delete()
+      .eq('organization_id', orgId)
+      .eq('user_id', newUserId)
+      .catch(() => undefined);
+    await admin.from('manager_profiles').delete().eq('organization_id', orgId).eq('user_id', newUserId).catch(() => undefined);
+    await admin.auth.admin.deleteUser(newUserId).catch(() => undefined);
+  };
 
   // 4. Create manager_profiles record
   const { data: profile, error: profileError } = await admin
@@ -203,8 +230,7 @@ Deno.serve(async (request) => {
 
   if (memberError) {
     console.error('provision-manager: memberError:', memberError);
-    await admin.from('manager_profiles').delete().eq('id', profile.id).catch(() => undefined);
-    await admin.auth.admin.deleteUser(newUserId).catch(() => undefined);
+    await rollback();
     return json(
       request,
       { error: memberError?.message ? `Unable to assign manager membership role: ${memberError.message}` : 'Unable to assign manager membership role' },
@@ -214,34 +240,56 @@ Deno.serve(async (request) => {
 
   // 6. Assign department scopes in manager_scopes
   if (deptIds.length > 0) {
-    const { data: deptRows } = await admin
+    const { data: deptRows, error: deptFetchErr } = await admin
       .from('departments')
       .select('id, branch_id')
       .eq('organization_id', orgId)
       .in('id', deptIds);
 
-    if (deptRows && deptRows.length > 0) {
-      const scopeRows = deptRows.map((d) => ({
-        organization_id: orgId,
-        manager_user_id: newUserId,
-        department_id: d.id,
-        branch_id: d.branch_id,
-      }));
-      await admin.from('manager_scopes').insert(scopeRows);
+    if (deptFetchErr || !deptRows || deptRows.length !== deptIds.length) {
+      await rollback();
+      return json(request, { error: 'One or more assigned departments do not exist in this organization' }, 400);
+    }
+
+    const scopeRows = deptRows.map((d) => ({
+      organization_id: orgId,
+      manager_user_id: newUserId,
+      department_id: d.id,
+      branch_id: d.branch_id,
+    }));
+    const { error: scopeErr } = await admin.from('manager_scopes').insert(scopeRows);
+    if (scopeErr) {
+      console.error('provision-manager: scopeErr:', scopeErr);
+      await rollback();
+      return json(
+        request,
+        { error: `Unable to assign manager department scopes: ${scopeErr.message}` },
+        500,
+      );
     }
   }
 
   // 7. If primary department specified, set manager_user_id on department
   if (primaryDeptId) {
-    await admin
+    const { error: primaryErr } = await admin
       .from('departments')
       .update({ manager_user_id: newUserId, updated_at: new Date().toISOString() })
       .eq('id', primaryDeptId)
       .eq('organization_id', orgId);
+
+    if (primaryErr) {
+      console.error('provision-manager: primaryErr:', primaryErr);
+      await rollback();
+      return json(
+        request,
+        { error: `Unable to set primary department: ${primaryErr.message}` },
+        500,
+      );
+    }
   }
 
   // 8. Log creation in manager_activity_logs
-  await admin.from('manager_activity_logs').insert({
+  const { error: logErr } = await admin.from('manager_activity_logs').insert({
     organization_id: orgId,
     manager_profile_id: profile.id,
     actor_user_id: caller.user.id,
@@ -253,6 +301,16 @@ Deno.serve(async (request) => {
       primary_department_id: primaryDeptId ?? null,
     },
   });
+
+  if (logErr) {
+    console.error('provision-manager: logErr:', logErr);
+    await rollback();
+    return json(
+      request,
+      { error: `Unable to record manager audit log: ${logErr.message}` },
+      500,
+    );
+  }
 
   return json(request, {
     manager_id: profile.id,

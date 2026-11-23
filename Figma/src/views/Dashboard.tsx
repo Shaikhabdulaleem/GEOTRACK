@@ -350,6 +350,13 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const [managers, setManagers] = useState<Array<{id: string, name: string}>>([]);
   const [employeeProfiles, setEmployeeProfiles] = useState<Array<any>>([]);
 
+  // Auto-clear stale department filter when manager assignments change
+  useEffect(() => {
+    if (isManager && filterDeptId && !assignedDepartmentIds.includes(filterDeptId)) {
+      setFilterDeptId('');
+    }
+  }, [isManager, filterDeptId, assignedDepartmentIds]);
+
   // Metrics Data
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -435,14 +442,18 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
       const { dashboardService } = await import('../services/dashboard.service');
       const { deviceService } = await import('../services/device.service');
 
+      const effectiveDeptId = (isManager && filterDeptId && !assignedDepartmentIds.includes(filterDeptId))
+        ? ''
+        : filterDeptId;
+
       const scopedDeptIds = isManager
-        ? (filterDeptId ? [filterDeptId] : (assignedDepartmentIds.length > 0 ? assignedDepartmentIds : ['00000000-0000-0000-0000-000000000000']))
-        : (filterDeptId ? [filterDeptId] : undefined);
+        ? (effectiveDeptId ? [effectiveDeptId] : (assignedDepartmentIds.length > 0 ? assignedDepartmentIds : ['00000000-0000-0000-0000-000000000000']))
+        : (effectiveDeptId ? [effectiveDeptId] : undefined);
 
       const filters = {
         date: filterDate,
         branchId: filterBranchId || undefined,
-        departmentId: filterDeptId || undefined,
+        departmentId: effectiveDeptId || undefined,
         departmentIds: scopedDeptIds,
         shiftId: filterShiftId || undefined,
         managerId: filterManagerId || undefined,
