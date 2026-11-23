@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AlertCircle, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
 import { authService } from '../../services/auth.service';
@@ -11,6 +12,7 @@ import { getErrorMessage } from '../../lib/errors';
  * complete_password_change and refresh authorization so the gate releases.
  */
 export default function ForcePasswordChange() {
+  const navigate = useNavigate();
   const { refreshAuthorization, signOut } = useAuth();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -36,6 +38,7 @@ export default function ForcePasswordChange() {
       await authService.completePasswordChange();
       // Releases this gate by reloading the employee profile (flag now false).
       await refreshAuthorization();
+      navigate('/', { replace: true });
     } catch (caught) {
       setError(getErrorMessage(caught));
     } finally {
