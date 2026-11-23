@@ -45,8 +45,8 @@ export const identityService = {
         .maybeSingle();
 
       if (error) {
-        // Gracefully handle unapplied migration in schema cache
-        if (error.code === '42P01' || error.message?.includes('schema cache')) {
+        // Gracefully handle unapplied migration or missing permissions in schema cache
+        if (error.code === '42P01' || error.code === '42501' || error.message?.includes('schema cache')) {
           return null;
         }
         throw toAppError(error, 'Unable to load the manager profile.');
@@ -54,7 +54,7 @@ export const identityService = {
       return data;
     } catch (caught: unknown) {
       const err = caught as { code?: string; message?: string };
-      if (err?.code === '42P01' || err?.message?.includes('schema cache')) {
+      if (err?.code === '42P01' || err?.code === '42501' || err?.message?.includes('schema cache')) {
         return null;
       }
       throw caught;
@@ -70,8 +70,8 @@ export const identityService = {
         .eq('organization_id', organizationId);
 
       if (error) {
-        // Gracefully handle unapplied migration in schema cache
-        if (error.code === '42P01' || error.message?.includes('schema cache')) {
+        // Gracefully handle unapplied migration or missing permissions in schema cache
+        if (error.code === '42P01' || error.code === '42501' || error.message?.includes('schema cache')) {
           return [];
         }
         throw toAppError(error, 'Unable to load manager scopes.');
@@ -79,7 +79,7 @@ export const identityService = {
       return data ?? [];
     } catch (caught: unknown) {
       const err = caught as { code?: string; message?: string };
-      if (err?.code === '42P01' || err?.message?.includes('schema cache')) {
+      if (err?.code === '42P01' || err?.code === '42501' || err?.message?.includes('schema cache')) {
         return [];
       }
       throw caught;

@@ -562,6 +562,10 @@ using (
   or manager_user_id = (select auth.uid())
 );
 
+-- Table grants for authenticated role (enforced via RLS policies above)
+grant select, insert, update, delete on public.manager_profiles to authenticated;
+grant select, insert on public.manager_activity_logs to authenticated;
+
 -- ----------------------------------------------------------------------------
 -- 10. Administrator RPCs for Manager Lifecycle and Department Assignment
 -- ----------------------------------------------------------------------------
