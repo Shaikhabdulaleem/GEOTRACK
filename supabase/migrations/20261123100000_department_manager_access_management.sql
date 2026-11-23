@@ -727,21 +727,30 @@ begin
       array_agg(distinct d.name) filter (where d.name is not null),
       array[]::text[]
     ) as assigned_department_names,
-    p_dept.id as primary_department_id,
-    p_dept.name as primary_department_name
+    (
+      select d_prim.id
+      from public.departments d_prim
+      where d_prim.organization_id = mp.organization_id
+        and d_prim.manager_user_id = mp.user_id
+      limit 1
+    ) as primary_department_id,
+    (
+      select d_prim.name
+      from public.departments d_prim
+      where d_prim.organization_id = mp.organization_id
+        and d_prim.manager_user_id = mp.user_id
+      limit 1
+    ) as primary_department_name
   from public.manager_profiles mp
   left join public.manager_scopes s
     on s.organization_id = mp.organization_id
    and s.manager_user_id = mp.user_id
   left join public.departments d
     on d.id = s.department_id
-  left join public.departments p_dept
-    on p_dept.organization_id = mp.organization_id
-   and p_dept.manager_user_id = mp.user_id
   where mp.organization_id = p_organization_id
   group by mp.id, mp.organization_id, mp.user_id, mp.manager_code, mp.full_name,
            mp.email, mp.phone, mp.status, mp.must_change_password, mp.login_last_reset_at,
-           mp.created_at, mp.updated_at, p_dept.id, p_dept.name
+           mp.created_at, mp.updated_at
   order by mp.created_at desc;
 end;
 $$;
