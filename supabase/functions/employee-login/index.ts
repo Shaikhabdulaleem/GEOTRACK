@@ -37,7 +37,7 @@ Deno.serve(async (request) => {
   // also makes the identifier safe to place in a PostgREST filter below (no
   // wildcards, commas, or parentheses that could alter the query).
   if (!identifier || !password || identifier.length > 64 || password.length > 256 ||
-      !/^[A-Za-z0-9]+$/.test(identifier)) {
+      !/^[A-Za-z0-9_-]+$/.test(identifier)) {
     return INVALID();
   }
 
@@ -56,6 +56,19 @@ Deno.serve(async (request) => {
   if (!lookupError && matches && matches.length === 1 && matches[0].user_id) {
     const { data: userResult } = await admin.auth.admin.getUserById(matches[0].user_id as string);
     email = userResult?.user?.email ?? null;
+  }
+
+  // Fallback check in manager_profiles if not matched to an employee
+  if (!email) {
+    const { data: managerMatches } = await admin
+      .from('manager_profiles')
+      .select('user_id, status')
+      .ilike('manager_code', identifier)
+      .limit(2);
+    if (managerMatches && managerMatches.length === 1 && managerMatches[0].status === 'active' && managerMatches[0].user_id) {
+      const { data: userResult } = await admin.auth.admin.getUserById(managerMatches[0].user_id as string);
+      email = userResult?.user?.email ?? null;
+    }
   }
 
   if (!email) {

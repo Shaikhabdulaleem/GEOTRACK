@@ -6,6 +6,7 @@ export interface ReportFilters {
   toDate: string;
   branchId?: string;
   departmentId?: string;
+  departmentIds?: string[];
   shiftId?: string;
   managerId?: string;
   employeeId?: string;
@@ -63,7 +64,11 @@ export const reportService = {
       .eq('organization_id', organizationId);
       
     if (filters.branchId) empQuery = empQuery.eq('branch_id', filters.branchId);
-    if (filters.departmentId) empQuery = empQuery.eq('department_id', filters.departmentId);
+    if (filters.departmentId) {
+      empQuery = empQuery.eq('department_id', filters.departmentId);
+    } else if (filters.departmentIds && filters.departmentIds.length > 0) {
+      empQuery = empQuery.in('department_id', filters.departmentIds);
+    }
     if (filters.managerId) empQuery = empQuery.eq('manager_user_id', filters.managerId);
     if (filters.employeeId) empQuery = empQuery.eq('id', filters.employeeId);
     

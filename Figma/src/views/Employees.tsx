@@ -73,10 +73,35 @@ function EmployeeModal({ employee, lookups, organizationId, onClose, onSaved }: 
 }
 
 export default function Employees() {
-  const { activeMembership, hasAnyRole } = useAuth(); const organizationId = activeMembership?.organization_id; const canEdit = hasAnyRole(['administrator', 'manager']); const canCreate = hasAnyRole(['administrator']); const canManageLogins = hasAnyRole(['administrator', 'manager']);
+  const { activeMembership, hasAnyRole, roles, assignedDepartmentIds } = useAuth();
+  const organizationId = activeMembership?.organization_id;
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
+  const canEdit = hasAnyRole(['administrator', 'manager']);
+  const canCreate = hasAnyRole(['administrator']);
+  const canManageLogins = hasAnyRole(['administrator', 'manager']);
   const [rows, setRows] = useState<EmployeeProfileRow[]>([]); const [lookups, setLookups] = useState<EmployeeLookups>({ branches: [], departments: [], shifts: [], managers: [] }); const [search, setSearch] = useState(''); const [status, setStatus] = useState<EmploymentStatus | ''>(''); const [branchId, setBranchId] = useState(''); const [departmentId, setDepartmentId] = useState(''); const [sortBy, setSortBy] = useState<'full_name' | 'employee_code' | 'created_at' | 'employment_status'>('full_name'); const [ascending, setAscending] = useState(true); const [page, setPage] = useState(1); const [count, setCount] = useState(0); const [loading, setLoading] = useState(false); const [error, setError] = useState(''); const [selected, setSelected] = useState<EmployeeProfileRow | null>(null); const [editing, setEditing] = useState<EmployeeProfileRow | null | undefined>(undefined); const pageSize = 10;
   const [provisioning, setProvisioning] = useState(false); const [credentials, setCredentials] = useState<EmployeeAccountCredentials | null>(null); const [copied, setCopied] = useState(false);
-  const load = useCallback(async () => { if (!organizationId) return; setLoading(true); setError(''); try { const [result, options] = await Promise.all([employeeService.list({ organizationId, search, status: status || undefined, branchId: branchId || undefined, departmentId: departmentId || undefined, sortBy, sortAscending: ascending, page, pageSize }), employeeService.getLookups(organizationId)]); setRows(result.rows); setCount(result.count); setLookups(options); } catch (caught) { setError(getErrorMessage(caught)); } finally { setLoading(false); } }, [organizationId, search, status, branchId, departmentId, sortBy, ascending, page]);
+  const load = useCallback(async () => {
+    if (!organizationId) return;
+    setLoading(true);
+    setError('');
+    try {
+      const [result, options] = await Promise.all([
+        employeeService.list({ organizationId, search, status: status || undefined, branchId: branchId || undefined, departmentId: departmentId || undefined, sortBy, sortAscending: ascending, page, pageSize }),
+        employeeService.getLookups(organizationId)
+      ]);
+      setRows(result.rows);
+      setCount(result.count);
+      const filteredDepartments = isManager
+        ? options.departments.filter(d => assignedDepartmentIds.includes(d.id))
+        : options.departments;
+      setLookups({ ...options, departments: filteredDepartments });
+    } catch (caught) {
+      setError(getErrorMessage(caught));
+    } finally {
+      setLoading(false);
+    }
+  }, [organizationId, search, status, branchId, departmentId, sortBy, ascending, page, isManager, assignedDepartmentIds]);
   useEffect(() => { void load(); }, [load]); useEffect(() => { setPage(1); }, [search, status, branchId, departmentId]);
   const branchName = useMemo(() => new Map(lookups.branches.map(item => [item.id, item.name])), [lookups.branches]); const departmentName = useMemo(() => new Map(lookups.departments.map(item => [item.id, item.name])), [lookups.departments]); const totalPages = Math.max(1, Math.ceil(count / pageSize));
   const [statusTarget, setStatusTarget] = useState<{ employee: EmployeeProfileRow; nextStatus: EmploymentStatus; effectiveDate: string } | null>(null);

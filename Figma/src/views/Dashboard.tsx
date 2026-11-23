@@ -330,9 +330,10 @@ function UnavailableModuleCard({
 }
 
 export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
-  const { activeMembership } = useAuth();
+  const { activeMembership, roles, assignedDepartmentIds } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
   const supabaseReady = isSupabaseConfigured();
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
 
   // Filters
   const [filterDate, setFilterDate] = useState(todayInTimezone('Asia/Riyadh'));
@@ -434,10 +435,15 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
       const { dashboardService } = await import('../services/dashboard.service');
       const { deviceService } = await import('../services/device.service');
 
+      const scopedDeptIds = isManager
+        ? (filterDeptId ? [filterDeptId] : (assignedDepartmentIds.length > 0 ? assignedDepartmentIds : ['00000000-0000-0000-0000-000000000000']))
+        : (filterDeptId ? [filterDeptId] : undefined);
+
       const filters = {
         date: filterDate,
         branchId: filterBranchId || undefined,
         departmentId: filterDeptId || undefined,
+        departmentIds: scopedDeptIds,
         shiftId: filterShiftId || undefined,
         managerId: filterManagerId || undefined,
         employeeId: filterEmployeeId || undefined
@@ -603,6 +609,10 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const productivityTrend = supabaseReady && metrics ? metrics.productivityTrend : [];
   const alertCounts = { missing: missing, missingOut: 0, otApproval: pendingApprovals, correction: 0, geofence: geofenceViolations };
 
+  const visibleDepartments = isManager
+    ? departments.filter(d => assignedDepartmentIds.includes(d.id))
+    : departments;
+
   return (
     <div className="space-y-5">
       {/* Header & Filter Bar */}
@@ -614,9 +624,21 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
               Real-time operational metrics and filters
             </p>
           </div>
-          <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)' }}>
-            <span className="w-1.5 h-1.5 rounded-full animate-pulse-slow" style={{ background: '#10b981' }}></span>
-            Live Data
+          <div className="flex items-center gap-2">
+            {isManager ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs" style={{ background: 'rgba(139,92,246,0.12)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.25)' }}>
+                <ShieldAlert size={12} style={{ color: '#a78bfa' }} />
+                <span>Department Manager View ({visibleDepartments.map(d => d.name).join(', ') || 'Assigned Departments'})</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs" style={{ background: 'rgba(59,130,246,0.1)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.2)' }}>
+                <span>Administrator View (All Departments)</span>
+              </div>
+            )}
+            <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.2)' }}>
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse-slow" style={{ background: '#10b981' }}></span>
+              Live Data
+            </div>
           </div>
         </div>
 
@@ -651,8 +673,8 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
             className="text-xs rounded-lg px-3 py-2 font-medium outline-none cursor-pointer flex-shrink-0"
             style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: filterDeptId ? '#8b5cf6' : '#94a3b8' }}
           >
-            <option value="">All Departments</option>
-            {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            <option value="">{isManager ? 'All Assigned Departments' : 'All Departments'}</option>
+            {visibleDepartments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
           <select
             value={filterShiftId}

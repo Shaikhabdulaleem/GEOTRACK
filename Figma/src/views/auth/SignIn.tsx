@@ -41,18 +41,18 @@ export default function SignIn() {
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!email.trim() || !password) {
-      setError('Enter your work email and password.');
+      setError('Enter your work email or Manager ID and password.');
       return;
     }
 
     setSubmitting(true);
     setError('');
     try {
-      await authService.signInWithPassword({ email: email.trim(), password });
+      await authService.signInWithIdentifier(email.trim(), password);
     } catch {
       // Do not disclose whether an account exists, is confirmed, or is
       // temporarily rate-limited. Detailed diagnostics stay in server logs.
-      setError('The email or password is incorrect. Please try again later.');
+      setError('The email/Manager ID or password is incorrect. Please try again later.');
       setSubmitting(false);
     }
   };
@@ -78,23 +78,23 @@ export default function SignIn() {
         >
           <div>
             <div className="text-sm font-semibold text-white">Sign In</div>
-            <div className="text-xs mt-1" style={{ color: '#4b6a8a' }}>Use your organization account to continue.</div>
+            <div className="text-xs mt-1" style={{ color: '#4b6a8a' }}>Use your work email or Manager ID to continue.</div>
           </div>
 
           <div>
-            <label htmlFor="email" className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>Work email</label>
+            <label htmlFor="email" className="text-xs block mb-1.5" style={{ color: '#4b6a8a' }}>Work email or Manager ID</label>
             <div className="relative">
               <Mail size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: '#4b6a8a' }} />
               <input
                 id="email"
-                type="email"
+                type="text"
                 autoComplete="username"
                 autoCapitalize="none"
                 spellCheck={false}
                 required
                 value={email}
                 onChange={event => { setEmail(event.target.value); setError(''); }}
-                placeholder="name@company.com"
+                placeholder="name@company.com or MGR-001"
                 style={{ ...inputStyle, borderColor: error ? '#ef4444' : '#1e3a5a' }}
                 disabled={submitting}
               />

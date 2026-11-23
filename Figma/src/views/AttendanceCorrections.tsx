@@ -107,8 +107,9 @@ export interface TimesheetCorrectionRow {
 }
 
 export default function AttendanceCorrections() {
-  const { user, activeMembership, hasAnyRole } = useAuth();
+  const { user, activeMembership, hasAnyRole, roles, assignedDepartmentIds } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
   const canManage = hasAnyRole(['administrator', 'manager']);
 
   const [activeTab, setActiveTab] = useState<'attendance' | 'requests' | 'direct'>('attendance');
@@ -233,9 +234,13 @@ export default function AttendanceCorrections() {
 
       setRequests(reqList);
       setDirectRecords(directList);
-      setEmployees(empList);
-      setDepartments(deptList.filter(d => d.status === 'active'));
-      setLookups(lookupData);
+      const activeDepts = deptList.filter(d => d.status === 'active');
+      const filteredDepts = isManager ? activeDepts.filter(d => assignedDepartmentIds.includes(d.id)) : activeDepts;
+      setDepartments(filteredDepts);
+      const filteredEmps = isManager ? empList.filter(e => e.department_id && assignedDepartmentIds.includes(e.department_id)) : empList;
+      setEmployees(filteredEmps);
+      const filteredLookups = isManager ? { ...lookupData, departments: lookupData.departments.filter(d => assignedDepartmentIds.includes(d.id)) } : lookupData;
+      setLookups(filteredLookups);
       setAttendanceRecords(attRecords);
       setShiftAssignments(assignments);
     } catch (err) {

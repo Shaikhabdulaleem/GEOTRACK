@@ -4,7 +4,7 @@ import { authService } from '../services/auth.service';
 import { identityService } from '../services/identity.service';
 import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabase';
 import { toAppError, type AppError } from '../lib/errors';
-import type { AppRole, EmployeeProfileRow, OrganizationMembershipRow, UserRow } from '../types/database';
+import type { AppRole, EmployeeProfileRow, ManagerProfileRow, ManagerScopeRow, OrganizationMembershipRow, UserRow } from '../types/database';
 import { hasAnyRole as userHasAnyRole, hasPermission, type Permission } from './access-control';
 
 interface AuthContextValue {
@@ -14,6 +14,9 @@ interface AuthContextValue {
   user: User | null;
   profile: UserRow | null;
   employeeProfile: EmployeeProfileRow | null;
+  managerProfile: ManagerProfileRow | null;
+  managerScopes: ManagerScopeRow[];
+  assignedDepartmentIds: string[];
   memberships: OrganizationMembershipRow[];
   activeMembership: OrganizationMembershipRow | null;
   roles: AppRole[];
@@ -33,6 +36,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<UserRow | null>(null);
   const [employeeProfile, setEmployeeProfile] = useState<EmployeeProfileRow | null>(null);
+  const [managerProfile, setManagerProfile] = useState<ManagerProfileRow | null>(null);
+  const [managerScopes, setManagerScopes] = useState<ManagerScopeRow[]>([]);
   const [memberships, setMemberships] = useState<OrganizationMembershipRow[]>([]);
   const [activeOrganizationId, setActiveOrganizationId] = useState<string | null>(null);
   const [error, setError] = useState<AppError | null>(null);
@@ -46,6 +51,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loadedUserIdRef.current = null;
     setProfile(null);
     setEmployeeProfile(null);
+    setManagerProfile(null);
+    setManagerScopes([]);
     setMemberships([]);
     setActiveOrganizationId(null);
   }, []);
@@ -58,12 +65,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ]);
 
     const selectedOrganizationId = nextMemberships[0]?.organization_id ?? null;
-    const nextEmployeeProfile = selectedOrganizationId
-      ? await identityService.getEmployeeProfile(userId, selectedOrganizationId)
-      : null;
+    const [nextEmployeeProfile, nextManagerProfile, nextManagerScopes] = selectedOrganizationId
+      ? await Promise.all([
+          identityService.getEmployeeProfile(userId, selectedOrganizationId),
+          identityService.getManagerProfile(userId, selectedOrganizationId),
+          identityService.getManagerScopes(userId, selectedOrganizationId),
+        ])
+      : [null, null, []];
 
     setProfile(nextProfile);
     setEmployeeProfile(nextEmployeeProfile);
+    setManagerProfile(nextManagerProfile);
+    setManagerScopes(nextManagerScopes);
     setMemberships(nextMemberships);
     setActiveOrganizationId(selectedOrganizationId);
   }, []);
@@ -172,11 +185,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setActiveOrganizationId(organizationId);
     setEmployeeProfile(null);
-    void identityService
-      .getEmployeeProfile(session.user.id, organizationId)
-      .then(setEmployeeProfile)
-      .catch(caught => setError(toAppError(caught, 'Unable to load the employee profile.')));
+    setManagerProfile(null);
+    setManagerScopes([]);
+    void Promise.all([
+      identityService.getEmployeeProfile(session.user.id, organizationId).then(setEmployeeProfile),
+      identityService.getManagerProfile(session.user.id, organizationId).then(setManagerProfile),
+      identityService.getManagerScopes(session.user.id, organizationId).then(setManagerScopes),
+    ]).catch(caught => setError(toAppError(caught, 'Unable to load profile information.')));
   }, [memberships, session?.user.id]);
+
+  const assignedDepartmentIds = useMemo(() => {
+    return managerScopes
+      .map(s => s.department_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  }, [managerScopes]);
 
   const value = useMemo<AuthContextValue>(() => {
     const fallbackRoles: AppRole[] = [];
@@ -189,6 +211,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: session?.user ?? null,
       profile,
       employeeProfile,
+      managerProfile,
+      managerScopes,
+      assignedDepartmentIds,
       memberships,
       activeMembership,
       roles: activeRoles,
@@ -201,10 +226,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [
     activeMembership,
+    assignedDepartmentIds,
     configured,
     employeeProfile,
     error,
     loading,
+    managerProfile,
+    managerScopes,
     memberships,
     profile,
     refreshAuthorization,

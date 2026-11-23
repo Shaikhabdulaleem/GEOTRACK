@@ -9,6 +9,7 @@ export interface DashboardFilters {
   date: string;
   branchId?: string;
   departmentId?: string;
+  departmentIds?: string[];
   shiftId?: string;
   managerId?: string;
   employeeId?: string;
@@ -94,7 +95,11 @@ export const dashboardService = {
       .eq('organization_id', organizationId);
       
     if (filters.branchId) empQuery = empQuery.eq('branch_id', filters.branchId);
-    if (filters.departmentId) empQuery = empQuery.eq('department_id', filters.departmentId);
+    if (filters.departmentId) {
+      empQuery = empQuery.eq('department_id', filters.departmentId);
+    } else if (filters.departmentIds && filters.departmentIds.length > 0) {
+      empQuery = empQuery.in('department_id', filters.departmentIds);
+    }
     if (filters.managerId) empQuery = empQuery.eq('manager_user_id', filters.managerId);
     if (filters.employeeId) empQuery = empQuery.eq('id', filters.employeeId);
     
@@ -316,7 +321,11 @@ export const dashboardService = {
       .select('id, full_name, department_id, employment_status')
       .eq('organization_id', organizationId);
     if (filters.branchId) empQuery = empQuery.eq('branch_id', filters.branchId);
-    if (filters.departmentId) empQuery = empQuery.eq('department_id', filters.departmentId);
+    if (filters.departmentId) {
+      empQuery = empQuery.eq('department_id', filters.departmentId);
+    } else if (filters.departmentIds && filters.departmentIds.length > 0) {
+      empQuery = empQuery.in('department_id', filters.departmentIds);
+    }
     if (filters.managerId) empQuery = empQuery.eq('manager_user_id', filters.managerId);
     if (filters.employeeId) empQuery = empQuery.eq('id', filters.employeeId);
 
@@ -472,7 +481,11 @@ export const dashboardService = {
       .select('id, full_name, employment_status')
       .eq('organization_id', organizationId);
     if (filters.branchId) empQuery = empQuery.eq('branch_id', filters.branchId);
-    if (filters.departmentId) empQuery = empQuery.eq('department_id', filters.departmentId);
+    if (filters.departmentId) {
+      empQuery = empQuery.eq('department_id', filters.departmentId);
+    } else if (filters.departmentIds && filters.departmentIds.length > 0) {
+      empQuery = empQuery.in('department_id', filters.departmentIds);
+    }
     if (filters.managerId) empQuery = empQuery.eq('manager_user_id', filters.managerId);
     if (filters.employeeId) empQuery = empQuery.eq('id', filters.employeeId);
 
@@ -611,11 +624,15 @@ export const dashboardService = {
     }));
   },
 
-  async getLookups(organizationId: string) {
+  async getLookups(organizationId: string, assignedDepartmentIds?: string[]) {
     const client = getSupabaseClient();
+    let depQuery = client.from('departments').select('id, name').eq('organization_id', organizationId);
+    if (assignedDepartmentIds && assignedDepartmentIds.length > 0) {
+      depQuery = depQuery.in('id', assignedDepartmentIds);
+    }
     const [br, dep, sh] = await Promise.all([
       client.from('branches').select('id, name').eq('organization_id', organizationId),
-      client.from('departments').select('id, name').eq('organization_id', organizationId),
+      depQuery,
       client.from('shifts').select('id, name').eq('organization_id', organizationId)
     ]);
     return {

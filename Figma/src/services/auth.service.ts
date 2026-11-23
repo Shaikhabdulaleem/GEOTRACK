@@ -23,6 +23,26 @@ export interface EmployeeAccountCredentials {
   status: string;
 }
 
+export interface ManagerAccountCredentials {
+  manager_id: string;
+  user_id: string;
+  manager_code: string;
+  full_name: string;
+  email: string;
+  temporary_password: string;
+  status: string;
+}
+
+export interface ManagerProvisionInput {
+  organization_id: string;
+  manager_code: string;
+  full_name: string;
+  email?: string;
+  phone?: string;
+  department_ids?: string[];
+  primary_department_id?: string;
+}
+
 /** supabase-js collapses every non-2xx Edge Function response to the opaque
  * message "Edge Function returned a non-2xx status code". The reason we actually
  * sent lives on error.context (the raw Response), so read it and surface it. */
@@ -40,6 +60,13 @@ async function throwEdgeFunctionError(error: unknown, fallback: string): Promise
     if (!message) message = raw ? `${fallback} (HTTP ${context.status}): ${raw.slice(0, 200)}` : `${fallback} (HTTP ${context.status})`;
     throw toAppError({ message, status: context.status }, fallback);
   }
+  const rawMsg = (error as { message?: string } | null)?.message ?? '';
+  if (rawMsg.includes('Failed to send a request to the Edge Function')) {
+    throw toAppError(
+      { message: `${fallback}: The required Supabase Edge Function is not deployed to your Supabase project yet. Deploy the functions (provision-manager, manager-login, reset-manager-login) to enable this action.` },
+      fallback,
+    );
+  }
   throw toAppError(error, fallback);
 }
 
@@ -49,6 +76,30 @@ export const authService = {
     if (error) throw toAppError(error, 'Unable to sign in.');
     if (!data.session) throw toAppError(null, 'Authentication completed without a session.');
     return data.session;
+  },
+
+  async signInWithIdentifier(identifier: string, password: string): Promise<Session> {
+    const trimmed = identifier.trim();
+    if (trimmed.includes('@')) {
+      return this.signInWithPassword({ email: trimmed, password });
+    }
+
+    const { data, error } = await getSupabaseClient().functions.invoke('manager-login', {
+      body: { identifier: trimmed, password },
+    });
+    if (error) await throwEdgeFunctionError(error, 'Unable to sign in.');
+    if (!data?.access_token || !data?.refresh_token) {
+      throw toAppError(null, 'Authentication completed without session tokens.');
+    }
+
+    const { data: sessionData, error: sessionError } = await getSupabaseClient().auth.setSession({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+    });
+    if (sessionError || !sessionData.session) {
+      throw toAppError(sessionError, 'Unable to establish authentication session.');
+    }
+    return sessionData.session;
   },
 
   async signOut(): Promise<void> {
@@ -124,5 +175,23 @@ export const authService = {
   async completePasswordChange(): Promise<void> {
     const { error } = await getSupabaseClient().rpc('complete_password_change');
     if (error) throw toAppError(error, 'Unable to finalize the password change.');
+  },
+
+  /** Provisions a manager account with unique Manager ID and one-time temporary password. */
+  async provisionManagerAccount(input: ManagerProvisionInput): Promise<ManagerAccountCredentials> {
+    const { data, error } = await getSupabaseClient().functions.invoke('provision-manager', {
+      body: input,
+    });
+    if (error) await throwEdgeFunctionError(error, 'Unable to create manager account.');
+    return data as ManagerAccountCredentials;
+  },
+
+  /** Resets a manager account password to a new one-time temporary password. */
+  async resetManagerAccount(managerProfileId: string): Promise<{ manager_code: string; temporary_password: string; status: string }> {
+    const { data, error } = await getSupabaseClient().functions.invoke('reset-manager-login', {
+      body: { manager_profile_id: managerProfileId },
+    });
+    if (error) await throwEdgeFunctionError(error, 'Unable to reset manager password.');
+    return data as { manager_code: string; temporary_password: string; status: string };
   },
 };

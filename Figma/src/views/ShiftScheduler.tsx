@@ -688,9 +688,10 @@ export interface CellDisplayInfo {
 const MOCK_DEPARTMENTS = ['Mailroom', 'Warehouse', 'Mailroom', 'Operations', 'Warehouse', 'Mailroom', 'Operations', 'Warehouse'];
 
 export default function ShiftScheduler() {
-  const { activeMembership, user } = useAuth();
+  const { activeMembership, user, roles, assignedDepartmentIds } = useAuth();
   const supabaseReady = isSupabaseConfigured();
   const organizationId = activeMembership?.organization_id ?? '';
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
 
   // ── View state ──────────────────────────────
   const [view, setView] = useState<ViewMode>('weekly');
@@ -758,8 +759,12 @@ export default function ShiftScheduler() {
         shiftService.getWeeklySummary({ organization_id: organizationId, from_date: fromDate, to_date: toDate }),
       ]);
 
-      setEmployees(empResult);
-      setDepartments(departmentList.filter(department => department.status === 'active'));
+      const activeDepts = departmentList.filter(department => department.status === 'active');
+      const filteredDepts = isManager ? activeDepts.filter(d => assignedDepartmentIds.includes(d.id)) : activeDepts;
+      const filteredEmps = isManager ? empResult.filter(e => e.department_id && assignedDepartmentIds.includes(e.department_id)) : empResult;
+
+      setEmployees(filteredEmps);
+      setDepartments(filteredDepts);
       setShifts(shiftList);
       setAssignments(rawAssignments);
       setWeeklyOffs(allOffs);
@@ -769,7 +774,7 @@ export default function ShiftScheduler() {
       // Resolve each employee's effective schedule for the week so the grid can
       // show shifts that come from a recurring pattern (no dated assignment row).
       const resolvedEntries = await Promise.all(
-        empResult.map(async emp => {
+        filteredEmps.map(async emp => {
           try {
             const rows = await shiftService.resolveSchedule(emp.id, fromDate, toDate);
             return rows.map(r => [`${emp.id}_${r.work_date}`, r] as const);
@@ -1173,7 +1178,7 @@ export default function ShiftScheduler() {
             className="px-3 py-2 rounded-lg text-xs outline-none"
             style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#94a3b8' }}
           >
-            <option value="">All Departments</option>
+            <option value="">{isManager ? 'All Assigned Departments' : 'All Departments'}</option>
             {supabaseReady
               ? departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)
               : [...new Set(MOCK_DEPARTMENTS)].map(department => <option key={department} value={department}>{department}</option>)}

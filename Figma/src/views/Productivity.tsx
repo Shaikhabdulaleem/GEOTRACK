@@ -15,9 +15,10 @@ import ProductivityCalculatorCard from '../components/productivity/ProductivityC
 import AymakanImportModal from '../components/productivity/AymakanImportModal';
 
 function EmployeeProductivity() {
-  const { activeMembership } = useAuth();
+  const { activeMembership, roles, assignedDepartmentIds } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
   const supabaseReady = isSupabaseConfigured();
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
 
   const [shiftFilter, setShiftFilter] = useState('All');
   const [period, setPeriod] = useState('Today');
@@ -52,10 +53,15 @@ function EmployeeProductivity() {
         shiftService.listAssignments({ organization_id: organizationId, from_date: fromIso, to_date: toIso })
       ]);
 
-      setRecords(prodData);
+      const filteredEmps = isManager
+        ? empData.filter(e => e.department_id && assignedDepartmentIds.includes(e.department_id))
+        : empData;
+      const allowedEmpIds = new Set(filteredEmps.map(e => e.id));
+
+      setRecords(prodData.filter(r => allowedEmpIds.has(r.employee_id)));
       
       const empMap: Record<string, EmployeeProfileRow> = {};
-      empData.forEach(e => empMap[e.id] = e);
+      filteredEmps.forEach(e => empMap[e.id] = e);
       setEmps(empMap);
 
       const assignMap: Record<string, ShiftAssignmentRow> = {};
@@ -1572,9 +1578,11 @@ function SetupPanel({ workspace, refresh }: { workspace: MailroomWorkspace; refr
 }
 
 export default function Productivity() {
-  const { activeMembership } = useAuth();
+  const { activeMembership, roles, assignedDepartmentIds } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
-  const isAdmin = activeMembership?.role_code === 'administrator';
+  const isAdmin = activeMembership?.role_code === 'administrator' || roles.includes('administrator');
+  const isManager = roles.includes('manager') && !isAdmin;
+  const [hasMailroomScope, setHasMailroomScope] = useState<boolean | null>(isAdmin ? true : null);
   const today = riyadhToday();
   const [tab, setTab] = useState<ModuleTab>('dashboard');
   const [calculatorVolume, setCalculatorVolume] = useState<number | null>(null);
@@ -1593,8 +1601,36 @@ export default function Productivity() {
   const loadFrom = fromDate < entryDate ? fromDate : entryDate;
   const loadTo = toDate > entryDate ? toDate : entryDate;
 
+  useEffect(() => {
+    if (isAdmin) {
+      setHasMailroomScope(true);
+      return;
+    }
+    if (!organizationId || !isManager) {
+      setHasMailroomScope(false);
+      return;
+    }
+    const checkMailroomScope = async () => {
+      try {
+        const { getSupabaseClient } = await import('../lib/supabase');
+        const client = getSupabaseClient();
+        const { data } = await client
+          .from('departments')
+          .select('id, name')
+          .eq('organization_id', organizationId)
+          .ilike('name', '%mailroom%');
+        const mailroomDeptIds = (data || []).map(d => d.id);
+        const hasAccess = mailroomDeptIds.some(id => assignedDepartmentIds.includes(id));
+        setHasMailroomScope(hasAccess);
+      } catch {
+        setHasMailroomScope(false);
+      }
+    };
+    void checkMailroomScope();
+  }, [isAdmin, isManager, organizationId, assignedDepartmentIds]);
+
   const load = async (): Promise<MailroomWorkspace | null | undefined> => {
-    if (!organizationId || !isSupabaseConfigured()) { setLoading(false); return undefined; }
+    if (!organizationId || !isSupabaseConfigured() || hasMailroomScope === false) { setLoading(false); return undefined; }
     setLoading(true); setError(null);
     try {
       const nextWorkspace = await productivityService.loadMailroomWorkspace(organizationId, loadFrom, loadTo);
@@ -1605,7 +1641,14 @@ export default function Productivity() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [organizationId, loadFrom, loadTo]);
+  useEffect(() => {
+    if (hasMailroomScope) {
+      void load();
+    } else if (hasMailroomScope === false) {
+      setLoading(false);
+    }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [organizationId, loadFrom, loadTo, hasMailroomScope]);
 
   useEffect(() => {
     const handleCompUpdate = () => {
@@ -1646,6 +1689,24 @@ export default function Productivity() {
     } catch (e) { setError(e instanceof Error ? e.message : 'Unable to save the validation-client monthly import.'); throw e; }
     finally { setSaving(false); }
   };
+
+  if (hasMailroomScope === false) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <h1 className="text-xl font-bold text-white">Mailroom Productivity</h1>
+          <span className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: 'rgba(37,99,235,.15)', color: '#93c5fd', border: '1px solid rgba(37,99,235,.25)' }}>MAILROOM DEPARTMENT</span>
+        </div>
+        <div className="rounded-xl p-8 text-center" style={panelStyle}>
+          <ShieldAlert size={36} className="mx-auto mb-3" style={{ color: '#f59e0b' }} />
+          <div className="text-white font-semibold text-base">Mailroom Department Access Restricted</div>
+          <div className="text-sm mt-1.5 max-w-md mx-auto" style={{ color: '#94a3b8' }}>
+            This module is restricted to administrators and managers assigned to the Mailroom department. Your manager account is scoped to other departments.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading && !workspace) return <div className="py-24 flex justify-center"><Loader2 className="animate-spin" style={{ color: '#3b82f6' }} /></div>;
   return <div className="space-y-4">

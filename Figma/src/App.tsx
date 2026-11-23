@@ -15,6 +15,7 @@ import type { AppRole } from './types/database';
 const Dashboard = React.lazy(() => import('./views/Dashboard'));
 const LiveAttendance = React.lazy(() => import('./views/LiveAttendance'));
 const Employees = React.lazy(() => import('./views/Employees'));
+const ManagerManagement = React.lazy(() => import('./views/ManagerManagement'));
 const ShiftScheduler = React.lazy(() => import('./views/ShiftScheduler'));
 const Attendance = React.lazy(() => import('./views/Attendance'));
 const AttendanceCorrections = React.lazy(() => import('./views/AttendanceCorrections'));
@@ -36,6 +37,7 @@ const VIEWS: Record<ViewId, ViewComponent> = {
   dashboard: Dashboard,
   live: LiveAttendance,
   employees: Employees,
+  managers: ManagerManagement,
   scheduler: ShiftScheduler,
   attendance: Attendance,
   corrections: AttendanceCorrections,
@@ -60,11 +62,11 @@ function RoleAwareNotifications() {
 }
 
 function ApplicationShell() {
-  const { roles, employeeProfile } = useAuth();
+  const { roles, employeeProfile, managerProfile } = useAuth();
 
-  // Employees provisioned (or reset) with a temporary password must set their
+  // Employees and managers provisioned (or reset) with a temporary password must set their
   // own before reaching any view. This blocks the whole shell until done.
-  if (employeeProfile?.must_change_password) {
+  if (employeeProfile?.must_change_password || managerProfile?.must_change_password) {
     return <ForcePasswordChange />;
   }
 

@@ -19,8 +19,9 @@ function deviceLabel(percent: number | null) { if (percent == null) return { lab
 function datePreset(kind: 'week' | 'month') { const today = new Date(); const from = new Date(today); if (kind === 'week') { const weekday = today.getDay() || 7; from.setDate(today.getDate() - weekday + 1); } else from.setDate(1); return { from: isoDate(from), to: isoDate(today) }; }
 
 export default function Overtime() {
-  const { activeMembership } = useAuth();
+  const { activeMembership, roles, assignedDepartmentIds } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
   const [fromDate, setFromDate] = useState(''); const [toDate, setToDate] = useState('');
   const [search, setSearch] = useState(''); const [debouncedSearch, setDebouncedSearch] = useState('');
   const [branchId, setBranchId] = useState(''); const [departmentId, setDepartmentId] = useState('');
@@ -49,7 +50,8 @@ export default function Overtime() {
   const setPreset = (kind: 'week' | 'month') => { const preset = datePreset(kind); setFromDate(preset.from); setToDate(preset.to); };
   const totals = useMemo(() => ({ pendingEmployees: rows.filter(row => row.pending_count > 0).length, pendingMinutes: rows.reduce((sum, row) => sum + row.pending_minutes, 0), attendanceIssues: rows.reduce((sum, row) => sum + row.attendance_issue_count, 0), highUsage: rows.filter(row => (row.average_device_usage_percent ?? 0) > 60).length }), [rows]);
   const totalPages = Math.max(1, Math.ceil(count / pageSize));
-  const departments = branchId ? lookups.departments.filter(item => item.branch_id === branchId) : lookups.departments;
+  const rawDepartments = branchId ? lookups.departments.filter(item => item.branch_id === branchId) : lookups.departments;
+  const departments = isManager ? rawDepartments.filter(item => assignedDepartmentIds.includes(item.id)) : rawDepartments;
 
   return <div className="space-y-4">
     <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between"><div><h1 className="text-xl font-bold text-white">Overtime Management</h1><p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>Review attendance evidence and approve overtime by employee</p></div><div className="flex flex-wrap items-center gap-2"><button onClick={() => setPreset('week')} className="px-3 py-2 rounded-lg text-xs" style={inputStyle}>This week</button><button onClick={() => setPreset('month')} className="px-3 py-2 rounded-lg text-xs" style={inputStyle}>This month</button><label className="flex items-center gap-2 text-xs" style={{ color: '#94a3b8' }}>From <input aria-label="Overtime review from date" type="date" value={fromDate} onChange={event => setFromDate(event.target.value)} className="px-2 py-1.5 rounded-lg outline-none" style={inputStyle} /></label><label className="flex items-center gap-2 text-xs" style={{ color: '#94a3b8' }}>To <input aria-label="Overtime review to date" type="date" value={toDate} onChange={event => setToDate(event.target.value)} className="px-2 py-1.5 rounded-lg outline-none" style={inputStyle} /></label></div></div>

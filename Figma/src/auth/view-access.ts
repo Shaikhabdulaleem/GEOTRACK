@@ -4,6 +4,7 @@ export const VIEW_IDS = [
   'dashboard',
   'live',
   'employees',
+  'managers',
   'scheduler',
   'attendance',
   'corrections',
@@ -25,6 +26,7 @@ export const VIEW_ROLES: Readonly<Record<ViewId, readonly AppRole[]>> = Object.f
   dashboard: ['administrator', 'manager'],
   live: ['administrator', 'manager'],
   employees: ['administrator', 'manager'],
+  managers: ['administrator'],
   scheduler: ['administrator', 'manager'],
   attendance: ['administrator', 'manager'],
   corrections: ['administrator', 'manager'],
@@ -37,7 +39,7 @@ export const VIEW_ROLES: Readonly<Record<ViewId, readonly AppRole[]>> = Object.f
   reports: ['administrator', 'manager'],
   notifications: ['administrator', 'manager', 'employee'],
   mobile: ['administrator', 'manager', 'employee'],
-  settings: ['administrator', 'manager'],
+  settings: ['administrator'],
 });
 
 export function canAccessView(roles: readonly AppRole[], view: ViewId): boolean {

@@ -26,9 +26,10 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function Reports() {
-  const { activeMembership } = useAuth();
+  const { activeMembership, roles, assignedDepartmentIds } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
   const supabaseReady = isSupabaseConfigured();
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
 
   // Filters
   const today = todayInTimezone('Asia/Riyadh');
@@ -63,10 +64,11 @@ export default function Reports() {
         employeeService.listAll({ organizationId })
       ]);
       setBranches(br.data || []);
-      setDepartments(dep.data || []);
+      const deptList = (dep.data || []).filter(d => !isManager || assignedDepartmentIds.includes(d.id));
+      setDepartments(deptList);
       setShifts(sh.data || []);
       
-      const emps = empData || [];
+      const emps = isManager ? (empData || []).filter(e => e.department_id && assignedDepartmentIds.includes(e.department_id)) : (empData || []);
       setEmployeeProfiles(emps);
       
       const mgrIds = [...new Set(emps.map(e => e.manager_user_id).filter(Boolean))] as string[];
@@ -91,11 +93,16 @@ export default function Reports() {
     setError(null);
     
     try {
+      const scopedDeptIds = isManager
+        ? (filterDeptId ? [filterDeptId] : (assignedDepartmentIds.length > 0 ? assignedDepartmentIds : ['00000000-0000-0000-0000-000000000000']))
+        : (filterDeptId ? [filterDeptId] : undefined);
+
       await reportService.generateReport(organizationId, reportId, {
         fromDate,
         toDate,
         branchId: filterBranchId || undefined,
         departmentId: filterDeptId || undefined,
+        departmentIds: scopedDeptIds,
         shiftId: filterShiftId || undefined,
         managerId: filterManagerId || undefined,
         employeeId: filterEmployeeId || undefined
@@ -139,7 +146,7 @@ export default function Reports() {
         <select className="px-3 py-1.5 rounded text-xs outline-none cursor-pointer flex-shrink-0"
           style={{ background: '#122338', border: '1px solid #1e3a5a', color: filterDeptId ? '#8b5cf6' : '#f0f6ff' }}
           value={filterDeptId} onChange={e => setFilterDeptId(e.target.value)}>
-          <option value="">All Departments</option>
+          <option value="">{isManager ? 'All Assigned Departments' : 'All Departments'}</option>
           {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
         <select className="px-3 py-1.5 rounded text-xs outline-none cursor-pointer flex-shrink-0"

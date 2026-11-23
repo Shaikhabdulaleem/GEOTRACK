@@ -37,10 +37,11 @@ function formatDuration(minutes: number | null) {
 }
 
 export default function Attendance() {
-  const { activeMembership, user, hasAnyRole } = useAuth();
+  const { activeMembership, user, hasAnyRole, roles, assignedDepartmentIds } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
   const supabaseReady = isSupabaseConfigured();
   const navigate = useNavigate();
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
   const canManage = hasAnyRole(['administrator', 'manager']);
 
   const [tab, setTab] = useState('Today');
@@ -118,8 +119,11 @@ export default function Attendance() {
       ]);
       
       setRecords(recData);
-      setEmps(empData);
-      setDepartments(departmentData.filter(department => department.status === 'active'));
+      const activeDepts = departmentData.filter(department => department.status === 'active');
+      const filteredDepts = isManager ? activeDepts.filter(d => assignedDepartmentIds.includes(d.id)) : activeDepts;
+      setDepartments(filteredDepts);
+      const filteredEmps = isManager ? empData.filter(e => e.department_id && assignedDepartmentIds.includes(e.department_id)) : empData;
+      setEmps(filteredEmps);
       setAssignments(assignData);
       setCorrections(corrData);
     } catch (err: unknown) {
@@ -327,7 +331,7 @@ export default function Attendance() {
             className="px-3 py-2 rounded-lg text-xs outline-none"
             style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#94a3b8' }}
           >
-            <option value="">All Departments</option>
+            <option value="">{isManager ? 'All Assigned Departments' : 'All Departments'}</option>
             {departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}
           </select>
         {supabaseReady && (

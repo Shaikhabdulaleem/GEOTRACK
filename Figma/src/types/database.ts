@@ -156,9 +156,64 @@ export interface DepartmentRow {
   branch_id: string;
   code: string;
   name: string;
+  manager_user_id?: string | null;
   status: RecordStatus;
   created_at: string;
   updated_at: string;
+}
+
+export interface ManagerProfileRow {
+  id: string;
+  organization_id: string;
+  user_id: string | null;
+  manager_code: string;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  status: MembershipStatus;
+  must_change_password: boolean;
+  login_last_reset_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ManagerActivityLogRow {
+  id: string;
+  organization_id: string;
+  manager_profile_id: string;
+  actor_user_id: string;
+  action: string;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface OrganizationManagerItem {
+  id: string;
+  organization_id: string;
+  user_id: string | null;
+  manager_code: string;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  status: MembershipStatus;
+  must_change_password: boolean;
+  login_last_reset_at: string | null;
+  created_at: string;
+  updated_at: string;
+  assigned_department_ids: string[];
+  assigned_department_names: string[];
+  primary_department_id: string | null;
+  primary_department_name: string | null;
+}
+
+export interface ManagerActivityHistoryItem {
+  id: string;
+  action: string;
+  details: Record<string, unknown>;
+  created_at: string;
+  actor_name: string;
+  actor_email: string | null;
 }
 
 export interface EmployeeProfileRow {
@@ -657,6 +712,8 @@ export interface Database {
       roles: TableDefinition<RoleRow, 'code' | 'name'>;
       organization_memberships: TableDefinition<OrganizationMembershipRow, 'organization_id' | 'user_id' | 'role_code'>;
       manager_scopes: TableDefinition<ManagerScopeRow, 'organization_id' | 'manager_user_id'>;
+      manager_profiles: TableDefinition<ManagerProfileRow, 'organization_id' | 'manager_code' | 'full_name'>;
+      manager_activity_logs: TableDefinition<ManagerActivityLogRow, 'organization_id' | 'manager_profile_id' | 'actor_user_id' | 'action'>;
       branches: TableDefinition<BranchRow, 'organization_id' | 'code' | 'name' | 'timezone'>;
       departments: TableDefinition<DepartmentRow, 'organization_id' | 'branch_id' | 'code' | 'name'>;
       employee_profiles: TableDefinition<EmployeeProfileRow, 'organization_id' | 'employee_code' | 'iqama_number' | 'full_name' | 'branch_id' | 'department_id'>;
@@ -1039,6 +1096,36 @@ export interface Database {
           latitude: number | null;
           longitude: number | null;
         }>;
+      };
+      list_organization_managers: {
+        Args: {
+          p_organization_id: string;
+        };
+        Returns: OrganizationManagerItem[];
+      };
+      admin_update_manager_status: {
+        Args: {
+          p_organization_id: string;
+          p_manager_profile_id: string;
+          p_new_status: MembershipStatus;
+        };
+        Returns: void;
+      };
+      admin_assign_manager_departments: {
+        Args: {
+          p_organization_id: string;
+          p_manager_user_id: string;
+          p_department_ids: string[];
+          p_primary_department_id?: string | null;
+        };
+        Returns: void;
+      };
+      get_manager_activity_history: {
+        Args: {
+          p_organization_id: string;
+          p_manager_profile_id: string;
+        };
+        Returns: ManagerActivityHistoryItem[];
       };
     };
     Enums: {
