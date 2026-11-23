@@ -321,15 +321,19 @@ create policy geofence_polygons_manage_admin_update on public.geofence_polygons 
   ));
 
 -- Update RPCs to require administrator role only
+drop function if exists public.save_shift_template(uuid, uuid, text, text, time, time, integer, text, date);
+drop function if exists public.save_shift_template(uuid, text, text, time without time zone, time without time zone, boolean, integer, uuid);
+
 create or replace function public.save_shift_template(
+  p_shift_id uuid,
   p_organization_id uuid,
   p_code text,
   p_name text,
-  p_start_time time without time zone,
-  p_end_time time without time zone,
-  p_crosses_midnight boolean,
+  p_start_time time,
+  p_end_time time,
   p_break_minutes integer default 0,
-  p_shift_id uuid default null
+  p_color text default null,
+  p_effective_from date default current_date
 )
 returns public.shifts
 language plpgsql
@@ -352,17 +356,18 @@ begin
   if p_shift_id is null then
     insert into public.shifts (
       organization_id, code, name, start_time, end_time, crosses_midnight,
-      break_minutes, version_number, effective_from, status
+      break_minutes, color, template_key, version_number, effective_from, created_by
     ) values (
-      p_organization_id, btrim(p_code), btrim(p_name), p_start_time, p_end_time,
-      p_crosses_midnight, p_break_minutes, 1, current_date, 'active'
+      p_organization_id, upper(btrim(p_code)), btrim(p_name), p_start_time, p_end_time,
+      p_end_time <= p_start_time, p_break_minutes, p_color, gen_random_uuid(), 1,
+      coalesce(p_effective_from, current_date), (select auth.uid())
     ) returning * into v_new;
     return v_new;
   end if;
 
   select * into v_old
   from public.shifts
-  where id = p_shift_id and organization_id = p_organization_id;
+  where id = p_shift_id and organization_id = p_organization_id for update;
 
   if not found then
     raise exception 'Shift template not found' using errcode = 'P0002';
@@ -370,49 +375,58 @@ begin
 
   select exists (
     select 1 from public.shift_assignments
-    where shift_id = v_old.id and work_date >= current_date
+    where shift_id = p_shift_id
   ) or exists (
     select 1 from public.recurring_schedule_rules
-    where shift_id = v_old.id
+    where shift_id = p_shift_id
   ) into v_used;
 
-  if not v_used then
-    update public.shifts
-    set code = btrim(p_code),
-        name = btrim(p_name),
-        start_time = p_start_time,
-        end_time = p_end_time,
-        crosses_midnight = p_crosses_midnight,
-        break_minutes = p_break_minutes
-    where id = v_old.id
+  if not v_used and coalesce(p_effective_from, current_date) <= current_date then
+    update public.shifts set
+      code = upper(btrim(p_code)),
+      name = btrim(p_name),
+      start_time = p_start_time,
+      end_time = p_end_time,
+      crosses_midnight = p_end_time <= p_start_time,
+      break_minutes = p_break_minutes,
+      color = p_color,
+      updated_at = clock_timestamp()
+    where id = p_shift_id
     returning * into v_new;
     return v_new;
   end if;
 
+  if coalesce(p_effective_from, current_date + 1) <= current_date then
+    raise exception 'A used shift must be changed with a future effective date' using errcode = '22023';
+  end if;
+
   update public.shifts
-  set effective_to = current_date - 1,
-      status = 'inactive'
-  where id = v_old.id;
+  set effective_to = coalesce(p_effective_from, current_date + 1) - 1,
+      updated_at = clock_timestamp()
+  where id = p_shift_id;
 
   insert into public.shifts (
     organization_id, code, name, start_time, end_time, crosses_midnight,
-    break_minutes, version_number, effective_from, status
+    break_minutes, color, template_key, version_number, effective_from, created_by
   ) values (
-    p_organization_id, btrim(p_code), btrim(p_name), p_start_time, p_end_time,
-    p_crosses_midnight, p_break_minutes, v_old.version_number + 1, current_date, 'active'
+    p_organization_id, upper(btrim(p_code)), btrim(p_name), p_start_time, p_end_time,
+    p_end_time <= p_start_time, p_break_minutes, p_color, v_old.template_key,
+    v_old.version_number + 1, coalesce(p_effective_from, current_date + 1), (select auth.uid())
   ) returning * into v_new;
 
   return v_new;
 end;
 $$;
 
-revoke all on function public.save_shift_template(uuid, text, text, time without time zone, time without time zone, boolean, integer, uuid) from public, anon;
-grant execute on function public.save_shift_template(uuid, text, text, time without time zone, time without time zone, boolean, integer, uuid) to authenticated;
+revoke all on function public.save_shift_template(uuid, uuid, text, text, time, time, integer, text, date) from public, anon;
+grant execute on function public.save_shift_template(uuid, uuid, text, text, time, time, integer, text, date) to authenticated;
+
+drop function if exists public.create_site(uuid, text, text, text, text, double precision, double precision, boolean, integer);
 
 create or replace function public.create_site(
   p_organization_id uuid,
-  p_code text,
   p_name text,
+  p_code text,
   p_timezone text default 'UTC',
   p_address text default null,
   p_latitude double precision default null,
@@ -436,12 +450,15 @@ begin
   if p_create_geofence and (p_latitude is null or p_longitude is null) then
     raise exception 'Coordinates are required to create a geofence' using errcode = '22023';
   end if;
+  if p_geofence_radius_meters <= 0 then
+    raise exception 'Geofence radius must be positive' using errcode = '22023';
+  end if;
 
   insert into public.branches (
     organization_id, code, name, timezone, address, latitude, longitude,
     location_point, status
   ) values (
-    p_organization_id, btrim(p_code), btrim(p_name), coalesce(nullif(btrim(p_timezone), ''), 'UTC'),
+    p_organization_id, upper(btrim(p_code)), btrim(p_name), coalesce(nullif(btrim(p_timezone), ''), 'UTC'),
     nullif(btrim(p_address), ''), p_latitude, p_longitude,
     case when p_latitude is not null and p_longitude is not null
          then jsonb_build_object('type', 'Point', 'coordinates', jsonb_build_array(p_longitude, p_latitude))
