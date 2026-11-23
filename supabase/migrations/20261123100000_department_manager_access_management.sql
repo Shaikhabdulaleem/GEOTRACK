@@ -816,3 +816,6 @@ $$;
 
 revoke all on function public.get_manager_activity_history(uuid, uuid) from public, anon;
 grant execute on function public.get_manager_activity_history(uuid, uuid) to authenticated;
+
+-- Force PostgREST to reload schema cache immediately
+notify pgrst, 'reload schema';

@@ -181,8 +181,13 @@ Deno.serve(async (request) => {
     .single();
 
   if (profileError || !profile) {
+    console.error('provision-manager: profileError:', profileError);
     await admin.auth.admin.deleteUser(newUserId).catch(() => undefined);
-    return json(request, { error: 'Unable to save manager profile' }, 500);
+    return json(
+      request,
+      { error: profileError?.message ? `Unable to save manager profile: ${profileError.message}` : 'Unable to save manager profile' },
+      500,
+    );
   }
 
   // 5. Grant manager role membership
@@ -197,9 +202,14 @@ Deno.serve(async (request) => {
   );
 
   if (memberError) {
+    console.error('provision-manager: memberError:', memberError);
     await admin.from('manager_profiles').delete().eq('id', profile.id).catch(() => undefined);
     await admin.auth.admin.deleteUser(newUserId).catch(() => undefined);
-    return json(request, { error: 'Unable to assign manager membership role' }, 500);
+    return json(
+      request,
+      { error: memberError?.message ? `Unable to assign manager membership role: ${memberError.message}` : 'Unable to assign manager membership role' },
+      500,
+    );
   }
 
   // 6. Assign department scopes in manager_scopes
