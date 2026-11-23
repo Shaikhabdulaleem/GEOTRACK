@@ -29,6 +29,7 @@ insert into public.branches (id, organization_id, code, name) values
   ('22000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', 'TWO', 'Two');
 insert into public.departments (id, organization_id, branch_id, code, name) values
   ('13000000-0000-0000-0000-000000000001', '11000000-0000-0000-0000-000000000001', '12000000-0000-0000-0000-000000000001', 'ONE', 'One'),
+  ('13000000-0000-0000-0000-000000000002', '11000000-0000-0000-0000-000000000001', '12000000-0000-0000-0000-000000000001', 'OTHER', 'Other Dept'),
   ('23000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '22000000-0000-0000-0000-000000000001', 'TWO', 'Two');
 
 insert into public.manager_scopes (organization_id, manager_user_id, department_id, branch_id) values
@@ -40,6 +41,7 @@ insert into public.employee_profiles (
 ) values
   ('14000000-0000-0000-0000-000000000001', '11000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000003', 'EMP-1', '1000000001', 'Employee One', '12000000-0000-0000-0000-000000000001', '13000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000002'),
   ('14000000-0000-0000-0000-000000000002', '11000000-0000-0000-0000-000000000001', null, 'EMP-2', '1000000002', 'Employee Two', '12000000-0000-0000-0000-000000000001', '13000000-0000-0000-0000-000000000001', null),
+  ('14000000-0000-0000-0000-000000000003', '11000000-0000-0000-0000-000000000001', null, 'EMP-3', '1000000003', 'Employee Three Other Dept', '12000000-0000-0000-0000-000000000001', '13000000-0000-0000-0000-000000000002', null),
   ('24000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'EMP-X', '2000000001', 'Other Tenant', '22000000-0000-0000-0000-000000000001', '23000000-0000-0000-0000-000000000001', null);
 
 insert into public.audit_logs (organization_id, action, entity_type)
@@ -70,7 +72,7 @@ end $$;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true);
 do $$ begin
-  if (select count(*) from public.employee_profiles) <> 2 then
+  if (select count(*) from public.employee_profiles) <> 3 then
     raise exception 'administrator employee scope failed';
   end if;
   if (select count(*) from public.audit_logs) <> 1 then
@@ -86,12 +88,20 @@ end $$;
 
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000002', true);
 do $$ begin
-  if (select count(*) from public.employee_profiles) <> 1 then
+  -- Department-wide manager access: sees both Employee One and Two in Dept One
+  if (select count(*) from public.employee_profiles) <> 2 then
     raise exception 'manager scope failed';
+  end if;
+  -- Must NOT see Employee Three in unauthorized department
+  if exists (
+    select 1 from public.employee_profiles where id = '14000000-0000-0000-0000-000000000003'
+  ) then
+    raise exception 'manager saw employee in unauthorized department';
   end if;
   if (select count(*) from public.audit_logs) <> 0 then
     raise exception 'manager audit isolation failed';
   end if;
+  -- Manager can write weekly_offs for employee in assigned department
   insert into public.weekly_offs (
     organization_id, employee_id, weekday, effective_from
   ) values (
@@ -100,12 +110,13 @@ do $$ begin
     5,
     current_date
   );
+  -- Forbidden write: manager cannot write weekly_offs for employee in unauthorized department
   begin
     insert into public.weekly_offs (
       organization_id, employee_id, weekday, effective_from
     ) values (
       '11000000-0000-0000-0000-000000000001',
-      '14000000-0000-0000-0000-000000000002',
+      '14000000-0000-0000-0000-000000000003',
       6,
       current_date
     );

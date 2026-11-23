@@ -25,7 +25,7 @@ insert into public.organizations (id, name, slug, timezone) values
 insert into public.organization_memberships (organization_id, user_id, role_code, status) values
   ('81000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001', 'administrator', 'active'),
   ('81000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000002', 'manager', 'active'),
-  ('81000000-0000-0000-0000-000000000003', '80000000-0000-0000-0000-000000000003', 'manager', 'active'),
+  ('81000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000003', 'manager', 'active'),
   ('81000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000004', 'manager', 'suspended'),
   ('81000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000005', 'employee', 'active'),
   ('81000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000006', 'employee', 'active'),
@@ -174,7 +174,7 @@ begin
   end;
 end $$;
 
--- D. Suspended Manager: ZERO Access
+-- D. Suspended Manager: ZERO Access across direct queries, helper functions, and reporting
 select set_config('request.jwt.claim.sub', '80000000-0000-0000-0000-000000000004', true);
 
 do $$
@@ -191,6 +191,21 @@ begin
   if v_dept_count <> 0 then
     raise exception 'TEST FAILED: Suspended manager must see 0 departments, saw %', v_dept_count;
   end if;
+
+  -- Verify private.can_access_employee returns false for suspended manager
+  if private.can_access_employee('81000000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000001') then
+    raise exception 'TEST FAILED: Suspended manager must not have can_access_employee access';
+  end if;
+
+  -- Verify reporting functions reject suspended manager immediately
+  begin
+    perform public.get_dashboard_trends(
+      '81000000-0000-0000-0000-000000000001', current_date, 7
+    );
+    raise exception 'TEST FAILED: Suspended manager must not execute get_dashboard_trends';
+  exception
+    when insufficient_privilege then null;
+  end;
 end $$;
 
 -- E. Reassignment & Revocation Testing
@@ -230,6 +245,30 @@ begin
   if exists (select 1 from public.employee_profiles where id = '84000000-0000-0000-0000-000000000001') then
     raise exception 'TEST FAILED: Manager A must NO LONGER see Employee A1 (revocation failed)';
   end if;
+
+  -- Verify can_access_employee immediately revokes Dept A and grants Dept B
+  if private.can_access_employee('81000000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000001') then
+    raise exception 'TEST FAILED: can_access_employee must be revoked for old department A1';
+  end if;
+
+  if not private.can_access_employee('81000000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000002') then
+    raise exception 'TEST FAILED: can_access_employee must be granted for new department B1';
+  end if;
+
+  -- Verify forbidden write to revoked employee A1 fails
+  begin
+    insert into public.weekly_offs (
+      organization_id, employee_id, weekday, effective_from
+    ) values (
+      '81000000-0000-0000-0000-000000000001',
+      '84000000-0000-0000-0000-000000000001',
+      6,
+      current_date
+    );
+    raise exception 'TEST FAILED: Manager A must not write to revoked employee A1';
+  exception
+    when insufficient_privilege then null;
+  end;
 end $$;
 
 -- F. Multi-Department Assignment Preserving Existing Scopes
@@ -279,7 +318,7 @@ begin
     );
     raise exception 'TEST FAILED: Admin 2 must NOT be allowed to assign Org 1 manager';
   exception
-    when not_found or insufficient_privilege or query_canceled then null;
+    when no_data_found or insufficient_privilege or query_canceled then null;
   end;
 end $$;
 

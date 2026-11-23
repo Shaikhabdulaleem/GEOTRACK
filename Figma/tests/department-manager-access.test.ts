@@ -242,3 +242,41 @@ test('edge functions protect credentials, prevent timing enumeration, and check 
   assert.match(resetManager, /must_change_password: true/i, 'Require password change on reset');
   assert.match(resetManager, /manager_activity_logs/i, 'Must audit manager password reset');
 });
+
+// ── 9. Organization Service RPC Enforcement Audit ────────────────────────────
+test('organization service enforces validated administrator RPCs with no unsafe direct table writes', async () => {
+  const serviceCode = await read('src/services/organization.service.ts');
+
+  // Verify atomic RPCs are called
+  assert.match(serviceCode, /client\.rpc\('admin_update_manager_status'/);
+  assert.match(serviceCode, /client\.rpc\('admin_assign_manager_departments'/);
+  assert.match(serviceCode, /client\.rpc\('admin_set_department_primary_manager'/);
+
+  // Verify absence of unsafe direct-write fallbacks
+  assert.doesNotMatch(serviceCode, /client\.from\('manager_profiles'\)\.update/);
+  assert.doesNotMatch(serviceCode, /client\.from\('manager_scopes'\)\.delete/);
+  assert.doesNotMatch(serviceCode, /client\.from\('manager_scopes'\)\.insert/);
+});
+
+// ── 10. Database SQL Test Suite Fixture Integrity Audit ──────────────────────
+test('SQL tests verify department-wide scoping, tenant isolation, and immediate revocation', async () => {
+  const [rlsSmoke, deptManagerAccess] = await Promise.all([
+    read('../supabase/tests/rls_smoke.sql'),
+    read('../supabase/tests/department_manager_access.sql'),
+  ]);
+
+  // rls_smoke verifies department-wide access (2 employees in scoped dept) and unauthorized dept employee
+  assert.match(rlsSmoke, /Department-wide manager access/i);
+  assert.match(rlsSmoke, /count\(\*\) from public\.employee_profiles\) <> 2/);
+  assert.match(rlsSmoke, /manager saw employee in unauthorized department/i);
+  assert.match(rlsSmoke, /manager wrote outside assigned scope/i);
+
+  // department_manager_access fixture foreign key integrity
+  assert.doesNotMatch(deptManagerAccess, /81000000-0000-0000-0000-000000000003/, 'Must not have invalid org ID in memberships');
+
+  // department_manager_access suspension and reassignment revocation
+  assert.match(deptManagerAccess, /Suspended manager must see 0 employees/i);
+  assert.match(deptManagerAccess, /Suspended manager must not have can_access_employee access/i);
+  assert.match(deptManagerAccess, /can_access_employee must be revoked for old department A1/i);
+  assert.match(deptManagerAccess, /Manager A must not write to revoked employee A1/i);
+});
