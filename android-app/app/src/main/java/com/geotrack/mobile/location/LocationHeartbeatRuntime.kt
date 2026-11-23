@@ -15,6 +15,7 @@ import com.geotrack.mobile.core.common.AppResult
 import com.geotrack.mobile.core.session.WorkerSessionBootstrapper
 import com.geotrack.mobile.domain.repository.AttendanceRepository
 import com.geotrack.mobile.domain.repository.SessionRepository
+import com.geotrack.mobile.phoneusage.PhoneUsageScheduler
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.firstOrNull
@@ -81,6 +82,9 @@ class LocationHeartbeatWorker @AssistedInject constructor(
             a is AppResult.Success && a.value?.checkInAt != null && a.value?.checkOutAt == null
         }
         if (!hasOpenSession) return Result.success()
+
+        // Sync phone usage telemetry periodically during active shift
+        PhoneUsageScheduler.enqueueSync(applicationContext)
 
         // A missing fix this cycle is fine; the next heartbeat will try again.
         val location = locationTracker.getCurrentLocation() ?: return Result.success()

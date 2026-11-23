@@ -20,6 +20,7 @@ import android.content.Context
 import com.geotrack.mobile.core.security.DeviceIdentity
 import com.geotrack.mobile.location.OfflineAttendanceSyncScheduler
 import com.geotrack.mobile.location.hasNetworkConnection
+import com.geotrack.mobile.phoneusage.PhoneUsageScheduler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -287,6 +288,7 @@ class SupabaseAttendanceRepository @Inject constructor(
                  return AppResult.Failure(com.geotrack.mobile.core.common.AppError.Unknown("You are outside your assigned work location."))
             }
             database.offlineAttendanceDao().upsert(OfflineAttendanceEventEntity(localEventId.toString(), organizationId, employeeId, actionType, eventTime.toEpochMilli(), eventTime.toString(), latitude, longitude, accuracyMeters, isMock, geofence.id, first.validation_status, "SYNCED", 0, null, first.event_id, System.currentTimeMillis()))
+            PhoneUsageScheduler.enqueueSync(appContext)
             AppResult.Success(Unit)
         } catch (e: Exception) {
             if (!appContext.hasNetworkConnection()) {

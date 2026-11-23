@@ -39,9 +39,17 @@ class PhoneUsageScheduler @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     fun onAuthenticated() {
+        enqueueSync(context)
         val manager = WorkManager.getInstance(context)
-        manager.enqueueUniqueWork("phone-usage-sync-now", ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<PhoneUsageSyncWorker>().build())
-        manager.enqueueUniquePeriodicWork("phone-usage-sync", ExistingPeriodicWorkPolicy.UPDATE, PeriodicWorkRequestBuilder<PhoneUsageSyncWorker>(6, TimeUnit.HOURS).build())
+        manager.enqueueUniquePeriodicWork(
+            "phone-usage-sync",
+            ExistingPeriodicWorkPolicy.UPDATE,
+            PeriodicWorkRequestBuilder<PhoneUsageSyncWorker>(15, TimeUnit.MINUTES).build()
+        )
+    }
+
+    fun syncNow() {
+        enqueueSync(context)
     }
 
     suspend fun syncNowAndWait(): Boolean {
@@ -58,6 +66,17 @@ class PhoneUsageScheduler @Inject constructor(
         WorkManager.getInstance(context).apply {
             cancelUniqueWork("phone-usage-sync-now")
             cancelUniqueWork("phone-usage-sync")
+        }
+    }
+
+    companion object {
+        fun enqueueSync(context: Context) {
+            val manager = WorkManager.getInstance(context)
+            manager.enqueueUniqueWork(
+                "phone-usage-sync-now",
+                ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<PhoneUsageSyncWorker>().build()
+            )
         }
     }
 }

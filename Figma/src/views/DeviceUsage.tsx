@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Smartphone, AlertTriangle, Info, Calendar, ExternalLink } from 'lucide-react';
+import { Smartphone, AlertTriangle, Info, Calendar, ExternalLink, RefreshCw, Radio } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../auth/AuthContext';
+import { getSupabaseClient } from '../lib/supabase';
 import { toAppError } from '../lib/errors';
 import Avatar from '../components/Avatar';
 import { deviceService } from '../services/device.service';
@@ -71,14 +72,22 @@ export default function DeviceUsage() {
   const [departmentId, setDepartmentId] = useState('');
   const [weeklyUsage, setWeeklyUsage] = useState<Array<{ day: string; avg: number }>>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
 
-  useEffect(() => {
+  const fetchEmployees = useCallback(async (isSilent = false) => {
     if (!activeMembership) return;
-    let mounted = true;
-    setLoading(true);
+    if (!isSilent) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+    setError(null);
 
-    const fetchEmployees = async () => {
+    try {
       const [allProfiles, usage, devices, assignments, departmentData] = await Promise.all([
         employeeService.listAll({ organizationId: activeMembership.organization_id }),
         deviceService.getDashboardUsage(activeMembership.organization_id, selectedDate),
@@ -190,23 +199,78 @@ export default function DeviceUsage() {
         };
       });
 
-      if (mounted) {
+      if (mountedRef.current) {
         setEmployees(mapped);
         setDepartments(departmentData.filter(department => department.status === 'active'));
         setWeeklyUsage(weekly);
+        setLastRefreshedAt(new Date());
       }
+    } catch (err) {
+      if (mountedRef.current) setError(toAppError(err).message);
+    } finally {
+      if (mountedRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
+  }, [activeMembership, departmentId, selectedDate]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void fetchEmployees(false);
+
+    if (!activeMembership) return;
+    const client = getSupabaseClient();
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const triggerRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        void fetchEmployees(true);
+      }, 1000);
     };
 
-    fetchEmployees()
-      .catch(err => {
-        if (mounted) setError(toAppError(err).message);
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
+    const channel = client
+      .channel(`device-usage-rt-${activeMembership.organization_id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'phone_usage_records',
+          filter: `organization_id=eq.${activeMembership.organization_id}`,
+        },
+        triggerRefresh,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'employee_devices',
+          filter: `organization_id=eq.${activeMembership.organization_id}`,
+        },
+        triggerRefresh,
+      )
+      .subscribe((status) => {
+        if (mountedRef.current) {
+          setIsRealtimeConnected(status === 'SUBSCRIBED');
+        }
       });
 
-    return () => { mounted = false; };
-  }, [activeMembership, departmentId, selectedDate]);
+    // Auto-refresh poll every 30 seconds when viewing today's live shift
+    const intervalTimer = setInterval(() => {
+      if (selectedDate === todayStr) {
+        void fetchEmployees(true);
+      }
+    }, 30000);
+
+    return () => {
+      mountedRef.current = false;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      clearInterval(intervalTimer);
+      void client.removeChannel(channel);
+    };
+  }, [activeMembership, fetchEmployees, selectedDate, todayStr]);
 
   const withUsage = employees.filter(e => e.dataStatus === 'available' || e.dataStatus === 'partial_data');
   const avgUsage = withUsage.length > 0 ? Math.round(withUsage.reduce((s, e) => s + e.phone, 0) / withUsage.length) : 0;
@@ -219,10 +283,38 @@ export default function DeviceUsage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-white">Device Usage During Shift</h1>
-          <p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>Company-managed devices only · Active shift hours</p>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold text-white">Device Usage During Shift</h1>
+            <span
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium"
+              style={{
+                background: isRealtimeConnected ? 'rgba(16,185,129,0.12)' : 'rgba(100,116,139,0.15)',
+                color: isRealtimeConnected ? '#10b981' : '#94a3b8',
+                border: `1px solid ${isRealtimeConnected ? 'rgba(16,185,129,0.3)' : 'rgba(100,116,139,0.3)'}`,
+              }}
+              title={isRealtimeConnected ? 'Real-time telemetry subscription active' : 'Connecting to live events...'}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isRealtimeConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'}`} />
+              {isRealtimeConnected ? 'Live Real-time' : 'Connecting...'}
+            </span>
+          </div>
+          <p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>
+            Company-managed devices only · Active shift hours
+            {refreshing && <span className="ml-2 text-cyan-400 animate-pulse">Updating live...</span>}
+          </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void fetchEmployees(false)}
+            disabled={loading || refreshing}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-white/10 transition disabled:opacity-50"
+            style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#93c5fd' }}
+            title={`Last refreshed at ${lastRefreshedAt.toLocaleTimeString()}`}
+          >
+            <RefreshCw size={12} className={refreshing ? 'animate-spin text-cyan-400' : ''} />
+            <span>Sync Live</span>
+          </button>
           <div className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
             <Calendar size={13} style={{ color: '#4b6a8a' }} />
             <input
