@@ -3,7 +3,9 @@ import type { FcActivityStandardRow, FcDailyManpowerProductivityRow } from '../t
 import {
   getEffectiveApprovedOvertimeMinutes,
   getOffDayOvertimeHours,
+  isEmployeeActiveOnDate,
 } from './employee-status.ts';
+import type { EmployeeProfileRow, ResolvedScheduleRow } from '../types/database.ts';
 
 export interface FcEmployeeMetric {
   key: string; employeeId: string | null; employeeName: string; packerLabels: string[];
@@ -146,11 +148,29 @@ export interface FcEmployeeOvertimeSummary {
   employeeId: string;
   employeeName: string;
   employeeCode: string;
+  laborClass: 'dlp' | 'non_dlp';
   employmentSource: 'own' | '3pl';
   approvedOvertimeHours: number;
   otRate: number;
   approvedOvertimeCost: number;
+  daysCount: number;
   source: 'overtime_record' | 'off_day_compensation' | 'transfer';
+}
+
+export interface FcOvertimeAllocation {
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  laborClass: 'dlp' | 'non_dlp';
+  employmentSource: 'own' | '3pl';
+  regularHours: number;
+  regularUnitsCapacity: number;
+  hours: number;
+  maxOtHours: number;
+  totalShiftHours: number;
+  hourlyCost: number;
+  totalCost: number;
+  status: 'active' | 'capped' | 'regular_only' | 'ineligible';
 }
 
 export interface FcClientVolumeSummary {
@@ -198,6 +218,7 @@ export interface FcManpowerDashboardModel {
   actualOvertimeHours: number; actualOvertimeCost: number; overtimeCostSaved: number;
   totalApprovedOtEmployees: number;
   approvedOvertimeByEmployee: FcEmployeeOvertimeSummary[];
+  overtimeAllocations: FcOvertimeAllocation[];
   b2cUpt: number | null; b2bUpt: number | null; closingStorage: number;
 }
 
@@ -228,6 +249,15 @@ function resolveFcEmpOtRate(
   }
   const base = setting?.employment_source === '3pl' ? threePlRate : ownRate;
   return base > 0 ? base : (ownRate || threePlRate || 0);
+}
+
+function netScheduleHours(schedule: ResolvedScheduleRow | undefined, fallbackHours: number): number {
+  if (!schedule || schedule.state !== 'working' || !schedule.start_time || !schedule.end_time) return fallbackHours;
+  const [startHour, startMinute] = schedule.start_time.split(':').map(Number);
+  const [endHour, endMinute] = schedule.end_time.split(':').map(Number);
+  let minutes = endHour * 60 + endMinute - (startHour * 60 + startMinute);
+  if (schedule.crosses_midnight || minutes <= 0) minutes += 24 * 60;
+  return Math.max(0, minutes - (schedule.break_minutes ?? 0)) / 60;
 }
 
 function scopeManpowerDay(day: FcDailyManpowerProductivityRow, channelFilter: FcChannelFilter): FcDailyManpowerProductivityRow {
@@ -340,6 +370,11 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
     .filter(day => day.status === 'draft')
     .map(day => day.work_date);
 
+  const employeeRegularHoursMap = new Map<string, number>();
+  const employeeRegularUnitsMap = new Map<string, number>();
+  const employeeAllocationTotals = new Map<string, number>();
+  const employeeScheduledDaysMap = new Map<string, number>();
+
   const daily: FcManpowerDayModel[] = scopedDays.map(day => {
     const requiredDlp = standards.reduce((sum, standard) => sum + requiredFor(day, standard), 0);
     const absenteeismBuffer = requiredDlp * (absencePercent / 100);
@@ -371,6 +406,49 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
     const additional3pl = day.available_hours > 0 ? Math.ceil(uncoveredHours / day.available_hours) : 0;
     const otRequiredPerPerson = otEligibleDlp > 0 ? overtimeRecommendedHours / otEligibleDlp : 0;
     const overtimeRecommendedCost = overtimeRecommendedHours * avgOtRate;
+
+    // Distribute regular hours, regular units capacity, and required OT across scheduled/active DLP employees for this day
+    const activeDlpEmployees = (workspace.employees ?? []).filter(emp => {
+      const setting = empSettingMap.get(emp.id);
+      const isDlp = setting ? setting.labor_class === 'dlp' : !/manager|supervisor|security|housekeep|administrat|coordinator|team lead/i.test(emp.job_title ?? '');
+      return isDlp && isEmployeeActiveOnDate(emp as EmployeeProfileRow, day.work_date);
+    });
+    const hasConfiguredDaySchedule = activeDlpEmployees.some(emp => {
+      const sched = workspace.schedules?.[emp.id]?.find(row => row.work_date === day.work_date);
+      return sched && sched.state !== 'unassigned';
+    });
+    const dayScheduledEmployees = activeDlpEmployees
+      .map(emp => ({
+        emp,
+        sched: workspace.schedules?.[emp.id]?.find(row => row.work_date === day.work_date),
+        setting: empSettingMap.get(emp.id),
+      }))
+      .filter(({ sched }) => !hasConfiguredDaySchedule || sched?.state === 'working');
+
+    const empDayRegHours = dayScheduledEmployees.map(({ emp, sched, setting }) => ({
+      id: emp.id,
+      eligible: setting?.overtime_eligible ?? true,
+      regHours: hasConfiguredDaySchedule ? netScheduleHours(sched, day.available_hours) : day.available_hours,
+    }));
+    const totalDayRegHours = empDayRegHours.reduce((s, item) => s + item.regHours, 0);
+    empDayRegHours.forEach(item => {
+      employeeScheduledDaysMap.set(item.id, (employeeScheduledDaysMap.get(item.id) ?? 0) + 1);
+      employeeRegularHoursMap.set(item.id, (employeeRegularHoursMap.get(item.id) ?? 0) + item.regHours);
+      const unitShare = totalDayRegHours > 0 ? Math.round(regularUnitsCapacity * (item.regHours / totalDayRegHours)) : 0;
+      employeeRegularUnitsMap.set(item.id, (employeeRegularUnitsMap.get(item.id) ?? 0) + unitShare);
+    });
+
+    if (overtimeRecommendedHours > 0) {
+      const eligibleForOt = empDayRegHours.filter(item => item.eligible);
+      let remainingOt = overtimeRecommendedHours;
+      if (eligibleForOt.length > 0 && maxOtPerDay > 0) {
+        const perEmpOt = Math.min(maxOtPerDay, remainingOt / eligibleForOt.length);
+        eligibleForOt.forEach(item => {
+          employeeAllocationTotals.set(item.id, (employeeAllocationTotals.get(item.id) ?? 0) + perEmpOt);
+          remainingOt -= perEmpOt;
+        });
+      }
+    }
 
     const dayOtMap = overtimeByDateAndEmp.get(day.work_date);
     let actualOvertimeHours = 0;
@@ -448,20 +526,57 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
       if (prev) {
         prev.approvedOvertimeHours += addedHours;
         prev.approvedOvertimeCost += addedCost;
+        prev.daysCount += 1;
       } else {
         empSummaryMap.set(empId, {
           employeeId: empId,
           employeeName: emp?.full_name ?? 'FC Employee',
           employeeCode: emp?.employee_code ?? '',
+          laborClass: setting?.labor_class === 'non_dlp' ? 'non_dlp' : 'dlp',
           employmentSource: (setting?.employment_source === '3pl' ? '3pl' : 'own'),
           approvedOvertimeHours: addedHours,
           otRate: rate,
           approvedOvertimeCost: addedCost,
+          daysCount: 1,
           source: entry.source,
         });
       }
     });
   });
+
+  const overtimeAllocations: FcOvertimeAllocation[] = [...employeeScheduledDaysMap.keys()].map(employeeId => {
+    const emp = empById.get(employeeId);
+    const setting = empSettingMap.get(employeeId);
+    const hours = employeeAllocationTotals.get(employeeId) ?? 0;
+    const regularHours = employeeRegularHoursMap.get(employeeId) ?? 0;
+    const regularUnitsCapacity = employeeRegularUnitsMap.get(employeeId) ?? 0;
+    const daysWorked = employeeScheduledDaysMap.get(employeeId) ?? 1;
+    const maxPeriodCap = maxOtPerDay * daysWorked;
+    const otRate = resolveFcEmpOtRate(setting, ownOtRate, threePlOtRate);
+    const eligible = setting?.overtime_eligible ?? true;
+    const status: FcOvertimeAllocation['status'] = !eligible
+      ? 'ineligible'
+      : hours >= maxPeriodCap && maxPeriodCap > 0
+        ? 'capped'
+        : hours > 0
+          ? 'active'
+          : 'regular_only';
+    return {
+      employeeId,
+      employeeName: emp?.full_name ?? 'FC Employee',
+      employeeCode: emp?.employee_code ?? '',
+      laborClass: (setting?.labor_class === 'non_dlp' ? 'non_dlp' : 'dlp') as 'dlp' | 'non_dlp',
+      employmentSource: (setting?.employment_source === '3pl' ? '3pl' : 'own') as 'own' | '3pl',
+      regularHours,
+      regularUnitsCapacity,
+      hours,
+      maxOtHours: maxPeriodCap,
+      totalShiftHours: regularHours + hours,
+      hourlyCost: otRate,
+      totalCost: hours * otRate,
+      status,
+    };
+  }).sort((a, b) => b.hours - a.hours || b.regularUnitsCapacity - a.regularUnitsCapacity || a.employeeName.localeCompare(b.employeeName));
 
   const clientMap = new Map<string, {
     clientName: string; inbound: number; outboundB2c: number; outboundB2b: number;
@@ -558,6 +673,7 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
     overtimeCostSaved: Math.max(0, overtimeRecommendedCost - actualOvertimeCost),
     totalApprovedOtEmployees: empSummaryMap.size,
     approvedOvertimeByEmployee: [...empSummaryMap.values()].sort((a, b) => b.approvedOvertimeHours - a.approvedOvertimeHours),
+    overtimeAllocations,
     b2cUpt: b2cOrders ? b2cQuantity / b2cOrders : null,
     b2bUpt: b2bOrders ? b2bQuantity / b2bOrders : null,
     closingStorage: daily.at(-1)?.closingStorage ?? 0,
@@ -624,8 +740,25 @@ export function buildFcDayPreview(
   const requiredHours = requiredEmployees * availHours;
 
   const wf = (workspace.workforceDays ?? []).find(w => w.workDate === workDate);
-  const scheduledDlp = wf ? wf.ownDlp + wf.contractDlp : (workspace.employees ?? []).length;
-  const regularCapacityHours = wf ? wf.availableLaborHours : scheduledDlp * availHours;
+  const fcDeptId = workspace.department?.id;
+  let transfersInHours = 0;
+  let transfersOutHours = 0;
+  (workspace.transfers ?? []).forEach(t => {
+    if (t.status === 'cancelled' || t.transfer_date !== workDate) return;
+    const isIntoFc = t.to_department_id === fcDeptId || t.to_department?.name?.toUpperCase() === 'FC';
+    const isOutOfFc = t.from_department_id === fcDeptId || t.from_department?.name?.toUpperCase() === 'FC';
+    if (isIntoFc) transfersInHours += (t.transferred_minutes || 0) / 60;
+    else if (isOutOfFc) transfersOutHours += (t.transferred_minutes || 0) / 60;
+  });
+
+  const activeDlpCount = (workspace.employees ?? []).filter(emp => {
+    const s = (workspace.employeeSettings ?? []).find(item => item.employee_id === emp.id);
+    const isDlp = s ? s.labor_class === 'dlp' : !/manager|supervisor|security|housekeep|administrat|coordinator|team lead/i.test(emp.job_title ?? '');
+    return isDlp && isEmployeeActiveOnDate(emp as EmployeeProfileRow, workDate);
+  }).length;
+  const scheduledDlp = wf ? wf.ownDlp + wf.contractDlp : activeDlpCount;
+  const baseRegularHours = wf ? wf.availableLaborHours : scheduledDlp * availHours;
+  const regularCapacityHours = Math.max(0, baseRegularHours + transfersInHours - transfersOutHours);
 
   const regularUnitsCapacity = requiredHours > 0
     ? Math.round(totalThroughput * Math.min(1, regularCapacityHours / requiredHours))
@@ -638,7 +771,11 @@ export function buildFcDayPreview(
   const uncoveredHours = Math.max(0, shortageHours - overtimeHours);
   const additional3pl = availHours > 0 ? Math.ceil(uncoveredHours / availHours) : 0;
   const otRequiredPerPerson = scheduledDlp > 0 ? overtimeHours / scheduledDlp : 0;
-  const avgRate = ownRate || threePlRate || 0;
+  const ownCount = wf ? wf.ownDlp : activeDlpCount;
+  const threePlCount = wf ? wf.contractDlp : 0;
+  const avgRate = (ownCount + threePlCount) > 0
+    ? (ownCount * ownRate + threePlCount * threePlRate) / (ownCount + threePlCount)
+    : (ownRate || threePlRate || 0);
   const overtimeCost = overtimeHours * avgRate;
 
   return {

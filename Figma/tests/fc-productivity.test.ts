@@ -6,7 +6,7 @@ import readExcelFile from 'read-excel-file/node';
 import { parseFcOrderSheets, type FcImportSheet } from '../src/lib/fc-orders-import.ts';
 import { parseFcManpowerSheets } from '../src/lib/fc-manpower-import.ts';
 import { parseFcOperationalFiles } from '../src/lib/fc-operational-import.ts';
-import { buildFcDashboard, buildFcManpowerDashboard } from '../src/lib/fc-productivity-model.ts';
+import { buildFcDashboard, buildFcDayPreview, buildFcManpowerDashboard } from '../src/lib/fc-productivity-model.ts';
 import type { FcWorkspace } from '../src/services/fc-productivity.service.ts';
 
 const headers = [
@@ -181,4 +181,63 @@ test('daily operational CSV exports aggregate the 15–21 Nov FC source totals',
   assert.equal(preview.totals.b2c_orders, 1_309);
   assert.equal(preview.totals.b2b_orders, 21);
   assert.equal(preview.totals.vas_quantity, 4_731);
+});
+
+test('FC manpower dashboard computes per-employee capacity & OT allocations and day preview accounts for transfers', () => {
+  const workspace = {
+    department: { id: 'fc-dept', name: 'FC' },
+    standards: [
+      { id: 's1', activity_code: 'outbound_b2c', activity_name: 'Outbound B2C', volume_driver: 'outbound_b2c', units_per_worker: 100, target_uom: 'hour', is_active: true },
+    ],
+    manpowerDays: [
+      {
+        id: 'm1', work_date: '2026-11-15', available_hours: 8,
+        inbound_quantity: 0, return_rto_quantity: 0, return_cir_quantity: 0,
+        outbound_b2c_quantity: 2000, outbound_b2b_quantity: 0,
+        vas_quantity: 0, gift_wrap_quantity: 0, other_activity_quantity: 0,
+        b2c_orders: 1000, b2b_orders: 0, closing_storage_quantity: 0,
+        status: 'finalized',
+      },
+    ],
+    workforceDays: [
+      { workDate: '2026-11-15', ownDlp: 2, contractDlp: 0, nonDlp: 0, presentDlp: 2, absentDlp: 0, availableLaborHours: 16, activeRosterDlp: 2, source: 'active_roster' },
+    ],
+    employees: [
+      { id: 'e1', employee_code: 'FC-01', full_name: 'Emp One', employment_status: 'active', job_title: 'Warehouse Associate' },
+      { id: 'e2', employee_code: 'FC-02', full_name: 'Emp Two', employment_status: 'active', job_title: 'Warehouse Associate' },
+    ],
+    employeeSettings: [
+      { employee_id: 'e1', labor_class: 'dlp', employment_source: 'own', overtime_eligible: true, overtime_hourly_cost: 30 },
+      { employee_id: 'e2', labor_class: 'dlp', employment_source: 'own', overtime_eligible: false, overtime_hourly_cost: null },
+    ],
+    settings: {
+      standard_hours_per_day: 8,
+      planned_absence_percent: 0,
+      max_overtime_hours_per_day: 3,
+      overtime_hourly_cost_own: 25,
+      overtime_hourly_cost_3pl: 20,
+    },
+    transfers: [
+      {
+        id: 't1', employee_id: 'e3', from_department_id: 'other', to_department_id: 'fc-dept',
+        transfer_date: '2026-11-15', transferred_minutes: 120, overtime_minutes: 0, status: 'approved',
+        from_department: { name: 'Mailroom' }, to_department: { name: 'FC' },
+      },
+    ],
+    week: null, packers: [], sellers: [], mappings: [], sellerSupplements: [], capacity: null, adhocTasks: [],
+  } as unknown as FcWorkspace;
+
+  const model = buildFcManpowerDashboard(workspace, 'all');
+  assert.equal(model.overtimeAllocations.length, 2);
+  const emp1 = model.overtimeAllocations.find(a => a.employeeId === 'e1');
+  const emp2 = model.overtimeAllocations.find(a => a.employeeId === 'e2');
+  assert.equal(emp1?.status, 'active');
+  assert.equal(emp1?.hours, 2);
+  assert.equal(emp1?.totalCost, 60);
+  assert.equal(emp2?.status, 'ineligible');
+  assert.equal(emp2?.hours, 0);
+
+  const preview = buildFcDayPreview(workspace, '2026-11-15', workspace.manpowerDays[0]);
+  assert.equal(preview.regularCapacityHours, 18); // 16 base + 2h transfer in
+  assert.equal(preview.overtimeHours, 2); // 20h needed - 18h regular
 });

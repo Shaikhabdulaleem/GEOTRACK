@@ -5,8 +5,8 @@ import { parseFcOrdersFile, type FcImportPreview } from '../../lib/fc-orders-imp
 import { parseFcOperationalFiles, type FcOperationalImportPreview } from '../../lib/fc-operational-import';
 import { fcProductivityService, type FcAdhocTaskInput, type FcCapacityMetricInput, type FcSellerSupplementInput, type FcWorkspace } from '../../services/fc-productivity.service';
 import { buildFcDashboard, buildFcDayPreview, buildFcManpowerDashboard, type FcChannelFilter } from '../../lib/fc-productivity-model';
-import { getEffectiveApprovedOvertimeMinutes, getOffDayOvertimeHours } from '../../lib/employee-status';
-import type { FcDailyManpowerProductivityRow } from '../../types/database';
+import { getEffectiveApprovedOvertimeMinutes, getOffDayOvertimeHours, isEmployeeActiveOnDate } from '../../lib/employee-status';
+import type { EmployeeProfileRow, FcDailyManpowerProductivityRow } from '../../types/database';
 import FcCalculatorCard from './FcCalculatorCard';
 import FcSetupPanel from './FcSetupPanel';
 
@@ -375,13 +375,19 @@ function ManpowerDashboard({ workspace, channelFilter = 'all', onOpenCalculator 
 
       {model.approvedOvertimeByEmployee.length > 0 && (
         <div className="border-t p-4" style={{ borderColor: '#1e3a5a' }}>
-          <div className="text-xs font-semibold text-white mb-2">Approved overtime by FC employee</div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-semibold text-white">Approved overtime by FC employee</div>
+            <div className="text-xs font-mono" style={{ color: '#10b981' }}>
+              {model.approvedOvertimeByEmployee.length} employee{model.approvedOvertimeByEmployee.length === 1 ? '' : 's'}
+            </div>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr style={{ background: '#122338', color: '#64748b' }}>
                   <th className="text-left px-3 py-2">Employee</th>
-                  <th className="text-left px-3 py-2">Source</th>
+                  <th className="text-left px-3 py-2">Classification</th>
+                  <th className="text-right px-3 py-2">OT Days</th>
                   <th className="text-right px-3 py-2">Approved OT Hours</th>
                   <th className="text-right px-3 py-2">OT Rate</th>
                   <th className="text-right px-3 py-2">Approved Cost</th>
@@ -390,8 +396,20 @@ function ManpowerDashboard({ workspace, channelFilter = 'all', onOpenCalculator 
               <tbody>
                 {model.approvedOvertimeByEmployee.map(emp => (
                   <tr key={emp.employeeId} className="border-t" style={{ borderColor: '#1e3a5a' }}>
-                    <td className="px-3 py-2 text-white">{emp.employeeName} <span style={{ color: '#64748b' }}>({emp.employeeCode})</span></td>
-                    <td className="px-3 py-2 uppercase text-[10px] font-semibold" style={{ color: emp.employmentSource === '3pl' ? '#c4b5fd' : '#93c5fd' }}>{emp.employmentSource}</td>
+                    <td className="px-3 py-2 text-white">
+                      {emp.employeeName}
+                      <div className="text-[10px]" style={{ color: '#64748b' }}>{emp.employeeCode}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="uppercase text-[10px] font-semibold px-2 py-0.5 rounded" style={{
+                        background: emp.laborClass === 'dlp' ? 'rgba(37,99,235,0.12)' : 'rgba(100,116,139,0.12)',
+                        color: emp.laborClass === 'dlp' ? '#93c5fd' : '#94a3b8',
+                        border: `1px solid ${emp.laborClass === 'dlp' ? 'rgba(37,99,235,0.25)' : 'rgba(100,116,139,0.25)'}`,
+                      }}>
+                        {emp.laborClass.toUpperCase()} · {emp.employmentSource.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono" style={{ color: '#93c5fd' }}>{emp.daysCount}</td>
                     <td className="px-3 py-2 text-right font-mono text-emerald-400">{n(emp.approvedOvertimeHours, 2)}h</td>
                     <td className="px-3 py-2 text-right font-mono">SAR {n(emp.otRate, 2)}/h</td>
                     <td className="px-3 py-2 text-right font-mono text-amber-400">SAR {n(emp.approvedOvertimeCost, 2)}</td>
@@ -403,6 +421,177 @@ function ManpowerDashboard({ workspace, channelFilter = 'all', onOpenCalculator 
         </div>
       )}
     </div>
+
+    <div className="rounded-xl overflow-hidden" style={panel}>
+      <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-3 border-b" style={{ borderColor: '#1e3a5a' }}>
+        <div>
+          <div className="font-semibold text-sm text-white">Suggested overtime allocation &amp; capacity per person using existing FC DLP</div>
+          <div className="text-xs mt-1" style={{ color: '#64748b' }}>
+            Workforce capacity achievable with regular hours vs overtime required per person to complete throughput ({n(model.throughput)} units).
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>Regular Capacity: </span>
+            <strong className="font-mono text-white">{n(model.totalRegularUnitsCapacity)} units</strong>
+            <span className="text-[10px] font-mono ml-1" style={{ color: '#93c5fd' }}>
+              ({model.throughput > 0 ? Math.round((model.totalRegularUnitsCapacity / model.throughput) * 100) : 100}%)
+            </span>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>Unmet (Needs OT): </span>
+            <strong className="font-mono" style={{ color: model.totalUnmetUnits > 0 ? '#f59e0b' : '#10b981' }}>
+              {n(model.totalUnmetUnits)} units
+            </strong>
+          </div>
+          <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+            <span style={{ color: '#94a3b8' }}>OT Req. / Person: </span>
+            <strong className="font-mono" style={{ color: model.averageOtRequiredPerPerson > 0 ? '#c4b5fd' : '#10b981' }}>
+              {n(model.averageOtRequiredPerPerson, 1)}h / person
+            </strong>
+            <span className="text-[10px] font-mono ml-1" style={{ color: '#94a3b8' }}>
+              (Total {n(model.overtimeRecommendedHours, 1)}h)
+            </span>
+          </div>
+          {onOpenCalculator && (
+            <button
+              type="button"
+              onClick={() => onOpenCalculator(model.throughput)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-blue-600 transition-colors"
+              style={{ background: '#2563eb', color: '#fff' }}
+              title="Open this workload in the Productivity Calculator"
+            >
+              <Calculator size={13} />
+              Simulate in Calculator
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ background: '#122338', color: '#64748b' }}>
+              <th className="text-left px-3 py-2">Employee</th>
+              <th className="text-left px-3 py-2">Classification</th>
+              <th className="text-right px-3 py-2">Regular Hours</th>
+              <th className="text-right px-3 py-2">Regular Capacity (Units)</th>
+              <th className="text-right px-3 py-2">Required OT</th>
+              <th className="text-right px-3 py-2">Total Shift Hours</th>
+              <th className="text-right px-3 py-2">Max Daily OT Limit</th>
+              <th className="text-right px-3 py-2">Est. OT Cost</th>
+              <th className="text-center px-3 py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {model.overtimeAllocations.length === 0 ? (
+              <tr>
+                <td colSpan={9} className="p-4 text-center text-xs" style={{ color: '#64748b' }}>
+                  No scheduled FC DLP employees found for this period.
+                </td>
+              </tr>
+            ) : (
+              model.overtimeAllocations.map(item => (
+                <tr key={item.employeeId} className="border-t" style={{ borderColor: '#1e3a5a' }}>
+                  <td className="px-3 py-2.5 text-white font-medium">
+                    {item.employeeName}
+                    <div className="text-[10px]" style={{ color: '#64748b' }}>{item.employeeCode}</div>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className="uppercase text-[10px] font-semibold px-2 py-0.5 rounded" style={{
+                      background: item.laborClass === 'dlp' ? 'rgba(37,99,235,0.12)' : 'rgba(100,116,139,0.12)',
+                      color: item.laborClass === 'dlp' ? '#93c5fd' : '#94a3b8',
+                      border: `1px solid ${item.laborClass === 'dlp' ? 'rgba(37,99,235,0.25)' : 'rgba(100,116,139,0.25)'}`,
+                    }}>
+                      {item.laborClass.toUpperCase()} · {item.employmentSource.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#93c5fd' }}>
+                    {n(item.regularHours, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#10b981' }}>
+                    {n(item.regularUnitsCapacity)} units
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: item.hours > 0 ? '#c4b5fd' : '#64748b' }}>
+                    {n(item.hours, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono text-white">
+                    {n(item.totalShiftHours, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#94a3b8' }}>
+                    {n(item.maxOtHours, 1)}h
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: item.totalCost > 0 ? '#f59e0b' : '#64748b' }}>
+                    {item.totalCost > 0 ? `SAR ${n(item.totalCost, 2)}` : '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold font-mono" style={{
+                      background: item.status === 'ineligible' ? 'rgba(239,68,68,0.12)' : item.status === 'capped' ? 'rgba(245,158,11,0.12)' : item.hours > 0 ? 'rgba(139,92,246,0.12)' : 'rgba(16,185,129,0.12)',
+                      color: item.status === 'ineligible' ? '#fca5a5' : item.status === 'capped' ? '#fcd34d' : item.hours > 0 ? '#c4b5fd' : '#6ee7b7',
+                      border: `1px solid ${item.status === 'ineligible' ? 'rgba(239,68,68,0.25)' : item.status === 'capped' ? 'rgba(245,158,11,0.25)' : item.hours > 0 ? 'rgba(139,92,246,0.25)' : 'rgba(16,185,129,0.25)'}`,
+                    }}>
+                      {item.status === 'ineligible' ? 'Ineligible' : item.status === 'capped' ? 'At Max Cap' : item.hours > 0 ? 'Within Cap' : 'Regular Only'}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {(workspace.transfers ?? []).filter(t => t.status !== 'cancelled').length > 0 && (
+      <div className="rounded-xl overflow-hidden" style={panel}>
+        <div className="px-4 py-3 flex items-center justify-between border-b" style={{ borderColor: '#1e3a5a' }}>
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400">
+              <ArrowLeftRight size={14} />
+            </span>
+            <div>
+              <div className="font-semibold text-white text-sm">FC Workforce Inter-Department Transfers</div>
+              <div className="text-xs" style={{ color: '#64748b' }}>
+                FC employees transferred to/from Mailroom or other operations during this period
+              </div>
+            </div>
+          </div>
+          <div className="text-xs font-mono">
+            <span style={{ color: '#94a3b8' }}>In: </span>
+            <strong className="text-emerald-400">+{n(model.totalTransferredInHours, 1)}h</strong>
+            <span className="mx-1.5" style={{ color: '#475569' }}>·</span>
+            <span style={{ color: '#94a3b8' }}>Out: </span>
+            <strong className="text-cyan-400">-{n(model.totalTransferredOutHours, 1)}h</strong>
+          </div>
+        </div>
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ background: '#122338', color: '#64748b' }}>
+              <th className="text-left px-4 py-2">Employee</th>
+              <th className="text-left px-4 py-2">From → To</th>
+              <th className="text-left px-4 py-2">Date</th>
+              <th className="text-right px-4 py-2">Transferred Hours</th>
+              <th className="text-right px-4 py-2">Overtime</th>
+              <th className="text-center px-4 py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(workspace.transfers ?? []).filter(t => t.status !== 'cancelled').map(t => (
+              <tr key={t.id} className="border-t" style={{ borderColor: '#1e3a5a' }}>
+                <td className="px-4 py-2 text-white font-medium">{t.employee?.full_name || 'Transferred Employee'} ({t.employee?.employee_code || ''})</td>
+                <td className="px-4 py-2 font-semibold text-emerald-300">{t.from_department?.name || 'FC'} → {t.to_department?.name || 'Department'}</td>
+                <td className="px-4 py-2 font-mono text-slate-300">{t.transfer_date}</td>
+                <td className="px-4 py-2 text-right font-mono font-bold text-white">{Math.round((t.transferred_minutes / 60) * 100) / 100}h</td>
+                <td className="px-4 py-2 text-right font-mono text-amber-300">{(t.overtime_minutes || 0) > 0 ? `+${Math.round(((t.overtime_minutes || 0) / 60) * 100) / 100}h OT` : '—'}</td>
+                <td className="px-4 py-2 text-center">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase" style={{ background: 'rgba(6,182,212,.15)', color: '#67e8f9' }}>
+                    {t.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
   </div>;
 }
 
@@ -417,56 +606,6 @@ function Dashboard({ workspace, channelFilter = 'all', onOpenCalculator }: { wor
     <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">{(['a2p','p2p','o2p','p2s','o2s'] as const).map(key=><Metric key={key} label={key.toUpperCase()} value={duration(model.cycleTimes[key].minutes)} detail={`${model.cycleTimes[key].samples.toLocaleString()} samples`} />)}</div>
     <div className="rounded-xl overflow-auto" style={panel}><div className="px-4 py-3 font-semibold text-white text-sm">Seller packed orders and UPT</div><table className="w-full text-xs min-w-[1050px]"><thead><tr style={{ background: '#122338', color: '#64748b' }}>{['Seller','B2B Orders','B2B Qty','B2B UPT','B2C Orders','B2C Qty','B2C UPT','Other Orders','Other Qty','Other UPT','Total Orders','Total Qty','Total UPT'].map(x=><th key={x} className="px-3 py-2 text-right first:text-left">{x}</th>)}</tr></thead><tbody>{model.sellers.map(row=><tr key={row.sellerName} className="border-t" style={{ borderColor: '#1e3a5a' }}><td className="px-3 py-2 text-white">{row.sellerName}</td><td className="px-3 py-2 text-right">{row.b2bOrders}</td><td className="px-3 py-2 text-right">{n(row.b2bQuantity)}</td><td className="px-3 py-2 text-right">{row.b2bOrders ? n(row.b2bQuantity/row.b2bOrders,2) : 'n.a.'}</td><td className="px-3 py-2 text-right">{row.b2cOrders}</td><td className="px-3 py-2 text-right">{n(row.b2cQuantity)}</td><td className="px-3 py-2 text-right">{row.b2cOrders ? n(row.b2cQuantity/row.b2cOrders,2) : 'n.a.'}</td><td className="px-3 py-2 text-right">{row.otherOrders}</td><td className="px-3 py-2 text-right">{n(row.otherQuantity)}</td><td className="px-3 py-2 text-right">{row.otherOrders ? n(row.otherQuantity/row.otherOrders,2) : 'n.a.'}</td><td className="px-3 py-2 text-right">{n(row.totalOrders)}</td><td className="px-3 py-2 text-right">{n(row.totalQuantity)}</td><td className="px-3 py-2 text-right">{row.totalOrders ? n(row.totalQuantity/row.totalOrders,2) : 'n.a.'}</td></tr>)}</tbody></table></div>
     <div className="grid lg:grid-cols-3 gap-4"><div className="rounded-xl overflow-hidden" style={panel}><div className="px-4 py-3 font-semibold text-white text-sm">Purchase orders and returns</div>{workspace.sellerSupplements.length ? workspace.sellerSupplements.map(row=><div key={row.id} className="grid grid-cols-4 gap-2 px-4 py-2 border-t text-xs" style={{ borderColor: '#1e3a5a' }}><span className="text-white">{row.seller_name}</span><span className="text-right">PO {n(row.purchase_order_units)}</span><span className="text-right">Return qty {n(row.return_order_units)}</span><span className="text-right">Orders {n(row.return_orders)}</span></div>) : <div className="p-4 text-xs" style={{ color: '#64748b' }}>No seller supplements entered.</div>}</div><div className="rounded-xl p-4" style={panel}><div className="font-semibold text-white text-sm mb-3">Capacity utilization</div>{capacity ? <div className="space-y-2 text-xs">{[['Bins',capacity.utilized_bins,capacity.capacity_bins],['Pallets',capacity.utilized_pallets,capacity.capacity_pallets],['Units',capacity.utilized_units,capacity.capacity_units],['CBM',capacity.utilized_cbm,capacity.capacity_cbm]].map(([label,used,total])=><div key={String(label)} className="flex justify-between"><span style={{ color: '#94a3b8' }}>{label}</span><span className="font-mono text-white">{n(Number(used))} / {n(Number(total))} · {pct(Number(used),Number(total))}</span></div>)}</div> : <div className="text-xs" style={{ color: '#64748b' }}>No capacity values entered.</div>}</div><div className="rounded-xl overflow-hidden" style={panel}><div className="px-4 py-3 font-semibold text-white text-sm">Ad-hoc task usage</div>{workspace.adhocTasks.length ? workspace.adhocTasks.map(row=><div key={row.id} className="flex justify-between px-4 py-2 border-t text-xs" style={{ borderColor: '#1e3a5a' }}><span className="text-white">{row.seller_name} · {row.task_name}</span><span className="font-mono">{n(row.usage,2)}</span></div>) : <div className="p-4 text-xs" style={{ color: '#64748b' }}>No ad-hoc tasks recorded.</div>}</div></div>
-    {model.transfers && model.transfers.records.length > 0 && (
-      <div className="rounded-xl overflow-hidden" style={panel}>
-        <div className="px-4 py-3 flex items-center justify-between border-b" style={{ borderColor: '#1e3a5a' }}>
-          <div className="flex items-center gap-2">
-            <span className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400">
-              <ArrowLeftRight size={14} />
-            </span>
-            <div>
-              <div className="font-semibold text-white text-sm">FC Workforce Inter-Department Transfers</div>
-              <div className="text-xs" style={{ color: '#64748b' }}>
-                FC employees transferred to support Mailroom or other operations during this week
-              </div>
-            </div>
-          </div>
-          <div className="text-xs">
-            <span style={{ color: '#94a3b8' }}>Transferred Out: </span>
-            <strong className="text-cyan-400 font-mono">{model.transfers.transfersOutHours}h</strong>
-            <span className="text-[10px] ml-1" style={{ color: '#64748b' }}>({model.transfers.transfersOutCount} workers)</span>
-          </div>
-        </div>
-        <table className="w-full text-xs">
-          <thead>
-            <tr style={{ background: '#122338', color: '#64748b' }}>
-              <th className="text-left px-4 py-2">FC Employee</th>
-              <th className="text-left px-4 py-2">Assigned Department</th>
-              <th className="text-left px-4 py-2">Date</th>
-              <th className="text-right px-4 py-2">Transferred Hours</th>
-              <th className="text-right px-4 py-2">Overtime</th>
-              <th className="text-center px-4 py-2">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {model.transfers.records.map(row => (
-              <tr key={row.id} className="border-t" style={{ borderColor: '#1e3a5a' }}>
-                <td className="px-4 py-2 text-white font-medium">{row.employeeName} ({row.employeeCode})</td>
-                <td className="px-4 py-2 font-semibold text-emerald-300">{row.toDepartment}</td>
-                <td className="px-4 py-2 font-mono text-slate-300">{row.date}</td>
-                <td className="px-4 py-2 text-right font-mono font-bold text-white">{row.hours}h</td>
-                <td className="px-4 py-2 text-right font-mono text-amber-300">{row.otHours > 0 ? `+${row.otHours}h OT` : '—'}</td>
-                <td className="px-4 py-2 text-center">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase" style={{ background: 'rgba(6,182,212,.15)', color: '#67e8f9' }}>
-                    {row.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    )}
   </div>;
 }
 
@@ -479,12 +618,13 @@ function ActivityRequirement({ workspace, channelFilter = 'all' }: { workspace: 
   </div>;
 }
 
-function ManpowerEntry({ organizationId, weekStart, fromDate, toDate, workspace, refresh, busy, setBusy }: { organizationId: string; weekStart: string; fromDate: string; toDate: string; workspace: FcWorkspace; refresh: () => Promise<void>; busy: boolean; setBusy: (v: boolean) => void }) {
+function ManpowerEntry({ organizationId, weekStart, selectedDate, fromDate, toDate, workspace, refresh, busy, setBusy }: { organizationId: string; weekStart: string; selectedDate: string; fromDate: string; toDate: string; workspace: FcWorkspace; refresh: () => Promise<void>; busy: boolean; setBusy: (v: boolean) => void }) {
   const [operationalPreview, setOperationalPreview] = useState<FcOperationalImportPreview | null>(null);
   const [pairedOrdersPreview, setPairedOrdersPreview] = useState<FcImportPreview | null>(null);
   const [syncPackerStats, setSyncPackerStats] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [workDate, setWorkDate] = useState(weekStart);
+  const [workDate, setWorkDate] = useState(selectedDate);
+  useEffect(() => { setWorkDate(selectedDate); }, [selectedDate]);
   const defaultHours = workspace.settings?.standard_hours_per_day ?? 8;
   const blank: Partial<FcDailyManpowerProductivityRow> = { available_hours: defaultHours, inbound_quantity: 0, return_rto_quantity: 0, return_cir_quantity: 0, outbound_b2c_quantity: 0, outbound_b2b_quantity: 0, vas_quantity: 0, gift_wrap_quantity: 0, other_activity_quantity: 0, b2c_orders: 0, b2b_orders: 0, closing_storage_quantity: 0, actual_own_dlp: 0, actual_contract_dlp: 0 };
   const [day, setDay] = useState<Partial<FcDailyManpowerProductivityRow>>(blank);
@@ -493,34 +633,63 @@ function ManpowerEntry({ organizationId, weekStart, fromDate, toDate, workspace,
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const preview = useMemo(() => buildFcDayPreview(workspace, workDate, day), [workspace, workDate, day]);
 
-  const dayApprovedOt = useMemo(() => {
+  const employeeOvertimeRows = useMemo(() => {
     const settingByEmp = new Map((workspace.employeeSettings ?? []).map(s => [s.employee_id, s]));
     const ownRate = workspace.settings?.overtime_hourly_cost_own ?? 0;
     const threePlRate = workspace.settings?.overtime_hourly_cost_3pl ?? 0;
     const attendance = workspace.attendance ?? [];
     const overtimeRecords = workspace.overtimeRecords ?? [];
     const offDayComps = workspace.offDayCompensations ?? [];
-    const rows: Array<{ id: string; name: string; code: string; hours: number; rate: number; cost: number; source: string }> = [];
-    workspace.employees.forEach(emp => {
-      const s = settingByEmp.get(emp.id);
-      const rate = s?.overtime_hourly_cost ?? (s?.employment_source === '3pl' ? threePlRate : ownRate);
-      const otRes = getEffectiveApprovedOvertimeMinutes(emp.id, workDate, attendance, overtimeRecords);
-      if (otRes.effectiveMinutes > 0) {
-        const hours = otRes.effectiveMinutes / 60;
-        rows.push({ id: `${emp.id}-ot`, name: emp.full_name, code: emp.employee_code, hours, rate, cost: hours * rate, source: s?.employment_source ?? 'own' });
-        return;
-      }
-      const offHrs = getOffDayOvertimeHours(emp.id, workDate, offDayComps);
-      if (offHrs > 0) {
-        rows.push({ id: `${emp.id}-off`, name: emp.full_name, code: emp.employee_code, hours: offHrs, rate, cost: offHrs * rate, source: s?.employment_source ?? 'own' });
-      }
-    });
-    return {
-      rows,
-      totalHours: rows.reduce((s, r) => s + r.hours, 0),
-      totalCost: rows.reduce((s, r) => s + r.cost, 0),
-    };
+
+    return workspace.employees
+      .filter(emp => isEmployeeActiveOnDate(emp as EmployeeProfileRow, workDate))
+      .map(emp => {
+        const s = settingByEmp.get(emp.id);
+        const schedule = workspace.schedules?.[emp.id]?.find(row => row.work_date === workDate);
+        const empAttendance = attendance.filter(a => a.employee_id === emp.id && a.attendance_date === workDate);
+        const workedHours = empAttendance.reduce((sum, a) => sum + (a.worked_minutes || 0) / 60, 0);
+        const { effectiveMinutes, approvedMinutes, requestedMinutes, status } = getEffectiveApprovedOvertimeMinutes(
+          emp.id,
+          workDate,
+          attendance,
+          overtimeRecords,
+        );
+        const offHrs = status === 'rejected' ? 0 : getOffDayOvertimeHours(emp.id, workDate, offDayComps);
+        const otHours = Math.max(effectiveMinutes / 60, offHrs);
+        const approvedHours = Math.max(approvedMinutes / 60, offHrs);
+        const requestedHours = requestedMinutes / 60;
+        const rate = s?.overtime_hourly_cost != null && Number(s.overtime_hourly_cost) > 0
+          ? Number(s.overtime_hourly_cost)
+          : (s?.employment_source === '3pl' ? threePlRate : ownRate) || (ownRate || threePlRate || 0);
+        const approvedCost = otHours * rate;
+        const derivedStatus = status === 'none' && otHours > 0 ? 'approved' : status;
+
+        return {
+          id: emp.id,
+          name: emp.full_name,
+          code: emp.employee_code,
+          jobTitle: emp.job_title ?? '—',
+          laborClass: s?.labor_class ?? 'dlp',
+          employmentSource: s?.employment_source ?? 'own',
+          overtimeEligible: s?.overtime_eligible ?? true,
+          scheduleState: schedule?.state ?? 'unassigned',
+          shiftName: schedule?.shift_name ?? (schedule?.state === 'working' ? 'Working' : schedule?.state ?? '—'),
+          workedHours,
+          requestedHours,
+          approvedHours,
+          otHours,
+          status: derivedStatus,
+          hourlyRate: rate,
+          approvedCost,
+        };
+      })
+      .sort((a, b) => b.otHours - a.otHours || a.name.localeCompare(b.name));
   }, [workspace, workDate]);
+
+  const totalApprovedOtHours = employeeOvertimeRows.reduce((sum, r) => sum + r.otHours, 0);
+  const totalApprovedOtCost = employeeOvertimeRows.reduce((sum, r) => sum + r.approvedCost, 0);
+  const totalWorkedHours = employeeOvertimeRows.reduce((sum, r) => sum + r.workedHours, 0);
+  const otVariance = totalApprovedOtHours - preview.overtimeHours;
 
   const fields: Array<[keyof FcDailyManpowerProductivityRow, string]> = [['inbound_quantity', 'Inbound quantity'], ['return_rto_quantity', 'Return RTO'], ['return_cir_quantity', 'Return CIR'], ['outbound_b2c_quantity', 'Outbound B2C'], ['outbound_b2b_quantity', 'Outbound B2B'], ['vas_quantity', 'VAS quantity'], ['gift_wrap_quantity', 'Gift wrapping'], ['other_activity_quantity', 'Other activity'], ['b2c_orders', 'B2C orders'], ['b2b_orders', 'B2B orders'], ['closing_storage_quantity', 'Closing storage']];
   const workforce = workspace.workforceDays.find(item => item.workDate === workDate);
@@ -665,14 +834,17 @@ function ManpowerEntry({ organizationId, weekStart, fromDate, toDate, workspace,
           <div className="flex flex-wrap justify-between gap-3">
             <div>
               <div className="text-sm text-white font-semibold">Connected FC manpower — {workDate}</div>
-              <div className="text-xs mt-1" style={{ color: '#64748b' }}>Read automatically from active FC employees and the Shift Scheduler.</div>
+              <div className="text-xs mt-1" style={{ color: '#64748b' }}>
+                Read automatically from active FC employees and the Shift Scheduler.
+                {workforce ? ` Present: ${n(workforce.presentDlp)} · Absent: ${n(workforce.absentDlp)} · Non-DLP: ${n(workforce.nonDlp)}` : ''}
+              </div>
             </div>
             <span className="px-2 py-1 rounded text-[10px] font-semibold uppercase" style={{ background: 'rgba(16,185,129,.12)', color: '#6ee7b7' }}>{workforce?.source === 'shift_schedule' ? 'Shift schedule' : 'Active roster fallback'}</span>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
             <Metric label="Own DLP" value={n(workforce?.ownDlp ?? 0, 1)} />
             <Metric label="Contract DLP" value={n(workforce?.contractDlp ?? 0, 1)} />
-            <Metric label="Available labor" value={`${n(workforce?.availableLaborHours ?? 0, 1)}h`} />
+            <Metric label="Available labor" value={`${n(preview.regularCapacityHours, 1)}h`} detail={workforce && preview.regularCapacityHours !== workforce.availableLaborHours ? `Base ${n(workforce.availableLaborHours, 1)}h + transfers` : undefined} />
             <Metric label="Active FC roster" value={n(workforce?.activeRosterDlp ?? 0)} />
           </div>
         </div>
@@ -705,7 +877,8 @@ function ManpowerEntry({ organizationId, weekStart, fromDate, toDate, workspace,
             <div><div className="text-[10px]" style={{ color: '#64748b' }}>EMPLOYEES</div><div className="font-mono font-bold" style={{ color: '#f59e0b' }}>{n(preview.requiredEmployees, 1)}</div></div>
             <div><div className="text-[10px]" style={{ color: '#64748b' }}>OT REQUIRED</div><div className="font-mono font-bold" style={{ color: '#8b5cf6' }}>{n(preview.overtimeHours, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#c4b5fd' }}>SAR {n(preview.overtimeCost, 2)}</div></div>
             <div><div className="text-[10px]" style={{ color: '#64748b' }}>OT / PERSON</div><div className="font-mono font-bold" style={{ color: preview.otRequiredPerPerson > 0 ? '#c4b5fd' : '#10b981' }}>{n(preview.otRequiredPerPerson, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#64748b' }}>{preview.scheduledDlp} DLP</div></div>
-            <div><div className="text-[10px]" style={{ color: '#64748b' }}>OT DONE (APPROVED)</div><div className="font-mono font-bold" style={{ color: dayApprovedOt.totalHours >= preview.overtimeHours ? '#10b981' : '#f59e0b' }}>{n(dayApprovedOt.totalHours, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#10b981' }}>SAR {n(dayApprovedOt.totalCost, 2)}</div></div>
+            <div><div className="text-[10px]" style={{ color: '#64748b' }}>OT DONE (APPROVED)</div><div className="font-mono font-bold" style={{ color: totalApprovedOtHours >= preview.overtimeHours ? '#10b981' : '#f59e0b' }}>{n(totalApprovedOtHours, 1)}h</div><div className="text-[10px] font-mono" style={{ color: '#10b981' }}>SAR {n(totalApprovedOtCost, 2)}</div></div>
+            <div><div className="text-[10px]" style={{ color: '#64748b' }}>APPROVED OT COST</div><div className="font-mono font-bold" style={{ color: '#f59e0b' }}>SAR {n(totalApprovedOtCost, 2)}</div><div className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{n(totalApprovedOtHours, 1)}h × rate</div></div>
             <div><div className="text-[10px]" style={{ color: '#64748b' }}>EXTRA 3PL</div><div className="font-mono font-bold" style={{ color: preview.additional3pl ? '#ef4444' : '#10b981' }}>{preview.additional3pl}</div></div>
           </div>
         </div>
@@ -737,44 +910,138 @@ function ManpowerEntry({ organizationId, weekStart, fromDate, toDate, workspace,
             <div className="font-semibold text-sm text-white">Approved employee overtime — {workDate}</div>
             <div className="text-xs mt-1" style={{ color: '#64748b' }}>Overtime hours and calculated cost (Hours × OT Rate/h) for the FC workforce.</div>
           </div>
-          <div className="text-xs font-mono text-emerald-400">
-            Total: {n(dayApprovedOt.totalHours, 1)}h · SAR {n(dayApprovedOt.totalCost, 2)}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+              <span style={{ color: '#94a3b8' }}>Regular Capacity: </span>
+              <strong className="font-mono text-white">{n(preview.regularUnitsCapacity)} units</strong>
+              <span className="text-[10px] font-mono ml-1" style={{ color: '#93c5fd' }}>({n(preview.regularCapacityHours, 1)}h)</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+              <span style={{ color: '#94a3b8' }}>OT Required: </span>
+              <strong className="font-mono text-white">{n(preview.overtimeHours, 1)}h</strong>
+              <span className="text-[10px] font-mono ml-1" style={{ color: '#c4b5fd' }}>(SAR {n(preview.overtimeCost, 2)})</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+              <span style={{ color: '#94a3b8' }}>OT / Person: </span>
+              <strong className="font-mono" style={{ color: preview.otRequiredPerPerson > 0 ? '#c4b5fd' : '#10b981' }}>{n(preview.otRequiredPerPerson, 1)}h</strong>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+              <span style={{ color: '#94a3b8' }}>OT Done (Approved): </span>
+              <strong className="font-mono" style={{ color: '#10b981' }}>{n(totalApprovedOtHours, 1)}h</strong>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+              <span style={{ color: '#94a3b8' }}>Total OT Cost: </span>
+              <strong className="font-mono" style={{ color: '#f59e0b' }}>SAR {n(totalApprovedOtCost, 2)}</strong>
+              <span className="text-[10px] font-mono ml-1" style={{ color: '#94a3b8' }}>({n(totalApprovedOtHours, 1)}h × rate)</span>
+            </div>
+            <div className="px-3 py-1.5 rounded-lg font-mono text-[11px] font-bold" style={{
+              background: otVariance >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
+              color: otVariance >= 0 ? '#10b981' : '#f59e0b',
+              border: `1px solid ${otVariance >= 0 ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.25)'}`,
+            }}>
+              {otVariance >= 0 ? `+${n(otVariance, 1)}h covered` : `${n(otVariance, 1)}h shortage`}
+            </div>
           </div>
         </div>
-        {dayApprovedOt.rows.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr style={{ background: '#122338', color: '#64748b' }}>
-                  <th className="text-left px-3 py-2">Employee</th>
-                  <th className="text-left px-3 py-2">Source</th>
-                  <th className="text-right px-3 py-2">Approved Hours</th>
-                  <th className="text-right px-3 py-2">OT Rate</th>
-                  <th className="text-right px-3 py-2">Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dayApprovedOt.rows.map(row => (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ background: '#122338', color: '#64748b' }}>
+                <th className="text-left px-3 py-2">Employee</th>
+                <th className="text-left px-3 py-2">Classification</th>
+                <th className="text-left px-3 py-2">Shift / Schedule</th>
+                <th className="text-right px-3 py-2">Worked</th>
+                <th className="text-right px-3 py-2">OT Hours</th>
+                <th className="text-center px-3 py-2">Status</th>
+                <th className="text-right px-3 py-2">OT Rate</th>
+                <th className="text-right px-3 py-2">Approved Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {employeeOvertimeRows.length === 0 ? (
+                <tr><td colSpan={8} className="p-4 text-center text-xs" style={{ color: '#64748b' }}>No active employees registered in the FC department for {workDate}.</td></tr>
+              ) : (
+                employeeOvertimeRows.map(row => (
                   <tr key={row.id} className="border-t" style={{ borderColor: '#1e3a5a' }}>
-                    <td className="px-3 py-2 text-white">{row.name} <span style={{ color: '#64748b' }}>({row.code})</span></td>
-                    <td className="px-3 py-2 uppercase text-[10px]">{row.source}</td>
-                    <td className="px-3 py-2 text-right font-mono text-emerald-400">{n(row.hours, 2)}h</td>
-                    <td className="px-3 py-2 text-right font-mono">SAR {n(row.rate, 2)}/h</td>
-                    <td className="px-3 py-2 text-right font-mono text-amber-400">SAR {n(row.cost, 2)}</td>
+                    <td className="px-3 py-2.5">
+                      <div className="font-medium text-white">{row.name}</div>
+                      <div className="text-[10px]" style={{ color: '#64748b' }}>{row.code} · {row.jobTitle}</div>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="uppercase text-[10px] font-semibold px-2 py-0.5 rounded" style={{
+                        background: row.laborClass === 'dlp' ? 'rgba(37,99,235,0.12)' : 'rgba(100,116,139,0.12)',
+                        color: row.laborClass === 'dlp' ? '#93c5fd' : '#94a3b8',
+                        border: `1px solid ${row.laborClass === 'dlp' ? 'rgba(37,99,235,0.25)' : 'rgba(100,116,139,0.25)'}`,
+                      }}>
+                        {row.laborClass.toUpperCase()} · {row.employmentSource.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="text-slate-300">{row.shiftName}</span>
+                      {!row.overtimeEligible && <span className="ml-1.5 text-[9px] text-rose-400 font-semibold">(No OT)</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{ color: row.workedHours > 0 ? '#93c5fd' : (row.scheduleState === 'working' ? '#f59e0b' : '#64748b') }}>
+                      {row.workedHours > 0 ? `${n(row.workedHours, 1)}h` : (row.scheduleState === 'working' ? '0h (Absent)' : '—')}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono">
+                      {row.status === 'rejected' ? (
+                        <span className="text-rose-400 font-mono text-[11px] line-through" title="Rejected by manager">
+                          {n(row.requestedHours, 1)}h
+                        </span>
+                      ) : row.otHours > 0 ? (
+                        <span className={`font-bold ${row.status === 'approved' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {n(row.otHours, 1)}h
+                        </span>
+                      ) : (
+                        <span style={{ color: '#64748b' }}>—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      {row.status === 'approved' ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.25)' }}>Approved</span>
+                      ) : row.status === 'pending' ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{ background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.25)' }}>Recorded / Pending</span>
+                      ) : row.status === 'rejected' ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold" style={{ background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.25)' }}>Rejected</span>
+                      ) : (
+                        <span style={{ color: '#475569' }}>—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#94a3b8' }}>
+                      SAR {n(row.hourlyRate, 2)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono font-medium" style={{ color: row.approvedCost > 0 ? '#f59e0b' : '#64748b' }}>
+                      {row.approvedCost > 0 ? (
+                        <div>
+                          <div>SAR {n(row.approvedCost, 2)}</div>
+                          <div className="text-[10px]" style={{ color: '#94a3b8' }}>{n(row.otHours, 1)}h × SAR {n(row.hourlyRate, 2)}</div>
+                        </div>
+                      ) : '—'}
+                    </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="p-4 text-xs" style={{ color: '#64748b' }}>No approved overtime records for FC employees on {workDate}.</div>
-        )}
+                ))
+              )}
+            </tbody>
+            {employeeOvertimeRows.length > 0 && (
+              <tfoot>
+                <tr className="border-t-2" style={{ borderColor: '#3b82f6', background: '#122338' }}>
+                  <td colSpan={3} className="px-3 py-2.5 font-semibold text-white">Daily Workforce Overtime Totals</td>
+                  <td className="px-3 py-2.5 text-right font-mono font-semibold text-white">{n(totalWorkedHours, 1)}h</td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#10b981' }}>{n(totalApprovedOtHours, 1)}h</td>
+                  <td className="px-3 py-2.5 text-center text-[10px]" style={{ color: '#94a3b8' }}>{employeeOvertimeRows.filter(r => r.approvedHours > 0).length} with approved OT</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-slate-400">—</td>
+                  <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#f59e0b' }}>SAR {n(totalApprovedOtCost, 2)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
       </div>
     </div>
   );
 }
 
-function ImportEntry({ organizationId, weekStart, fromDate = weekStart, toDate = addDays(weekStart, 6), workspace, refresh, busy, setBusy }: { organizationId: string; weekStart: string; fromDate?: string; toDate?: string; workspace: FcWorkspace; refresh: () => Promise<void>; busy: boolean; setBusy: (v: boolean) => void }) {
+function ImportEntry({ organizationId, weekStart, selectedDate, fromDate = weekStart, toDate = addDays(weekStart, 6), workspace, refresh, busy, setBusy }: { organizationId: string; weekStart: string; selectedDate: string; fromDate?: string; toDate?: string; workspace: FcWorkspace; refresh: () => Promise<void>; busy: boolean; setBusy: (v: boolean) => void }) {
   const [preview, setPreview] = useState<FcImportPreview | null>(null); const [error, setError] = useState<string | null>(null); const [replace, setReplace] = useState(false);
   const current = useMemo(() => buildFcDashboard(workspace), [workspace]);
   const knownLabels = useMemo(() => {
@@ -795,7 +1062,7 @@ function ImportEntry({ organizationId, weekStart, fromDate = weekStart, toDate =
   const saveImport = async () => { if (!preview) return; setBusy(true); setError(null); try { await fcProductivityService.saveImport(organizationId, weekStart, preview); setPreview(null); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Unable to save FC import.'); } finally { setBusy(false); } };
   const saveSection = async (section: 'seller' | 'capacity' | 'adhoc') => { setBusy(true); setError(null); try { const rows = section === 'seller' ? sellerRows : section === 'capacity' ? [capacity] : adhoc; const reviewed = section === 'seller' ? sellerReviewed : section === 'capacity' ? capacityReviewed : adhocReviewed; await fcProductivityService.saveSupplements(organizationId, weekStart, section, rows, reviewed); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Unable to save FC supplements.'); } finally { setBusy(false); } };
   const finalize = async () => { setBusy(true); setError(null); try { await fcProductivityService.finalizeWeek(organizationId, weekStart); await refresh(); } catch (e) { setError(e instanceof Error ? e.message : 'Unable to finalize FC week.'); } finally { setBusy(false); } };
-  return <div className="space-y-4"><ManpowerEntry organizationId={organizationId} weekStart={weekStart} fromDate={fromDate} toDate={toDate} workspace={workspace} refresh={refresh} busy={busy} setBusy={setBusy} />{error && <div className="p-3 rounded-lg flex gap-2 text-sm" style={{ background: 'rgba(239,68,68,.1)', color: '#fca5a5' }}><AlertCircle size={15} />{error}</div>}<div className="rounded-xl p-4" style={panel}><div className="font-semibold text-white">Packed Orders import</div><div className="text-xs mt-1" style={{ color: '#64748b' }}>Supporting employee and seller output detail. Accepts XLSX or CSV up to 10 MB and stores aggregates only.</div><label className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer" style={{ background: '#2563eb', color: '#fff' }}><Upload size={14} />{busy ? 'Reading…' : 'Choose Orders file'}<input type="file" accept=".xlsx,.csv" disabled={busy} className="hidden" onChange={e => void choose(e.target.files?.[0])} /></label>{preview && <div className="mt-4 rounded-xl p-4" style={{ background: '#081424', border: '1px solid #1e3a5a' }}><div className="grid grid-cols-2 md:grid-cols-5 gap-3"><Metric label="Accepted Orders" value={n(preview.packedOrders)} detail={`Change ${preview.packedOrders - current.packedOrders >= 0 ? '+' : ''}${n(preview.packedOrders - current.packedOrders)}`} /><Metric label="Packed Quantity" value={n(preview.packedQuantity)} detail={`Change ${preview.packedQuantity - current.packedQuantity >= 0 ? '+' : ''}${n(preview.packedQuantity - current.packedQuantity)}`} /><Metric label="Additional Items" value={n(preview.additionalItems)} detail={`Change ${preview.additionalItems - current.additionalItems >= 0 ? '+' : ''}${n(preview.additionalItems - current.additionalItems)}`} /><Metric label="Ignored Rows" value={n(preview.ignoredRows)} /><Metric label="Blank Packers" value={n(preview.blankPackerRows)} detail={`${preview.packerLabels.filter(label => label !== 'Unassigned' && !knownLabels.has(label.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en'))).length} unmatched labels`} /></div><div className="mt-3 text-xs" style={{ color: '#94a3b8' }}>{preview.sourceFileName} · {preview.dateFrom} to {preview.dateTo}</div>{preview.warnings.map(x => <div key={x} className="text-xs mt-1" style={{ color: '#fcd34d' }}>{x}</div>)}{workspace.week && <label className="flex items-center gap-2 mt-3 text-xs" style={{ color: '#fcd34d' }}><input type="checkbox" checked={replace} onChange={e => setReplace(e.target.checked)} />Replace revision {workspace.week.revision}; keep manual values and reset their review status.</label>}<button disabled={busy || (!!workspace.week && !replace)} onClick={() => void saveImport()} className="mt-3 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: '#10b981', color: '#052e23' }}><Save size={13} className="inline mr-1" />Save weekly draft</button></div>}</div>
+  return <div className="space-y-4"><ManpowerEntry organizationId={organizationId} weekStart={weekStart} selectedDate={selectedDate} fromDate={fromDate} toDate={toDate} workspace={workspace} refresh={refresh} busy={busy} setBusy={setBusy} />{error && <div className="p-3 rounded-lg flex gap-2 text-sm" style={{ background: 'rgba(239,68,68,.1)', color: '#fca5a5' }}><AlertCircle size={15} />{error}</div>}<div className="rounded-xl p-4" style={panel}><div className="font-semibold text-white">Packed Orders import</div><div className="text-xs mt-1" style={{ color: '#64748b' }}>Supporting employee and seller output detail. Accepts XLSX or CSV up to 10 MB and stores aggregates only.</div><label className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer" style={{ background: '#2563eb', color: '#fff' }}><Upload size={14} />{busy ? 'Reading…' : 'Choose Orders file'}<input type="file" accept=".xlsx,.csv" disabled={busy} className="hidden" onChange={e => void choose(e.target.files?.[0])} /></label>{preview && <div className="mt-4 rounded-xl p-4" style={{ background: '#081424', border: '1px solid #1e3a5a' }}><div className="grid grid-cols-2 md:grid-cols-5 gap-3"><Metric label="Accepted Orders" value={n(preview.packedOrders)} detail={`Change ${preview.packedOrders - current.packedOrders >= 0 ? '+' : ''}${n(preview.packedOrders - current.packedOrders)}`} /><Metric label="Packed Quantity" value={n(preview.packedQuantity)} detail={`Change ${preview.packedQuantity - current.packedQuantity >= 0 ? '+' : ''}${n(preview.packedQuantity - current.packedQuantity)}`} /><Metric label="Additional Items" value={n(preview.additionalItems)} detail={`Change ${preview.additionalItems - current.additionalItems >= 0 ? '+' : ''}${n(preview.additionalItems - current.additionalItems)}`} /><Metric label="Ignored Rows" value={n(preview.ignoredRows)} /><Metric label="Blank Packers" value={n(preview.blankPackerRows)} detail={`${preview.packerLabels.filter(label => label !== 'Unassigned' && !knownLabels.has(label.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en'))).length} unmatched labels`} /></div><div className="mt-3 text-xs" style={{ color: '#94a3b8' }}>{preview.sourceFileName} · {preview.dateFrom} to {preview.dateTo}</div>{preview.warnings.map(x => <div key={x} className="text-xs mt-1" style={{ color: '#fcd34d' }}>{x}</div>)}{workspace.week && <label className="flex items-center gap-2 mt-3 text-xs" style={{ color: '#fcd34d' }}><input type="checkbox" checked={replace} onChange={e => setReplace(e.target.checked)} />Replace revision {workspace.week.revision}; keep manual values and reset their review status.</label>}<button disabled={busy || (!!workspace.week && !replace)} onClick={() => void saveImport()} className="mt-3 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: '#10b981', color: '#052e23' }}><Save size={13} className="inline mr-1" />Save weekly draft</button></div>}</div>
     {workspace.week && workspace.week.status === 'draft' && <><div className="rounded-xl p-4 overflow-auto" style={panel}><div className="flex justify-between"><div className="font-semibold text-white">Purchase orders and returns</div><label className="text-xs" style={{ color: '#94a3b8' }}><input type="checkbox" checked={sellerReviewed} onChange={e => setSellerReviewed(e.target.checked)} /> Reviewed</label></div><table className="w-full text-xs mt-3 min-w-[650px]"><thead><tr style={{ color: '#64748b' }}>{['Seller', 'Purchase Order Units', 'Return Order Units', 'Return Orders'].map(x => <th key={x} className="text-left py-2">{x}</th>)}</tr></thead><tbody>{sellerRows.map((row, i) => <tr key={row.seller_name}><td className="py-1 text-white">{row.seller_name}</td>{(['purchase_order_units', 'return_order_units', 'return_orders'] as const).map(key => <td key={key}><input type="number" min="0" value={row[key]} onChange={e => setSellerRows(rows => rows.map((x, j) => j === i ? { ...x, [key]: Math.max(0, Number(e.target.value) || 0) } : x))} className="w-28 px-2 py-1 rounded" style={field} /></td>)}</tr>)}</tbody></table><button onClick={() => void saveSection('seller')} disabled={busy} className="mt-3 px-3 py-2 rounded text-xs font-semibold" style={{ background: '#334155', color: '#fff' }}>Save seller section</button></div>
       <div className="rounded-xl p-4" style={panel}><div className="flex justify-between"><div className="font-semibold text-white">Capacity</div><label className="text-xs" style={{ color: '#94a3b8' }}><input type="checkbox" checked={capacityReviewed} onChange={e => setCapacityReviewed(e.target.checked)} /> Reviewed</label></div><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">{(['bins', 'pallets', 'units', 'cbm'] as const).flatMap(metric => (['capacity', 'utilized'] as const).map(kind => { const key = `${kind}_${metric}` as keyof FcCapacityMetricInput; return <label key={key} className="text-xs" style={{ color: '#94a3b8' }}>{kind === 'capacity' ? 'Capacity' : 'Utilized'} {metric.toUpperCase()}<input type="number" min="0" value={capacity[key]} onChange={e => setCapacity(x => ({ ...x, [key]: Math.max(0, Number(e.target.value) || 0) }))} className="block w-full mt-1 px-2 py-1 rounded" style={field} /></label>; }))}</div><button onClick={() => void saveSection('capacity')} disabled={busy} className="mt-3 px-3 py-2 rounded text-xs font-semibold" style={{ background: '#334155', color: '#fff' }}>Save capacity section</button></div>
       <div className="rounded-xl p-4" style={panel}><div className="flex justify-between"><div className="font-semibold text-white">Ad-hoc task usage</div><label className="text-xs" style={{ color: '#94a3b8' }}><input type="checkbox" checked={adhocReviewed} onChange={e => setAdhocReviewed(e.target.checked)} /> Reviewed, including no tasks</label></div>{adhoc.map((row, i) => <div key={i} className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 mt-2"><input placeholder="Seller" value={row.seller_name} onChange={e => setAdhoc(x => x.map((v, j) => j === i ? { ...v, seller_name: e.target.value } : v))} className="px-2 py-1 rounded" style={field} /><input placeholder="Task name" value={row.task_name} onChange={e => setAdhoc(x => x.map((v, j) => j === i ? { ...v, task_name: e.target.value } : v))} className="px-2 py-1 rounded" style={field} /><input type="number" min="0" value={row.usage} onChange={e => setAdhoc(x => x.map((v, j) => j === i ? { ...v, usage: Math.max(0, Number(e.target.value) || 0) } : v))} className="px-2 py-1 rounded" style={field} /><button onClick={() => setAdhoc(x => x.filter((_, j) => j !== i))} className="text-xs" style={{ color: '#fca5a5' }}>Remove</button></div>)}<div className="flex gap-2 mt-3"><button onClick={() => setAdhoc(x => [...x, { seller_name: '', task_name: '', usage: 0 }])} className="px-3 py-2 rounded text-xs" style={{ background: '#122338', color: '#93c5fd' }}>Add task</button><button onClick={() => void saveSection('adhoc')} disabled={busy} className="px-3 py-2 rounded text-xs font-semibold" style={{ background: '#334155', color: '#fff' }}>Save ad-hoc section</button></div></div>
@@ -825,6 +1092,6 @@ export default function FcProductivity({ organizationId, isAdmin }: { organizati
   return <div className="space-y-4">
     <div className="flex flex-wrap justify-between gap-3"><div><div className="flex items-center gap-2"><h1 className="text-xl font-bold text-white">FC Productivity</h1><span className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: 'rgba(6,182,212,.15)', color: '#67e8f9' }}>FC DEPARTMENT</span></div><p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>Inbound, outbound, labor capacity and workforce planning</p></div><div className="flex flex-wrap items-end gap-3"><div className="flex rounded-lg overflow-hidden" style={{ border: '1px solid #1e3a5a' }}>{([['all', 'All'], ['b2c', 'B2C'], ['b2b', 'B2B']] as const).map(([value, label]) => <button key={value} onClick={() => setChannelFilter(value)} className="px-3 py-2 text-xs font-semibold" style={{ background: channelFilter === value ? '#0891b2' : '#0d1b2e', color: channelFilter === value ? '#fff' : '#64748b' }}>{label}</button>)}</div><div className="flex rounded-lg overflow-hidden" style={{ border: '1px solid #1e3a5a' }}>{(['day', 'week', 'month'] as FcPeriod[]).map(value => <button key={value} onClick={() => setPeriod(value)} className="px-3 py-2 text-xs font-semibold capitalize" style={{ background: period === value ? '#2563eb' : '#0d1b2e', color: period === value ? '#fff' : '#64748b' }}>{value}</button>)}</div><label className="text-xs" style={{ color: '#94a3b8' }}>{period === 'day' ? 'Work date' : period === 'week' ? 'Week containing' : 'Month'}<input type={period === 'month' ? 'month' : 'date'} value={period === 'month' ? selectedDate.slice(0, 7) : selectedDate} onChange={event => setSelectedDate(period === 'month' ? `${event.target.value}-01` : event.target.value)} className="block mt-1 px-3 py-2 rounded" style={field} /><span className="block mt-1" style={{ color: '#64748b' }}>{fromDate}{fromDate !== toDate ? ` through ${toDate}` : ''}</span></label></div></div>
     {error && <div className="p-3 rounded flex gap-2 text-sm" style={{ background: 'rgba(239,68,68,.1)', color: '#fca5a5' }}><AlertCircle size={15} />{error}</div>}
-    {busy && !workspace ? <div className="py-20"><Loader2 className="animate-spin mx-auto" style={{ color: '#3b82f6' }} /></div> : !workspace ? <div className="p-10 rounded-xl text-center" style={panel}><Users className="mx-auto" style={{ color: '#f59e0b' }} /><div className="text-white font-semibold mt-3">FC department not found or access restricted</div><div className="text-xs mt-1" style={{ color: '#64748b' }}>Create an active department named or coded FC and assign the manager to it.</div></div> : <><div className="flex flex-wrap gap-2">{tabs.map(([id, label]) => <button key={id} onClick={() => setTab(id)} className="px-3 py-2 rounded-lg text-xs font-semibold" style={{ background: tab === id ? '#2563eb' : '#0d1b2e', color: tab === id ? '#fff' : '#64748b', border: '1px solid #1e3a5a' }}>{label}</button>)}</div>{tab === 'dashboard' && <Dashboard workspace={workspace} channelFilter={channelFilter} onOpenCalculator={openCalculator} />}{tab === 'calculator' && <FcCalculatorCard workspace={workspace} channelFilter={channelFilter} initialVolume={calculatorVolume} onOpenDashboard={() => setTab('dashboard')} />}{tab === 'entry' && <ImportEntry organizationId={organizationId} weekStart={weekStart} fromDate={fromDate} toDate={toDate} workspace={workspace} refresh={load} busy={busy} setBusy={setBusy} />}{tab === 'activity' && <ActivityRequirement workspace={workspace} channelFilter={channelFilter} />}{tab === 'setup' && isAdmin && <FcSetupPanel organizationId={organizationId} workspace={workspace} refresh={load} />}</>}
+    {busy && !workspace ? <div className="py-20"><Loader2 className="animate-spin mx-auto" style={{ color: '#3b82f6' }} /></div> : !workspace ? <div className="p-10 rounded-xl text-center" style={panel}><Users className="mx-auto" style={{ color: '#f59e0b' }} /><div className="text-white font-semibold mt-3">FC department not found or access restricted</div><div className="text-xs mt-1" style={{ color: '#64748b' }}>Create an active department named or coded FC and assign the manager to it.</div></div> : <><div className="flex flex-wrap gap-2">{tabs.map(([id, label]) => <button key={id} onClick={() => setTab(id)} className="px-3 py-2 rounded-lg text-xs font-semibold" style={{ background: tab === id ? '#2563eb' : '#0d1b2e', color: tab === id ? '#fff' : '#64748b', border: '1px solid #1e3a5a' }}>{label}</button>)}</div>{tab === 'dashboard' && <Dashboard workspace={workspace} channelFilter={channelFilter} onOpenCalculator={openCalculator} />}{tab === 'calculator' && <FcCalculatorCard workspace={workspace} channelFilter={channelFilter} initialVolume={calculatorVolume} onOpenDashboard={() => setTab('dashboard')} />}{tab === 'entry' && <ImportEntry organizationId={organizationId} weekStart={weekStart} selectedDate={selectedDate} fromDate={fromDate} toDate={toDate} workspace={workspace} refresh={load} busy={busy} setBusy={setBusy} />}{tab === 'activity' && <ActivityRequirement workspace={workspace} channelFilter={channelFilter} />}{tab === 'setup' && isAdmin && <FcSetupPanel organizationId={organizationId} workspace={workspace} refresh={load} />}</>}
   </div>;
 }
