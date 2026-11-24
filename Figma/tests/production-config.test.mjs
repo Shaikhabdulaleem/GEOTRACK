@@ -77,7 +77,7 @@ test('FC productivity uses aggregate-only storage and atomic least-privilege RPC
   assert.match(component, /Daily FC Entry/)
   assert.match(component, /Activity Manpower Requirement/)
   assert.match(component, /\['day', 'week', 'month'\]/)
-  assert.match(component, /Packer Mapping/)
+  assert.doesNotMatch(component, /Packer Mapping/)
   assert.match(setupComponent, /FC productivity setup/)
   assert.match(parser, /FC_MAX_FILE_BYTES\s*=\s*10\s*\*\s*1024\s*\*\s*1024/)
   assert.match(parser, /FC_MAX_ORDER_ROWS\s*=\s*50_000/)

@@ -53,10 +53,17 @@ export function buildFcDashboard(workspace: FcWorkspace, channelFilter: FcChanne
     : filteredSellers.reduce((sum, row) => sum + row.packed_quantity, 0);
   const mappingByLabel = new Map(workspace.mappings.map(row => [row.normalized_packer_label, row]));
   const employeeById = new Map(workspace.employees.map(row => [row.id, row]));
+  const normalizePackerKey = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en');
+  const employeeByLabel = new Map<string, (typeof workspace.employees)[number]>();
+  workspace.employees.forEach(emp => {
+    if (emp.full_name) employeeByLabel.set(normalizePackerKey(emp.full_name), emp);
+    if (emp.employee_code) employeeByLabel.set(normalizePackerKey(emp.employee_code), emp);
+  });
   const employeeGroups = new Map<string, { employeeId: string | null; name: string; labels: Set<string>; dates: Set<string>; orders: number; quantity: number }>();
   workspace.packers.forEach(row => {
+    const directEmployee = employeeByLabel.get(row.normalized_packer_label);
     const mapping = mappingByLabel.get(row.normalized_packer_label);
-    const employee = mapping ? employeeById.get(mapping.employee_id) : undefined;
+    const employee = directEmployee ?? (mapping ? employeeById.get(mapping.employee_id) : undefined);
     const key = employee?.id ?? 'unassigned';
     const group = employeeGroups.get(key) ?? { employeeId: employee?.id ?? null, name: employee?.full_name ?? 'Unassigned', labels: new Set(), dates: new Set(), orders: 0, quantity: 0 };
     group.labels.add(row.packer_label); group.dates.add(row.work_date); group.orders += row.packed_orders; group.quantity += row.packed_quantity;

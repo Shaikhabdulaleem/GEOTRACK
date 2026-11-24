@@ -85,6 +85,27 @@ test('FC dashboard applies mappings dynamically and uses weighted cycle averages
   assert.equal(model.cycleTimes.a2p.samples, 4);
 });
 
+test('FC dashboard automatically matches packer labels to FC department employees by name or code', () => {
+  const packerBase = { id: 'x', organization_id: 'o', branch_id: 'b', department_id: 'd', week_id: 'w', created_at: '' };
+  const workspace = {
+    packers: [
+      { ...packerBase, id: 'p1', work_date: '2026-11-15', packer_label: 'Ali Hassan', normalized_packer_label: 'ali hassan', packed_orders: 5, packed_quantity: 12 },
+      { ...packerBase, id: 'p2', work_date: '2026-11-16', packer_label: 'FC-001', normalized_packer_label: 'fc-001', packed_orders: 3, packed_quantity: 6 },
+      { ...packerBase, id: 'p3', work_date: '2026-11-16', packer_label: 'Other Person', normalized_packer_label: 'other person', packed_orders: 2, packed_quantity: 4 },
+    ],
+    sellers: [],
+    mappings: [],
+    employees: [{ id: 'e1', full_name: 'Ali Hassan', employee_code: 'FC-001' }],
+    week: null, department: {}, sellerSupplements: [], capacity: null, adhocTasks: [],
+  } as unknown as FcWorkspace;
+  const model = buildFcDashboard(workspace);
+  assert.equal(model.mappedOrders, 8);
+  assert.equal(model.unassignedOrders, 2);
+  const ali = model.employees.find(employee => employee.employeeId === 'e1');
+  assert.equal(ali?.packedOrders, 8);
+  assert.equal(ali?.activeDays, 2);
+});
+
 test('FC manpower model applies hourly and daily standards plus the 5% absenteeism buffer', () => {
   const workspace = {
     standards: [
