@@ -73,3 +73,5 @@ tmp/
 **/.opencode-skills/
 **/.claude-replay.*
 **/.figma/design-context/
+.codex-work/
+review/

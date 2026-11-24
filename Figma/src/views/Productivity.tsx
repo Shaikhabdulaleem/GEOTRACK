@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload, Calculator, ShieldAlert, Layers, ArrowRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload, Calculator, ShieldAlert, Layers, ArrowRight, ArrowLeftRight } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts';
 import { useAuth } from '../auth/AuthContext';
 import { addDays, buildMailroomDayPreview, buildMailroomOperationalModel, calculateProductivityScenario, dateRange, getApprovedOvertimeMinutes, getClientProductivityProfiles, getEffectiveApprovedOvertimeMinutes, getEmployeeOtRate, isEmployeeActiveOnDate, productivityService, startOfSundayWeek, type ClientProductivityProfile, type MailroomDailyClientInput, type MailroomDailyDspInput, type MailroomDailyInput, type MailroomWorkspace } from '../services/productivity.service';
@@ -13,6 +13,7 @@ import TurnaroundAnalytics from '../components/productivity/TurnaroundAnalytics'
 import DspAllocationTable, { dspCellKey } from '../components/productivity/DspAllocationTable';
 import ProductivityCalculatorCard from '../components/productivity/ProductivityCalculatorCard';
 import AymakanImportModal from '../components/productivity/AymakanImportModal';
+import FcProductivity from '../components/productivity/FcProductivity';
 
 function EmployeeProductivity() {
   const { activeMembership, roles, assignedDepartmentIds } = useAuth();
@@ -404,6 +405,66 @@ function OperationsDashboard({
     </div>
 
     <DspAllocationTable mode="summary" partners={dspBreakdown.partners} rows={dspBreakdown.rows} />
+
+    {model.transferredLabor && model.transferredLabor.length > 0 && (
+      <div className="rounded-xl overflow-hidden" style={panelStyle}>
+        <div className="px-4 py-3 flex items-center justify-between border-b" style={{ borderColor: '#1e3a5a' }}>
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 rounded-lg bg-blue-500/20 text-blue-400">
+              <ArrowLeftRight size={14} />
+            </span>
+            <div>
+              <div className="font-semibold text-sm text-white">Cross-Department Transferred Workforce</div>
+              <div className="text-xs text-slate-400">
+                Transferred support workforce (e.g. from FC) credited to Mailroom labor capacity & output
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 text-xs">
+            <span className="text-slate-400">
+              Transferred Support: <strong className="text-emerald-400 font-mono">{model.totalTransferredInHours}h</strong> ({model.totalTransferredInCount} workers)
+            </span>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ background: '#122338', color: '#64748b' }}>
+                <th className="text-left px-3.5 py-2">Employee</th>
+                <th className="text-left px-3.5 py-2">Home Dept</th>
+                <th className="text-left px-3.5 py-2">Assigned To</th>
+                <th className="text-left px-3.5 py-2">Date</th>
+                <th className="text-right px-3.5 py-2">Regular Hrs</th>
+                <th className="text-right px-3.5 py-2">Overtime Hrs</th>
+                <th className="text-right px-3.5 py-2">Total Hours</th>
+                <th className="text-center px-3.5 py-2">Status</th>
+                <th className="text-left px-3.5 py-2">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {model.transferredLabor.map(item => (
+                <tr key={item.id} className="border-t border-[#1e3a5a]">
+                  <td className="px-3.5 py-2 font-medium text-white">{item.employeeName} ({item.employeeCode})</td>
+                  <td className="px-3.5 py-2 text-blue-300 font-semibold">{item.fromDepartmentName}</td>
+                  <td className="px-3.5 py-2 text-emerald-300 font-semibold">{item.toDepartmentName}</td>
+                  <td className="px-3.5 py-2 font-mono text-slate-300">{item.date}</td>
+                  <td className="px-3.5 py-2 text-right font-mono text-white">{item.regularHours}h</td>
+                  <td className="px-3.5 py-2 text-right font-mono text-amber-300">{item.overtimeHours > 0 ? `+${item.overtimeHours}h OT` : '—'}</td>
+                  <td className="px-3.5 py-2 text-right font-mono font-bold text-emerald-400">{item.totalHours}h</td>
+                  <td className="px-3.5 py-2 text-center font-mono">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      {item.status.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-3.5 py-2 text-slate-400">{item.reason || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )}
 
     <div className="rounded-xl overflow-hidden" style={panelStyle}>
       <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-3 border-b" style={{ borderColor: '#1e3a5a' }}>
@@ -1577,7 +1638,7 @@ function SetupPanel({ workspace, refresh }: { workspace: MailroomWorkspace; refr
   </div>;
 }
 
-export default function Productivity() {
+function MailroomProductivity() {
   const { activeMembership, roles, assignedDepartmentIds } = useAuth();
   const organizationId = activeMembership?.organization_id ?? '';
   const isAdmin = activeMembership?.role_code === 'administrator' || roles.includes('administrator');
@@ -1616,10 +1677,12 @@ export default function Productivity() {
         const client = getSupabaseClient();
         const { data } = await client
           .from('departments')
-          .select('id, name')
+          .select('id, name, code')
           .eq('organization_id', organizationId)
-          .ilike('name', '%mailroom%');
-        const mailroomDeptIds = (data || []).map(d => d.id);
+          .eq('status', 'active');
+        const mailroomDeptIds = (data || [])
+          .filter(d => d.name?.trim().toUpperCase() === 'MAILROOM' || d.code?.trim().toUpperCase() === 'MAILROOM')
+          .map(d => d.id);
         const hasAccess = mailroomDeptIds.some(id => assignedDepartmentIds.includes(id));
         setHasMailroomScope(hasAccess);
       } catch {
@@ -1727,5 +1790,71 @@ export default function Productivity() {
       {tab === 'employee' && <EmployeeProductivity />}
       {tab === 'setup' && isAdmin && <SetupPanel workspace={workspace} refresh={load} />}
     </>}
+  </div>;
+}
+
+type ProductivityDepartment = 'mailroom' | 'fc';
+
+export default function Productivity() {
+  const { activeMembership, roles, assignedDepartmentIds } = useAuth();
+  const organizationId = activeMembership?.organization_id ?? '';
+  const isAdmin = activeMembership?.role_code === 'administrator' || roles.includes('administrator');
+  const isManager = roles.includes('manager') && !isAdmin;
+  const [access, setAccess] = useState<{ mailroom: boolean; fc: boolean } | null>(isAdmin ? { mailroom: true, fc: true } : null);
+  const [department, setDepartment] = useState<ProductivityDepartment>('mailroom');
+
+  useEffect(() => {
+    if (isAdmin) {
+      setAccess({ mailroom: true, fc: true });
+      return;
+    }
+    if (!organizationId || !isManager) {
+      setAccess({ mailroom: false, fc: false });
+      return;
+    }
+    const loadAccess = async () => {
+      try {
+        const { getSupabaseClient } = await import('../lib/supabase');
+        const { data, error } = await getSupabaseClient()
+          .from('departments')
+          .select('id, name, code')
+          .eq('organization_id', organizationId)
+          .eq('status', 'active');
+        if (error) throw error;
+        const assigned = new Set(assignedDepartmentIds);
+        const normalized = (data ?? []).filter(row => assigned.has(row.id)).map(row => ({
+          name: row.name?.trim().toUpperCase(),
+          code: row.code?.trim().toUpperCase(),
+        }));
+        const next = {
+          mailroom: normalized.some(row => row.name === 'MAILROOM' || row.code === 'MAILROOM'),
+          fc: normalized.some(row => row.name === 'FC' || row.code === 'FC'),
+        };
+        setAccess(next);
+        if (!next.mailroom && next.fc) setDepartment('fc');
+      } catch {
+        setAccess({ mailroom: false, fc: false });
+      }
+    };
+    void loadAccess();
+  }, [assignedDepartmentIds, isAdmin, isManager, organizationId]);
+
+  if (!access) return <div className="py-24 flex justify-center"><Loader2 className="animate-spin" style={{ color: '#3b82f6' }} /></div>;
+
+  const available = (['mailroom', 'fc'] as ProductivityDepartment[]).filter(value => access[value]);
+  if (available.length === 0) {
+    return <div className="rounded-xl p-8 text-center" style={panelStyle}>
+      <ShieldAlert size={36} className="mx-auto mb-3" style={{ color: '#f59e0b' }} />
+      <div className="text-white font-semibold">Productivity access restricted</div>
+      <div className="text-sm mt-1.5" style={{ color: '#94a3b8' }}>Managers can open only their assigned Mailroom or FC department.</div>
+    </div>;
+  }
+
+  const selected = access[department] ? department : available[0];
+  return <div className="space-y-4">
+    {available.length > 1 && <div className="inline-flex rounded-xl p-1" style={{ background: '#081424', border: '1px solid #1e3a5a' }}>
+      {available.map(value => <button key={value} onClick={() => setDepartment(value)} className="px-5 py-2 rounded-lg text-sm font-semibold" style={{ background: selected === value ? '#2563eb' : 'transparent', color: selected === value ? '#fff' : '#64748b' }}>{value === 'fc' ? 'FC' : 'Mailroom'}</button>)}
+    </div>}
+    {selected === 'fc' ? <FcProductivity organizationId={organizationId} isAdmin={isAdmin} /> : <MailroomProductivity />}
   </div>;
 }

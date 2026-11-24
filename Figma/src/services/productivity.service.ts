@@ -1,6 +1,7 @@
 import { getSupabaseClient } from '../lib/supabase';
 import { executeQuery } from './database.service';
 import { shiftService } from './shift.service';
+import { transferService, calculateTransferDuration } from './transfer.service';
 import {
   isEmployeeActiveOnDate,
   getApprovedOvertimeMinutes,
@@ -23,6 +24,7 @@ import type {
   AttendanceRecordRow,
   DepartmentRow,
   EmployeeProfileRow,
+  EmployeeTransferItem,
   Json,
   MailroomActivityRow,
   MailroomClientActivityRow,
@@ -83,7 +85,25 @@ export interface MailroomTurnaroundMetricInput {
   shipment_count: number;
 }
 
+export interface TransferredLaborItem {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  fromDepartmentName: string;
+  toDepartmentName: string;
+  date: string;
+  startTime: string;
+  endTime: string | null;
+  regularHours: number;
+  overtimeHours: number;
+  totalHours: number;
+  status: string;
+  reason: string | null;
+}
+
 export interface MailroomWorkspace {
+  department?: DepartmentRow;
   settings: MailroomProductivitySettingsRow;
   clients: MailroomClientRow[];
   activities: MailroomActivityRow[];
@@ -99,6 +119,7 @@ export interface MailroomWorkspace {
   turnaroundMetrics: MailroomDailyTurnaroundMetricRow[];
   overtimeRecords: OvertimeRecordRow[];
   offDayCompensations?: OffDayCompensationRecord[];
+  transfers?: EmployeeTransferItem[];
 }
 
 export interface MailroomActivityCapacity {
@@ -224,6 +245,11 @@ export interface MailroomOperationalModel {
   overtimeAllocations: MailroomOvertimeAllocation[];
   approvedOvertimeByEmployee: MailroomEmployeeOvertimeSummary[];
   draftDates: string[];
+  totalTransferredInHours: number;
+  totalTransferredInCount: number;
+  totalTransferredOutHours: number;
+  totalTransferredOutCount: number;
+  transferredLabor: TransferredLaborItem[];
 }
 
 export interface MailroomDayPreview {
@@ -624,6 +650,41 @@ export function buildMailroomOperationalModel(
       }
     });
 
+    // Cross-department transfers on this date (e.g. FC employee transferred to Mailroom)
+    const mailroomDeptId = workspace.department?.id;
+    const isMailroomTarget = (t: EmployeeTransferItem) =>
+      (mailroomDeptId && t.to_department_id === mailroomDeptId) ||
+      t.to_department?.name?.toLowerCase().includes('mailroom') || false;
+    const isMailroomSource = (t: EmployeeTransferItem) =>
+      (mailroomDeptId && t.from_department_id === mailroomDeptId) ||
+      t.from_department?.name?.toLowerCase().includes('mailroom') || false;
+
+    const dayTransfers = (workspace.transfers ?? []).filter(
+      t => t.transfer_date === date && t.status !== 'cancelled'
+    );
+    let dayTransferredInRegHours = 0;
+    let dayTransferredInOtHours = 0;
+    let dayTransferredOutRegHours = 0;
+
+    dayTransfers.forEach(t => {
+      const duration = t.status === 'completed'
+        ? t.transferred_minutes
+        : calculateTransferDuration(t.start_time, null, t.break_minutes).netMinutes;
+      const otM = t.overtime_minutes || 0;
+      const regM = Math.max(0, duration - otM);
+
+      if (isMailroomTarget(t)) {
+        dayTransferredInRegHours += regM / 60;
+        dayTransferredInOtHours += otM / 60;
+        activeDlpCount += 1;
+        scheduledDlp += 1;
+      } else if (isMailroomSource(t)) {
+        dayTransferredOutRegHours += regM / 60;
+      }
+    });
+
+    regularCapacityHours = Math.max(0, regularCapacityHours + dayTransferredInRegHours - dayTransferredOutRegHours);
+
     const entry = entryByDate.get(date);
     const isFinalized = entry?.status === 'finalized';
     const status: MailroomDayCapacity['status'] = entry?.status ?? 'missing';
@@ -723,9 +784,9 @@ export function buildMailroomOperationalModel(
         dayOtEmployeeIds.add(employee.id);
       }
     });
-    const actualOvertimeHours = dayApprovedOtHours;
-    const actualOvertimeCost = dayApprovedOtCost;
-    const actualOtEmployeesCount = dayOtEmployeeIds.size;
+    const actualOvertimeHours = dayApprovedOtHours + dayTransferredInOtHours;
+    const actualOvertimeCost = dayApprovedOtCost + (dayTransferredInOtHours * baseOtRate);
+    const actualOtEmployeesCount = dayOtEmployeeIds.size + (dayTransferredInOtHours > 0 ? 1 : 0);
     return {
       date,
       received: dayReceived,
@@ -957,6 +1018,49 @@ export function buildMailroomOperationalModel(
     overtimeAllocations,
     approvedOvertimeByEmployee,
     draftDates: dates.filter(date => entryByDate.get(date)?.status === 'draft'),
+    totalTransferredInHours: Math.round(
+      (workspace.transfers ?? [])
+        .filter(t => t.status !== 'cancelled' && (t.to_department?.name?.toLowerCase().includes('mailroom') || (workspace.department?.id && t.to_department_id === workspace.department.id)))
+        .reduce((sum, t) => sum + (t.status === 'completed' ? t.transferred_minutes : calculateTransferDuration(t.start_time, null, t.break_minutes).netMinutes) / 60, 0) * 100
+    ) / 100,
+    totalTransferredInCount: new Set(
+      (workspace.transfers ?? [])
+        .filter(t => t.status !== 'cancelled' && (t.to_department?.name?.toLowerCase().includes('mailroom') || (workspace.department?.id && t.to_department_id === workspace.department.id)))
+        .map(t => t.employee_id)
+    ).size,
+    totalTransferredOutHours: Math.round(
+      (workspace.transfers ?? [])
+        .filter(t => t.status !== 'cancelled' && (t.from_department?.name?.toLowerCase().includes('mailroom') || (workspace.department?.id && t.from_department_id === workspace.department.id)))
+        .reduce((sum, t) => sum + (t.status === 'completed' ? t.transferred_minutes : calculateTransferDuration(t.start_time, null, t.break_minutes).netMinutes) / 60, 0) * 100
+    ) / 100,
+    totalTransferredOutCount: new Set(
+      (workspace.transfers ?? [])
+        .filter(t => t.status !== 'cancelled' && (t.from_department?.name?.toLowerCase().includes('mailroom') || (workspace.department?.id && t.from_department_id === workspace.department.id)))
+        .map(t => t.employee_id)
+    ).size,
+    transferredLabor: (workspace.transfers ?? [])
+      .filter(t => t.status !== 'cancelled')
+      .map(t => {
+        const netMin = t.status === 'completed' ? t.transferred_minutes : calculateTransferDuration(t.start_time, null, t.break_minutes).netMinutes;
+        const otMin = t.overtime_minutes || 0;
+        const regMin = Math.max(0, netMin - otMin);
+        return {
+          id: t.id,
+          employeeId: t.employee_id,
+          employeeName: t.employee?.full_name || 'Transferred Employee',
+          employeeCode: t.employee?.employee_code || '',
+          fromDepartmentName: t.from_department?.name || 'Department',
+          toDepartmentName: t.to_department?.name || 'Department',
+          date: t.transfer_date,
+          startTime: t.start_time,
+          endTime: t.end_time,
+          regularHours: Math.round((regMin / 60) * 100) / 100,
+          overtimeHours: Math.round((otMin / 60) * 100) / 100,
+          totalHours: Math.round((netMin / 60) * 100) / 100,
+          status: t.status,
+          reason: t.reason,
+        };
+      }),
   };
 }
 
@@ -1320,7 +1424,7 @@ export const productivityService = {
     const department = departmentRows[0];
     if (!department) return null;
 
-    const [settingsRows, clients, activities, mappings, shipments, employees, employeeSettings, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations] = await Promise.all([
+    const [settingsRows, clients, activities, mappings, shipments, employees, employeeSettings, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations, transfers] = await Promise.all([
       executeQuery(client.from('mailroom_productivity_settings').select('*').eq('organization_id', organizationId).limit(1), 'Unable to load Mailroom settings.'),
       executeQuery(client.from('mailroom_clients').select('*').eq('organization_id', organizationId).order('sort_order'), 'Unable to load Mailroom clients.'),
       executeQuery(client.from('mailroom_activities').select('*').eq('organization_id', organizationId).order('sort_order'), 'Unable to load Mailroom activities.'),
@@ -1335,6 +1439,7 @@ export const productivityService = {
       executeQuery(client.from('mailroom_daily_turnaround_metrics').select('*').eq('organization_id', organizationId).gte('work_date', fromDate).lte('work_date', toDate), 'Unable to load turnaround metrics.'),
       executeQuery(client.from('overtime_records').select('*').eq('organization_id', organizationId), 'Unable to load Overtime records.'),
       shiftService.listOffDayCompensations(organizationId).catch(() => []),
+      transferService.listTransfers({ organizationId, fromDate, toDate }).catch(() => []),
     ]);
     const settings = settingsRows[0];
     if (!settings) return null;
@@ -1368,7 +1473,7 @@ export const productivityService = {
       employee.id,
       await executeQuery(client.rpc('resolve_employee_schedule', { p_employee_id: employee.id, p_start_date: fromDate, p_end_date: toDate }), 'Unable to resolve Mailroom schedules.'),
     ])));
-    return { settings, clients, activities, mappings, shipments, employees, employeeSettings, schedules, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations };
+    return { department, settings, clients, activities, mappings, shipments, employees, employeeSettings, schedules, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations, transfers };
   },
 
   async updateMailroomSettings(id: string, updates: Record<string, unknown>) {

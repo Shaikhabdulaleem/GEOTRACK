@@ -216,6 +216,55 @@ export interface ManagerActivityHistoryItem {
   actor_email: string | null;
 }
 
+export type TransferStatus = 'active' | 'completed' | 'cancelled';
+export type TransferType = 'temporary' | 'permanent' | 'shift' | 'overtime';
+
+export interface EmployeeTransferRow {
+  id: string;
+  organization_id: string;
+  employee_id: string;
+  from_department_id: string;
+  to_department_id: string;
+  transfer_date: string;
+  start_time: string;
+  end_time: string | null;
+  status: TransferStatus;
+  transfer_type: TransferType;
+  transferred_minutes: number;
+  break_minutes: number;
+  overtime_minutes: number;
+  reason: string | null;
+  notes: string | null;
+  transferred_by: string | null;
+  completed_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmployeeTransferItem extends EmployeeTransferRow {
+  employee?: {
+    id: string;
+    employee_code: string;
+    full_name: string;
+    job_title?: string | null;
+  };
+  from_department?: {
+    id: string;
+    name: string;
+    code: string;
+  };
+  to_department?: {
+    id: string;
+    name: string;
+    code: string;
+  };
+  transferred_by_user?: {
+    id: string;
+    email: string;
+    display_name?: string;
+  };
+}
+
 export interface EmployeeProfileRow {
   id: string;
   organization_id: string;
@@ -491,6 +540,54 @@ export interface ProductivityRecordRow {
   updated_at: string;
 }
 
+export type FcWeekStatus = 'draft' | 'finalized';
+
+export interface FcProductivityWeekRow {
+  id: string; organization_id: string; branch_id: string; department_id: string; week_start: string;
+  status: FcWeekStatus; revision: number; source_file_name: string; source_sha256: string;
+  source_rows: number; valid_rows: number; ignored_rows: number; duplicate_rows: number; blank_packer_rows: number;
+  seller_supplements_reviewed: boolean; capacity_reviewed: boolean; adhoc_reviewed: boolean;
+  imported_by: string | null; imported_at: string; finalized_by: string | null; finalized_at: string | null;
+  created_at: string; updated_at: string;
+}
+
+export interface FcDailyPackerMetricRow {
+  id: string; organization_id: string; branch_id: string; department_id: string; week_id: string;
+  work_date: string; packer_label: string; normalized_packer_label: string;
+  packed_orders: number; packed_quantity: number; created_at: string;
+}
+
+export interface FcDailySellerMetricRow {
+  id: string; organization_id: string; branch_id: string; department_id: string; week_id: string;
+  work_date: string; seller_name: string; order_type: 'B2B' | 'B2C' | 'Other';
+  packed_orders: number; packed_quantity: number;
+  a2p_minutes: number; a2p_samples: number; p2p_minutes: number; p2p_samples: number;
+  o2p_minutes: number; o2p_samples: number; p2s_minutes: number; p2s_samples: number;
+  o2s_minutes: number; o2s_samples: number; created_at: string;
+}
+
+export interface FcPackerMappingRow {
+  id: string; organization_id: string; branch_id: string; department_id: string;
+  packer_label: string; normalized_packer_label: string; employee_id: string;
+  created_by: string | null; updated_by: string | null; created_at: string; updated_at: string;
+}
+
+export interface FcWeeklySellerSupplementRow {
+  id: string; organization_id: string; branch_id: string; department_id: string; week_id: string;
+  seller_name: string; purchase_order_units: number; return_order_units: number; return_orders: number;
+}
+
+export interface FcWeeklyCapacityMetricRow {
+  week_id: string; organization_id: string; branch_id: string; department_id: string;
+  capacity_bins: number; utilized_bins: number; capacity_pallets: number; utilized_pallets: number;
+  capacity_units: number; utilized_units: number; capacity_cbm: number; utilized_cbm: number;
+}
+
+export interface FcWeeklyAdhocTaskRow {
+  id: string; organization_id: string; branch_id: string; department_id: string; week_id: string;
+  seller_name: string; task_name: string; usage: number; created_at: string;
+}
+
 export interface MailroomProductivitySettingsRow {
   id: string;
   organization_id: string;
@@ -717,6 +814,33 @@ export interface Database {
       branches: TableDefinition<BranchRow, 'organization_id' | 'code' | 'name' | 'timezone'>;
       departments: TableDefinition<DepartmentRow, 'organization_id' | 'branch_id' | 'code' | 'name'>;
       employee_profiles: TableDefinition<EmployeeProfileRow, 'organization_id' | 'employee_code' | 'iqama_number' | 'full_name' | 'branch_id' | 'department_id'>;
+      employee_transfers: TableDefinition<
+        EmployeeTransferRow,
+        'organization_id' | 'employee_id' | 'from_department_id' | 'to_department_id',
+        [
+          {
+            foreignKeyName: 'employee_transfers_employee_id_fkey';
+            columns: ['employee_id'];
+            isOneToOne: false;
+            referencedRelation: 'employee_profiles';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'employee_transfers_from_department_id_fkey';
+            columns: ['from_department_id'];
+            isOneToOne: false;
+            referencedRelation: 'departments';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'employee_transfers_to_department_id_fkey';
+            columns: ['to_department_id'];
+            isOneToOne: false;
+            referencedRelation: 'departments';
+            referencedColumns: ['id'];
+          },
+        ]
+      >;
       employee_devices: TableDefinition<EmployeeDeviceRow, 'organization_id' | 'employee_id' | 'device_identifier_hash' | 'platform'>;
       shifts: TableDefinition<ShiftRow, 'organization_id' | 'code' | 'name' | 'start_time' | 'end_time'>;
       shift_assignments: TableDefinition<
@@ -763,6 +887,13 @@ export interface Database {
       manual_attendance_requests: TableDefinition<ManualAttendanceRequestRow, 'organization_id' | 'employee_id' | 'request_type' | 'requested_at' | 'reason' | 'requested_by'>;
       overtime_records: TableDefinition<OvertimeRecordRow, 'organization_id' | 'employee_id' | 'attendance_record_id' | 'requested_minutes' | 'requested_by'>;
       productivity_records: TableDefinition<ProductivityRecordRow, 'organization_id' | 'employee_id' | 'work_date' | 'metric_code'>;
+      fc_productivity_weeks: TableDefinition<FcProductivityWeekRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_start' | 'source_file_name' | 'source_sha256' | 'valid_rows'>;
+      fc_daily_packer_metrics: TableDefinition<FcDailyPackerMetricRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_id' | 'work_date' | 'packer_label' | 'normalized_packer_label' | 'packed_orders' | 'packed_quantity'>;
+      fc_daily_seller_metrics: TableDefinition<FcDailySellerMetricRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_id' | 'work_date' | 'seller_name' | 'order_type' | 'packed_orders' | 'packed_quantity'>;
+      fc_packer_mappings: TableDefinition<FcPackerMappingRow, 'organization_id' | 'branch_id' | 'department_id' | 'packer_label' | 'normalized_packer_label' | 'employee_id'>;
+      fc_weekly_seller_supplements: TableDefinition<FcWeeklySellerSupplementRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_id' | 'seller_name'>;
+      fc_weekly_capacity_metrics: TableDefinition<FcWeeklyCapacityMetricRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_id'>;
+      fc_weekly_adhoc_tasks: TableDefinition<FcWeeklyAdhocTaskRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_id' | 'seller_name' | 'task_name' | 'usage'>;
       mailroom_productivity_settings: TableDefinition<MailroomProductivitySettingsRow, 'organization_id' | 'branch_id'>;
       mailroom_clients: TableDefinition<MailroomClientRow, 'organization_id' | 'branch_id' | 'code' | 'name' | 'processing_mode'>;
       mailroom_activities: TableDefinition<MailroomActivityRow, 'organization_id' | 'branch_id' | 'code' | 'name' | 'units_per_labor_hour'>;
@@ -981,6 +1112,22 @@ export interface Database {
         Args: { p_organization_id: string; p_rows: Json };
         Returns: number;
       };
+      save_fc_productivity_week: {
+        Args: { p_organization_id: string; p_week_start: string; p_import: Json };
+        Returns: Json;
+      };
+      save_fc_week_supplements: {
+        Args: { p_organization_id: string; p_week_start: string; p_section: string; p_rows: Json; p_reviewed: boolean };
+        Returns: number;
+      };
+      finalize_fc_productivity_week: {
+        Args: { p_organization_id: string; p_week_start: string };
+        Returns: undefined;
+      };
+      save_fc_packer_mapping: {
+        Args: { p_organization_id: string; p_packer_label: string; p_employee_id: string };
+        Returns: string;
+      };
       manager_correct_attendance: {
         Args: {
           p_organization_id: string;
@@ -1134,6 +1281,41 @@ export interface Database {
           p_manager_profile_id: string;
         };
         Returns: ManagerActivityHistoryItem[];
+      };
+      start_employee_transfer: {
+        Args: {
+          p_organization_id: string;
+          p_employee_id: string;
+          p_to_department_id: string;
+          p_transfer_date?: string | null;
+          p_start_time?: string | null;
+          p_end_time?: string | null;
+          p_break_minutes?: number | null;
+          p_overtime_minutes?: number | null;
+          p_transfer_type?: string | null;
+          p_reason?: string | null;
+          p_notes?: string | null;
+        };
+        Returns: EmployeeTransferRow;
+      };
+      complete_employee_transfer: {
+        Args: {
+          p_organization_id: string;
+          p_transfer_id: string;
+          p_end_time?: string | null;
+          p_break_minutes?: number | null;
+          p_overtime_minutes?: number | null;
+          p_notes?: string | null;
+        };
+        Returns: EmployeeTransferRow;
+      };
+      cancel_employee_transfer: {
+        Args: {
+          p_organization_id: string;
+          p_transfer_id: string;
+          p_reason?: string | null;
+        };
+        Returns: EmployeeTransferRow;
       };
     };
     Enums: {

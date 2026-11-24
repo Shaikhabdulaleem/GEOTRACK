@@ -48,6 +48,29 @@ test('RLS hardening is present and does not grant anonymous access', async () =>
   assert.doesNotMatch(sql, /grant .* to anon/i)
 })
 
+test('FC productivity uses aggregate-only storage and atomic least-privilege RPCs', async () => {
+  const [sql, view, component, parser] = await Promise.all([
+    read('../supabase/migrations/20261123202718_fc_productivity_module.sql'),
+    read('src/views/Productivity.tsx'),
+    read('src/components/productivity/FcProductivity.tsx'),
+    read('src/lib/fc-orders-import.ts'),
+  ])
+  assert.match(sql, /create or replace function private\.can_access_fc/i)
+  assert.match(sql, /upper\(btrim\(d\.name\)\)\s*=\s*'FC'/i)
+  assert.match(sql, /manager_profiles[\s\S]*status::text\s*=\s*'active'/i)
+  assert.match(sql, /revoke all on table[\s\S]*public, anon, authenticated/i)
+  assert.match(sql, /grant select on table[\s\S]*to authenticated/i)
+  assert.match(sql, /seller_supplements_reviewed=false, capacity_reviewed=false, adhoc_reviewed=false/i)
+  assert.doesNotMatch(sql, /\bcustomer_(?:name|email|phone)\b|\border_id\b|\baddress\b/i)
+  assert.match(view, /MailroomProductivity/)
+  assert.match(view, /FcProductivity/)
+  assert.match(component, /Weekly Dashboard/)
+  assert.match(component, /Import & Entry/)
+  assert.match(component, /Packer Mapping/)
+  assert.match(parser, /FC_MAX_FILE_BYTES\s*=\s*10\s*\*\s*1024\s*\*\s*1024/)
+  assert.match(parser, /FC_MAX_ORDER_ROWS\s*=\s*50_000/)
+})
+
 test('overtime review RPCs enforce authentication, scope, and least privilege', async () => {
   const sql = await read('../supabase/migrations/20261112120000_employee_overtime_review.sql')
   assert.match(sql, /p_to_date - p_from_date > 89/i)

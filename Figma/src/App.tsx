@@ -15,6 +15,7 @@ import type { AppRole } from './types/database';
 const Dashboard = React.lazy(() => import('./views/Dashboard'));
 const LiveAttendance = React.lazy(() => import('./views/LiveAttendance'));
 const Employees = React.lazy(() => import('./views/Employees'));
+const EmployeeTransfer = React.lazy(() => import('./views/EmployeeTransfer'));
 const ManagerManagement = React.lazy(() => import('./views/ManagerManagement'));
 const ShiftScheduler = React.lazy(() => import('./views/ShiftScheduler'));
 const Attendance = React.lazy(() => import('./views/Attendance'));
@@ -37,6 +38,7 @@ const VIEWS: Record<ViewId, ViewComponent> = {
   dashboard: Dashboard,
   live: LiveAttendance,
   employees: Employees,
+  transfers: EmployeeTransfer,
   managers: ManagerManagement,
   scheduler: ShiftScheduler,
   attendance: Attendance,
