@@ -588,6 +588,91 @@ export interface FcWeeklyAdhocTaskRow {
   seller_name: string; task_name: string; usage: number; created_at: string;
 }
 
+export type FcActivityVolumeDriver = 'inbound' | 'return_rto' | 'return_cir' | 'returns_total' | 'outbound_b2c' | 'outbound_b2b' | 'vas' | 'gift_wrap' | 'other';
+
+export interface FcActivityStandardRow {
+  id: string; organization_id: string; branch_id: string; department_id: string;
+  activity_code: string; activity_name: string; volume_driver: FcActivityVolumeDriver;
+  target_uom: 'hour' | 'day'; units_per_worker: number; sort_order: number; is_active: boolean;
+  created_at: string; updated_at: string;
+}
+
+export interface FcDailyManpowerProductivityRow {
+  id: string; organization_id: string; branch_id: string; department_id: string; work_date: string;
+  status?: 'draft' | 'finalized';
+  available_hours: number; inbound_quantity: number; return_rto_quantity: number; return_cir_quantity: number;
+  outbound_b2c_quantity: number; outbound_b2b_quantity: number; vas_quantity: number; gift_wrap_quantity: number;
+  other_activity_name: string | null; other_activity_quantity: number; b2c_orders: number; b2b_orders: number;
+  closing_storage_quantity: number; actual_own_dlp: number; actual_contract_dlp: number; cycle_count_staff: number;
+  supervisor_staff: number; assistant_manager_staff: number; manager_staff: number; security_staff: number;
+  security_supervisor_staff: number; housekeeping_staff: number; other_staff: number; notes: string | null;
+  source_file_name: string | null; entered_by: string | null; created_at: string; updated_at: string;
+}
+
+export interface FcSettingsRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  department_id: string;
+  standard_hours_per_day: number;
+  planned_absence_percent: number;
+  max_overtime_hours_per_day: number;
+  overtime_hourly_cost_own: number;
+  overtime_hourly_cost_3pl: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FcEmployeeSettingsRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  department_id: string;
+  employee_id: string;
+  labor_class: 'dlp' | 'non_dlp';
+  employment_source: 'own' | '3pl';
+  overtime_eligible: boolean;
+  overtime_hourly_cost: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FcClientRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  department_id: string;
+  code: string;
+  name: string;
+  status: RecordStatus;
+  inbound_rate_override: number | null;
+  outbound_b2c_rate_override: number | null;
+  outbound_b2b_rate_override: number | null;
+  returns_rate_override: number | null;
+  vas_rate_override: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FcDailyClientVolumeRow {
+  id: string;
+  organization_id: string;
+  branch_id: string;
+  department_id: string;
+  work_date: string;
+  client_name: string;
+  inbound_quantity: number;
+  outbound_b2c_quantity: number;
+  outbound_b2b_quantity: number;
+  returns_quantity: number;
+  vas_quantity: number;
+  b2c_orders: number;
+  b2b_orders: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface MailroomProductivitySettingsRow {
   id: string;
   organization_id: string;
@@ -894,6 +979,12 @@ export interface Database {
       fc_weekly_seller_supplements: TableDefinition<FcWeeklySellerSupplementRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_id' | 'seller_name'>;
       fc_weekly_capacity_metrics: TableDefinition<FcWeeklyCapacityMetricRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_id'>;
       fc_weekly_adhoc_tasks: TableDefinition<FcWeeklyAdhocTaskRow, 'organization_id' | 'branch_id' | 'department_id' | 'week_id' | 'seller_name' | 'task_name' | 'usage'>;
+      fc_activity_standards: TableDefinition<FcActivityStandardRow, 'organization_id' | 'branch_id' | 'department_id' | 'activity_code' | 'activity_name' | 'volume_driver' | 'target_uom' | 'units_per_worker'>;
+      fc_daily_manpower_productivity: TableDefinition<FcDailyManpowerProductivityRow, 'organization_id' | 'branch_id' | 'department_id' | 'work_date'>;
+      fc_settings: TableDefinition<FcSettingsRow, 'organization_id' | 'branch_id' | 'department_id'>;
+      fc_employee_settings: TableDefinition<FcEmployeeSettingsRow, 'organization_id' | 'branch_id' | 'department_id' | 'employee_id'>;
+      fc_clients: TableDefinition<FcClientRow, 'organization_id' | 'branch_id' | 'department_id' | 'code' | 'name'>;
+      fc_daily_client_volumes: TableDefinition<FcDailyClientVolumeRow, 'organization_id' | 'branch_id' | 'department_id' | 'work_date' | 'client_name'>;
       mailroom_productivity_settings: TableDefinition<MailroomProductivitySettingsRow, 'organization_id' | 'branch_id'>;
       mailroom_clients: TableDefinition<MailroomClientRow, 'organization_id' | 'branch_id' | 'code' | 'name' | 'processing_mode'>;
       mailroom_activities: TableDefinition<MailroomActivityRow, 'organization_id' | 'branch_id' | 'code' | 'name' | 'units_per_labor_hour'>;
@@ -1127,6 +1218,62 @@ export interface Database {
       save_fc_packer_mapping: {
         Args: { p_organization_id: string; p_packer_label: string; p_employee_id: string };
         Returns: string;
+      };
+      initialize_fc_activity_standards: {
+        Args: { p_organization_id: string };
+        Returns: number;
+      };
+      save_fc_activity_standard: {
+        Args: { p_organization_id: string; p_activity_code: string; p_units_per_worker: number; p_target_uom: string; p_is_active: boolean };
+        Returns: undefined;
+      };
+      save_fc_manpower_day: {
+        Args: { p_organization_id: string; p_work_date: string; p_data: Json };
+        Returns: string;
+      };
+      import_fc_manpower_days: {
+        Args: { p_organization_id: string; p_source_file_name: string; p_rows: Json };
+        Returns: number;
+      };
+      initialize_fc_workspace_settings: {
+        Args: { p_organization_id: string };
+        Returns: undefined;
+      };
+      save_fc_settings: {
+        Args: { p_organization_id: string; p_updates: Json };
+        Returns: undefined;
+      };
+      save_fc_employee_setting: {
+        Args: { p_organization_id: string; p_employee_id: string; p_updates: Json };
+        Returns: undefined;
+      };
+      create_fc_client: {
+        Args: { p_organization_id: string; p_code: string; p_name: string; p_template_client_id?: string | null; p_overrides?: Json };
+        Returns: string;
+      };
+      update_fc_client: {
+        Args: { p_organization_id: string; p_client_id: string; p_updates: Json };
+        Returns: undefined;
+      };
+      save_fc_client_daily_volumes: {
+        Args: { p_organization_id: string; p_sources: Json; p_from_date: string; p_to_date: string; p_rows: Json };
+        Returns: number;
+      };
+      import_fc_operational_workspace: {
+        Args: {
+          p_organization_id: string;
+          p_source_file_names: string;
+          p_sources: Json;
+          p_from_date: string;
+          p_to_date: string;
+          p_rows: Json;
+          p_client_rows: Json;
+        };
+        Returns: number;
+      };
+      import_fc_operational_metrics: {
+        Args: { p_organization_id: string; p_source_file_names: string; p_sources: Json; p_rows: Json };
+        Returns: number;
       };
       manager_correct_attendance: {
         Args: {

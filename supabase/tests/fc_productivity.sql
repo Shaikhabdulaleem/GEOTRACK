@@ -7,7 +7,9 @@ begin
   foreach v_table in array array[
     'fc_productivity_weeks', 'fc_daily_packer_metrics', 'fc_daily_seller_metrics',
     'fc_packer_mappings', 'fc_weekly_seller_supplements',
-    'fc_weekly_capacity_metrics', 'fc_weekly_adhoc_tasks'
+    'fc_weekly_capacity_metrics', 'fc_weekly_adhoc_tasks',
+    'fc_activity_standards', 'fc_daily_manpower_productivity',
+    'fc_daily_client_volumes'
   ] loop
     if to_regclass('public.' || v_table) is null then
       raise exception 'Missing FC productivity table: %', v_table;
@@ -31,6 +33,15 @@ begin
      or to_regprocedure('public.finalize_fc_productivity_week(uuid,date)') is null
      or to_regprocedure('public.save_fc_packer_mapping(uuid,text,uuid)') is null then
     raise exception 'One or more FC atomic RPCs are missing';
+  end if;
+  if to_regprocedure('public.initialize_fc_activity_standards(uuid)') is null
+     or to_regprocedure('public.save_fc_activity_standard(uuid,text,numeric,text,boolean)') is null
+     or to_regprocedure('public.save_fc_manpower_day(uuid,date,jsonb)') is null
+     or to_regprocedure('public.import_fc_manpower_days(uuid,text,jsonb)') is null
+     or to_regprocedure('public.import_fc_operational_metrics(uuid,text,jsonb,jsonb)') is null
+     or to_regprocedure('public.save_fc_client_daily_volumes(uuid,jsonb,date,date,jsonb)') is null
+     or to_regprocedure('public.import_fc_operational_workspace(uuid,text,jsonb,date,date,jsonb,jsonb)') is null then
+    raise exception 'One or more FC manpower RPCs are missing';
   end if;
 
   if exists (
@@ -65,5 +76,21 @@ begin
   if v_definition not like '%can_access_fc(p_organization_id,v_branch_id,v_department_id,true)%'
      or v_definition not like '%employment_status::text=''active''%' then
     raise exception 'FC mapping must remain administrator-only and active-employee scoped';
+  end if;
+
+  v_definition := pg_get_functiondef('public.import_fc_operational_metrics(uuid,text,jsonb,jsonb)'::regprocedure);
+  if v_definition not like '%case when v_has_orders%'
+     or v_definition not like '%case when v_has_vas%'
+     or v_definition not like '%case when v_has_grn%'
+     or v_definition like '%actual_own_dlp =%'
+     or v_definition like '%actual_contract_dlp =%' then
+    raise exception 'FC operational import must replace source metrics while preserving manual staffing';
+  end if;
+
+  v_definition := pg_get_functiondef('public.import_fc_operational_workspace(uuid,text,jsonb,date,date,jsonb,jsonb)'::regprocedure);
+  if v_definition not like '%update public.fc_daily_manpower_productivity%'
+     or v_definition not like '%v_count := public.import_fc_operational_metrics%'
+     or v_definition not like '%perform public.save_fc_client_daily_volumes%' then
+    raise exception 'FC operational workspace import must replace aggregates atomically';
   end if;
 end $$;

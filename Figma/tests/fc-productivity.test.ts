@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { test } from 'node:test';
 import readExcelFile from 'read-excel-file/node';
 import { parseFcOrderSheets, type FcImportSheet } from '../src/lib/fc-orders-import.ts';
-import { buildFcDashboard } from '../src/lib/fc-productivity-model.ts';
+import { parseFcManpowerSheets } from '../src/lib/fc-manpower-import.ts';
+import { parseFcOperationalFiles } from '../src/lib/fc-operational-import.ts';
+import { buildFcDashboard, buildFcManpowerDashboard } from '../src/lib/fc-productivity-model.ts';
 import type { FcWorkspace } from '../src/services/fc-productivity.service.ts';
 
 const headers = [
@@ -82,10 +85,79 @@ test('FC dashboard applies mappings dynamically and uses weighted cycle averages
   assert.equal(model.cycleTimes.a2p.samples, 4);
 });
 
+test('FC manpower model applies hourly and daily standards plus the 5% absenteeism buffer', () => {
+  const workspace = {
+    standards: [
+      { activity_code: 'IN', activity_name: 'Inbound QC', volume_driver: 'inbound', target_uom: 'hour', units_per_worker: 100, is_active: true },
+      { activity_code: 'RET', activity_name: 'Return QC', volume_driver: 'return_rto', target_uom: 'day', units_per_worker: 200, is_active: true },
+    ],
+    manpowerDays: [{ work_date: '2026-11-15', available_hours: 8, inbound_quantity: 800, return_rto_quantity: 200, return_cir_quantity: 0, outbound_b2c_quantity: 100, outbound_b2b_quantity: 200, vas_quantity: 0, gift_wrap_quantity: 0, other_activity_quantity: 0, b2c_orders: 50, b2b_orders: 2, closing_storage_quantity: 1000, actual_own_dlp: 2, actual_contract_dlp: 1 }],
+    workforceDays: [{ workDate: '2026-11-15', ownDlp: 2, contractDlp: 1, availableLaborHours: 24, activeRosterDlp: 3, source: 'shift_schedule' }],
+  } as unknown as FcWorkspace;
+  const model = buildFcManpowerDashboard(workspace);
+  assert.equal(model.requiredDlp, 2);
+  assert.equal(model.absenteeismBuffer, 0.1);
+  assert.equal(model.totalRequiredDlp, 2.1);
+  assert.equal(model.actualDlp, 3);
+  assert.ok(Math.abs(model.staffingGap - 0.9) < 1e-9);
+  assert.equal(model.ownDlp, 2);
+  assert.equal(model.contractDlp, 1);
+  assert.equal(model.requiredLaborHours, 16.8);
+  assert.equal(model.availableLaborHours, 24);
+  assert.equal(model.b2cUpt, 2);
+  assert.equal(model.b2bUpt, 100);
+
+  const b2cModel = buildFcManpowerDashboard({
+    standards: [
+      { activity_code: 'IN', activity_name: 'Inbound QC', volume_driver: 'inbound', target_uom: 'hour', units_per_worker: 100, is_active: true },
+      { activity_code: 'PACK_B2C', activity_name: 'Packer B2C', volume_driver: 'outbound_b2c', target_uom: 'hour', units_per_worker: 100, is_active: true },
+      { activity_code: 'PACK_B2B', activity_name: 'Packer B2B', volume_driver: 'outbound_b2b', target_uom: 'hour', units_per_worker: 1000, is_active: true },
+    ],
+    manpowerDays: [{ work_date: '2026-11-15', available_hours: 8, inbound_quantity: 800, return_rto_quantity: 0, return_cir_quantity: 0, outbound_b2c_quantity: 800, outbound_b2b_quantity: 2000, vas_quantity: 0, gift_wrap_quantity: 0, other_activity_quantity: 0, b2c_orders: 400, b2b_orders: 20, closing_storage_quantity: 0, actual_own_dlp: 2, actual_contract_dlp: 1 }],
+    workforceDays: [{ workDate: '2026-11-15', ownDlp: 2, contractDlp: 1, availableLaborHours: 24, activeRosterDlp: 3, source: 'shift_schedule' }],
+  } as unknown as FcWorkspace, 'b2c');
+  assert.equal(b2cModel.outboundB2c, 800);
+  assert.equal(b2cModel.outboundB2b, 0);
+  assert.equal(b2cModel.throughput, 800);
+  assert.equal(b2cModel.requiredDlp, 1);
+  assert.equal(b2cModel.b2cUpt, 2);
+  assert.equal(b2cModel.b2bUpt, null);
+});
+
 const suppliedWorkbook = 'C:\\Users\\shaik\\Downloads\\Orders 15Nov-21Nov 2026.xlsx';
 test('supplied FC export matches the 15–21 Nov golden totals', { skip: !existsSync(suppliedWorkbook) }, async () => {
   const workbook = await readExcelFile(suppliedWorkbook);
   const preview = parseFcOrderSheets(workbook.map(sheet => ({ sheet: sheet.sheet, data: sheet.data })), '2026-11-15', suppliedWorkbook);
   assert.equal(preview.packedOrders, 1_244);
   assert.equal(preview.packedQuantity, 5_320);
+});
+
+const manpowerWorkbook = 'C:\\Users\\shaik\\Downloads\\FC Daily Manpower Productivity Analysis- Dec 2025 (2).xlsx';
+test('real FC manpower workbook imports the populated 2026 daily operational history', { skip: !existsSync(manpowerWorkbook) }, async () => {
+  const workbook = await readExcelFile(manpowerWorkbook);
+  const preview = parseFcManpowerSheets(workbook.map(sheet => ({ sheet: sheet.sheet, data: sheet.data })), manpowerWorkbook);
+  assert.equal(preview.days.length, 289);
+  assert.equal(preview.sheetCount, 11);
+  assert.equal(preview.firstDate, '2026-01-01');
+  assert.equal(preview.lastDate, '2026-11-21');
+  assert.equal(preview.days.filter(day => day.work_date >= '2026-11-15' && day.work_date <= '2026-11-21').length, 6);
+});
+
+const operationalFiles = [
+  'C:\\Users\\shaik\\Downloads\\Orders.csv',
+  'C:\\Users\\shaik\\Downloads\\VAS.csv',
+  'C:\\Users\\shaik\\Downloads\\GRN - Returns.csv',
+];
+test('daily operational CSV exports aggregate the 15–21 Nov FC source totals', { skip: operationalFiles.some(file => !existsSync(file)) }, async () => {
+  const files = operationalFiles.map(path => new File([readFileSync(path)], basename(path), { type: 'text/csv' }));
+  const preview = await parseFcOperationalFiles(files, '2026-11-15', '2026-11-21');
+  assert.equal(preview.days.length, 6);
+  assert.equal(preview.totals.inbound_quantity, 6_589);
+  assert.equal(preview.totals.return_rto_quantity, 338);
+  assert.equal(preview.totals.outbound_b2c_quantity, 3_823);
+  assert.equal(preview.totals.outbound_b2b_quantity, 29_639);
+  assert.equal(preview.totals.other_activity_quantity, 75);
+  assert.equal(preview.totals.b2c_orders, 1_309);
+  assert.equal(preview.totals.b2b_orders, 21);
+  assert.equal(preview.totals.vas_quantity, 4_731);
 });

@@ -49,11 +49,19 @@ test('RLS hardening is present and does not grant anonymous access', async () =>
 })
 
 test('FC productivity uses aggregate-only storage and atomic least-privilege RPCs', async () => {
-  const [sql, view, component, parser] = await Promise.all([
+  const [sql, manpowerSql, operationalSql, paritySql, clientVolumeSql, view, component, setupComponent, parser, manpowerParser, operationalParser, manpowerModel] = await Promise.all([
     read('../supabase/migrations/20261123202718_fc_productivity_module.sql'),
+    read('../supabase/migrations/20261124132739_fc_daily_manpower_productivity.sql'),
+    read('../supabase/migrations/20261124140608_fc_operational_csv_import.sql'),
+    read('../supabase/migrations/20261124180000_fc_productivity_parity.sql'),
+    read('../supabase/migrations/20261124190000_fc_client_daily_volumes.sql'),
     read('src/views/Productivity.tsx'),
     read('src/components/productivity/FcProductivity.tsx'),
+    read('src/components/productivity/FcSetupPanel.tsx'),
     read('src/lib/fc-orders-import.ts'),
+    read('src/lib/fc-manpower-import.ts'),
+    read('src/lib/fc-operational-import.ts'),
+    read('src/lib/fc-productivity-model.ts'),
   ])
   assert.match(sql, /create or replace function private\.can_access_fc/i)
   assert.match(sql, /upper\(btrim\(d\.name\)\)\s*=\s*'FC'/i)
@@ -64,11 +72,35 @@ test('FC productivity uses aggregate-only storage and atomic least-privilege RPC
   assert.doesNotMatch(sql, /\bcustomer_(?:name|email|phone)\b|\border_id\b|\baddress\b/i)
   assert.match(view, /MailroomProductivity/)
   assert.match(view, /FcProductivity/)
-  assert.match(component, /Weekly Dashboard/)
-  assert.match(component, /Import & Entry/)
+  assert.match(component, /Operations Dashboard/)
+  assert.match(component, /Productivity & Overtime Calculator/)
+  assert.match(component, /Daily FC Entry/)
+  assert.match(component, /Activity Manpower Requirement/)
+  assert.match(component, /\['day', 'week', 'month'\]/)
   assert.match(component, /Packer Mapping/)
+  assert.match(setupComponent, /FC productivity setup/)
   assert.match(parser, /FC_MAX_FILE_BYTES\s*=\s*10\s*\*\s*1024\s*\*\s*1024/)
   assert.match(parser, /FC_MAX_ORDER_ROWS\s*=\s*50_000/)
+  assert.match(manpowerSql, /create table public\.fc_activity_standards/i)
+  assert.match(manpowerSql, /create table public\.fc_daily_manpower_productivity/i)
+  assert.match(manpowerModel, /planned_absence_percent \?\? 5/)
+  assert.match(manpowerSql, /revoke all on table[\s\S]*public, anon, authenticated/i)
+  assert.match(manpowerParser, /parseFcManpowerSheets/)
+  assert.match(operationalParser, /parseFcOperationalFiles/)
+  assert.match(operationalParser, /GRN COMPLETED AT/)
+  assert.match(operationalSql, /import_fc_operational_metrics/i)
+  assert.match(operationalSql, /case when v_has_orders/i)
+  assert.match(operationalSql, /revoke all on function[\s\S]*from public, anon/i)
+  assert.match(paritySql, /save_fc_employee_setting/i)
+  assert.match(clientVolumeSql, /create table(?: if not exists)? public\.fc_daily_client_volumes/i)
+  assert.match(clientVolumeSql, /import_fc_operational_workspace/i)
+  assert.match(clientVolumeSql, /perform public\.save_fc_client_daily_volumes/i)
+  assert.match(component, /Daily manpower productivity/)
+  assert.match(component, /Overtime tracking — Required vs Done \(Approved\)/)
+  assert.match(component, /Connected FC manpower/)
+  assert.match(component, /Shift Scheduler/)
+  assert.doesNotMatch(component, /Choose manpower workbook|Import historical daily volumes/)
+  assert.match(component, /Activity manpower requirement/)
 })
 
 test('overtime review RPCs enforce authentication, scope, and least privilege', async () => {
