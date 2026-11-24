@@ -681,3 +681,6 @@ $$;
 
 revoke all on function public.cancel_employee_transfer(uuid, uuid, text) from public, anon;
 grant execute on function public.cancel_employee_transfer(uuid, uuid, text) to authenticated;
+
+revoke all on table public.employee_transfers from public, anon;
+grant select, insert, update on table public.employee_transfers to authenticated;

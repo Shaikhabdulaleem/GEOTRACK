@@ -303,7 +303,8 @@ test('migration 20261124140000 creates employee_transfers table with RLS and ato
   assert.match(sql, /create policy employee_transfers_insert_policy on public\.employee_transfers/i);
   assert.match(sql, /create policy employee_transfers_update_policy on public\.employee_transfers/i);
 
-  // Security definer RPCs
+  // Security definer RPCs & table grants
+  assert.match(sql, /grant select, insert, update on table public\.employee_transfers to authenticated/i);
   assert.match(sql, /create or replace function public\.start_employee_transfer/i);
   assert.match(sql, /create or replace function public\.complete_employee_transfer/i);
   assert.match(sql, /create or replace function public\.cancel_employee_transfer/i);

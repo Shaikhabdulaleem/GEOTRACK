@@ -26,6 +26,7 @@ import { transferService, calculateTransferDuration, type TransferDurationCalcul
 import { employeeService } from '../services/employee.service';
 import { organizationService } from '../services/organization.service';
 import { getErrorMessage } from '../lib/errors';
+import { logger } from '../lib/logger';
 import { todayInTimezone } from '../lib/dates';
 import type {
   DepartmentRow,
@@ -52,7 +53,7 @@ const inputStyle = {
 } as const;
 
 export default function EmployeeTransfer() {
-  const { activeMembership, roles, assignedDepartmentIds, profile } = useAuth();
+  const { activeMembership, roles, assignedDepartmentIds, profile, user } = useAuth();
   const org = activeMembership?.organization_id;
   const isAdministrator = roles.includes('administrator');
   const isManager = roles.includes('manager') && !isAdministrator;
@@ -110,7 +111,7 @@ export default function EmployeeTransfer() {
     setLoading(true);
     setError('');
     try {
-      const [transferList, empResult, deptList] = await Promise.all([
+      const [transferResult, empResult, deptResult] = await Promise.allSettled([
         transferService.listTransfers({
           organizationId: org,
           fromDate: dateRange.from,
@@ -120,9 +121,30 @@ export default function EmployeeTransfer() {
         organizationService.listDepartments(org),
       ]);
 
-      setTransfers(transferList);
-      setEmployees(empResult);
-      setDepartments(deptList);
+      if (transferResult.status === 'fulfilled') {
+        setTransfers(transferResult.value);
+      } else {
+        logger.error('Failed to load transfers', transferResult.reason);
+        setError(getErrorMessage(transferResult.reason));
+      }
+
+      if (empResult.status === 'fulfilled') {
+        setEmployees(empResult.value);
+      } else {
+        logger.error('Failed to load employees', empResult.reason);
+        if (transferResult.status === 'fulfilled') {
+          setError(getErrorMessage(empResult.reason));
+        }
+      }
+
+      if (deptResult.status === 'fulfilled') {
+        setDepartments(deptResult.value);
+      } else {
+        logger.error('Failed to load departments', deptResult.reason);
+        if (transferResult.status === 'fulfilled' && empResult.status === 'fulfilled') {
+          setError(getErrorMessage(deptResult.reason));
+        }
+      }
     } catch (caught) {
       setError(getErrorMessage(caught));
     } finally {
@@ -139,14 +161,25 @@ export default function EmployeeTransfer() {
     return new Map(departments.map(d => [d.id, d]));
   }, [departments]);
 
+  // Computed manager department IDs (merging manager_scopes and departments.manager_user_id)
+  const managerDeptIds = useMemo(() => {
+    const ids = new Set<string>(assignedDepartmentIds);
+    if (user?.id) {
+      departments.forEach(d => {
+        if (d.manager_user_id === user.id) ids.add(d.id);
+      });
+    }
+    return Array.from(ids);
+  }, [assignedDepartmentIds, departments, user?.id]);
+
   // Eligible employees for manager: if manager, restricted to their assigned departments
   const availableEmployees = useMemo(() => {
     if (isAdministrator) return employees;
-    if (isManager && assignedDepartmentIds.length > 0) {
-      return employees.filter(e => e.department_id && assignedDepartmentIds.includes(e.department_id));
+    if (isManager && managerDeptIds.length > 0) {
+      return employees.filter(e => e.department_id && managerDeptIds.includes(e.department_id));
     }
     return employees;
-  }, [employees, isAdministrator, isManager, assignedDepartmentIds]);
+  }, [employees, isAdministrator, isManager, managerDeptIds]);
 
   // Filtered transfers
   const filteredTransfers = useMemo(() => {
@@ -749,6 +782,12 @@ function CreateTransferModal({
   }, [departments, selectedEmp]);
 
   useEffect(() => {
+    if (!selectedEmpId && employees.length > 0) {
+      setSelectedEmpId(employees[0].id);
+    }
+  }, [employees, selectedEmpId]);
+
+  useEffect(() => {
     if (availableTargetDepts.length > 0 && !availableTargetDepts.some(d => d.id === targetDeptId)) {
       setTargetDeptId(availableTargetDepts[0].id);
     }
@@ -861,14 +900,23 @@ function CreateTransferModal({
               style={inputStyle}
               required
             >
-              {employees.map(e => {
-                const dName = departments.find(d => d.id === e.department_id)?.name ?? 'No dept';
-                return (
-                  <option key={e.id} value={e.id}>
-                    {e.full_name} ({e.employee_code}) — {dName}
-                  </option>
-                );
-              })}
+              {employees.length === 0 ? (
+                <option value="" disabled>
+                  No eligible employees in your department
+                </option>
+              ) : (
+                <>
+                  {!selectedEmpId && <option value="">Select an employee...</option>}
+                  {employees.map(e => {
+                    const dName = departments.find(d => d.id === e.department_id)?.name ?? 'No dept';
+                    return (
+                      <option key={e.id} value={e.id}>
+                        {e.full_name} ({e.employee_code}) — {dName}
+                      </option>
+                    );
+                  })}
+                </>
+              )}
             </select>
           </div>
 
@@ -877,7 +925,7 @@ function CreateTransferModal({
             <div>
               <span className="text-[10px] text-slate-400 block font-semibold uppercase">Source (Current Dept)</span>
               <div className="text-sm font-bold text-blue-400 mt-1">
-                {sourceDept?.name ?? 'Loading...'}
+                {sourceDept?.name ?? (selectedEmp ? 'No department assigned' : 'Select an employee above')}
               </div>
               <span className="text-[10px] text-slate-500 font-mono">{sourceDept?.code}</span>
             </div>
@@ -890,11 +938,17 @@ function CreateTransferModal({
                 className="mt-1 w-full text-xs p-1.5 rounded bg-[#0a1628] text-emerald-300 border border-emerald-500/40 font-semibold outline-none"
                 required
               >
-                {availableTargetDepts.map(d => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} ({d.code})
+                {availableTargetDepts.length === 0 ? (
+                  <option value="" disabled>
+                    No other departments available
                   </option>
-                ))}
+                ) : (
+                  availableTargetDepts.map(d => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} ({d.code})
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           </div>
