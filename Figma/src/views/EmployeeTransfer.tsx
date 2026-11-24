@@ -7,6 +7,7 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Edit3,
   Filter,
   Layers,
   Loader2,
@@ -78,6 +79,7 @@ export default function EmployeeTransfer() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [completeModalItem, setCompleteModalItem] = useState<EmployeeTransferItem | null>(null);
   const [cancelModalItem, setCancelModalItem] = useState<EmployeeTransferItem | null>(null);
+  const [editingItem, setEditingItem] = useState<EmployeeTransferItem | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
 
   // Live timer tick for active transfers (updates every second)
@@ -478,6 +480,14 @@ export default function EmployeeTransfer() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => setEditingItem(item)}
+                      className="px-2 py-1.5 rounded-md text-xs font-medium text-slate-400 hover:text-blue-300 bg-[#122338] border border-slate-700 hover:border-blue-500/40 transition-colors"
+                      title="Edit transfer"
+                    >
+                      <Edit3 size={14} />
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setCancelModalItem(item)}
                       className="px-2 py-1.5 rounded-md text-xs font-medium text-slate-400 hover:text-red-400 bg-[#122338] border border-slate-700 hover:border-red-500/40 transition-colors"
                       title="Cancel transfer"
@@ -668,17 +678,27 @@ export default function EmployeeTransfer() {
                         {item.reason || <span className="text-slate-600">—</span>}
                       </td>
                       <td className="px-3.5 py-2.5 text-center">
-                        {item.status === 'active' ? (
+                        <div className="flex items-center justify-center gap-1.5">
+                          {item.status === 'active' && (
+                            <button
+                              type="button"
+                              onClick={() => setCompleteModalItem(item)}
+                              className="px-2 py-1 rounded text-[11px] font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+                              title="End active transfer"
+                            >
+                              End
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => setCompleteModalItem(item)}
-                            className="px-2 py-1 rounded text-[11px] font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+                            onClick={() => setEditingItem(item)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium bg-blue-600/20 hover:bg-blue-600/35 text-blue-300 border border-blue-500/30 hover:border-blue-400 transition-colors"
+                            title="Edit Transfer record"
                           >
-                            End Transfer
+                            <Edit3 size={12} />
+                            <span>Edit</span>
                           </button>
-                        ) : (
-                          <span className="text-slate-600 text-[11px]">Logged</span>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -722,6 +742,21 @@ export default function EmployeeTransfer() {
           busy={actionBusy}
           onClose={() => setCancelModalItem(null)}
           onConfirm={handleCancelSubmit}
+        />
+      )}
+
+      {/* Modal: Edit Transfer */}
+      {editingItem && (
+        <EditTransferModal
+          item={editingItem}
+          departments={departments}
+          today={today}
+          onClose={() => setEditingItem(null)}
+          onSuccess={async msg => {
+            setEditingItem(null);
+            setSuccessMessage(msg);
+            await loadData();
+          }}
         />
       )}
     </div>
@@ -1353,6 +1388,390 @@ function CancelTransferModal({
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Edit Transfer Modal
+// ----------------------------------------------------------------------------
+function EditTransferModal({
+  item,
+  departments,
+  today,
+  onClose,
+  onSuccess,
+}: {
+  item: EmployeeTransferItem;
+  departments: DepartmentRow[];
+  today: string;
+  onClose: () => void;
+  onSuccess: (msg: string) => Promise<void>;
+}) {
+  const [targetDeptId, setTargetDeptId] = useState(item.to_department_id);
+  const [transferDate, setTransferDate] = useState(item.transfer_date || today);
+
+  const formatTime = (iso?: string | null, fallback = '13:00') => {
+    if (!iso) return fallback;
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const [startTime, setStartTime] = useState(() => formatTime(item.start_time, '08:00'));
+  const [hasEndTime, setHasEndTime] = useState(item.end_time !== null);
+  const [endTime, setEndTime] = useState(() => formatTime(item.end_time, '17:00'));
+  const [breakMinutes, setBreakMinutes] = useState(item.break_minutes || 0);
+
+  const [isOt, setIsOt] = useState((item.overtime_minutes || 0) > 0);
+  const [otMinutes, setOtMinutes] = useState(item.overtime_minutes || 0);
+
+  const [transferType, setTransferType] = useState<TransferType>(item.transfer_type || 'temporary');
+  const [reason, setReason] = useState(item.reason || '');
+  const [notes, setNotes] = useState(item.notes || '');
+  const [status, setStatus] = useState<TransferStatus>(item.status);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  // Target departments: all except source department
+  const availableTargetDepts = useMemo(() => {
+    return departments.filter(d => d.id !== item.from_department_id);
+  }, [departments, item.from_department_id]);
+
+  // Duration preview calculation
+  const calc = useMemo(() => {
+    if (!hasEndTime) {
+      return {
+        hours: 0,
+        netMinutes: 0,
+        regularHours: 0,
+        overtimeHours: isOt ? Math.round(((otMinutes || 0) / 60) * 10) / 10 : 0,
+      };
+    }
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    const startM = (sh || 0) * 60 + (sm || 0);
+    const endM = (eh || 0) * 60 + (em || 0);
+    const rawDiff = Math.max(0, endM - startM);
+    const netM = Math.max(0, rawDiff - (breakMinutes || 0));
+    const otM = isOt ? (otMinutes || 0) : 0;
+    const regM = Math.max(0, netM - otM);
+    return {
+      hours: Math.round((netM / 60) * 10) / 10,
+      netMinutes: netM,
+      regularHours: Math.round((regM / 60) * 10) / 10,
+      overtimeHours: Math.round((otM / 60) * 10) / 10,
+    };
+  }, [hasEndTime, startTime, endTime, breakMinutes, isOt, otMinutes]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetDeptId) {
+      setError('Please select a valid destination department.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+
+    try {
+      const isoStart = new Date(`${transferDate}T${startTime}:00`).toISOString();
+      const isoEnd = hasEndTime && endTime ? new Date(`${transferDate}T${endTime}:00`).toISOString() : null;
+      const finalBreak = breakMinutes || 0;
+      const finalOt = isOt ? (otMinutes || 0) : 0;
+
+      await transferService.updateTransfer({
+        organizationId: item.organization_id,
+        transferId: item.id,
+        toDepartmentId: targetDeptId,
+        transferDate,
+        startTime: isoStart,
+        endTime: isoEnd,
+        breakMinutes: finalBreak,
+        overtimeMinutes: finalOt,
+        transferType,
+        reason: reason.trim() || undefined,
+        notes: notes.trim() || undefined,
+        status: hasEndTime && isoEnd ? (status === 'cancelled' ? 'cancelled' : 'completed') : (hasEndTime ? 'completed' : 'active'),
+      });
+
+      const destDeptName = departments.find(d => d.id === targetDeptId)?.name ?? 'destination';
+      await onSuccess(`Transfer for ${item.employee?.full_name ?? 'employee'} updated to ${destDeptName}.`);
+    } catch (caught) {
+      setError(getErrorMessage(caught));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const reasonPresets = [
+    'Mailroom Peak Sorting',
+    'FC Packing Support',
+    'Backlog Clearance',
+    'Cross-Department Coverage',
+    'Overtime Coverage',
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto">
+      <div className="relative w-full max-w-lg my-8 rounded-2xl overflow-hidden shadow-2xl border" style={{ background: '#0a1628', borderColor: '#1e3a5a' }}>
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-[#1e3a5a] flex items-center justify-between" style={{ background: '#0d1f36' }}>
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
+              <ArrowLeftRight size={18} />
+            </div>
+            <div>
+              <h3 className="font-bold text-white text-base">Edit Employee Transfer</h3>
+              <p className="text-xs text-slate-400">Update destination department, hours, overtime, or notes</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Form Body */}
+        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {error && (
+            <div className="p-3 rounded-lg flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-300 text-xs">
+              <AlertCircle size={15} className="shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Employee & Source Route Display */}
+          <div className="p-3 rounded-xl bg-[#122338] border border-[#1e3a5a] space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <User size={15} className="text-blue-400" />
+                <span className="text-xs font-semibold text-white">{item.employee?.full_name ?? 'Employee'}</span>
+                <span className="text-[11px] font-mono text-slate-400">({item.employee?.employee_code ?? 'EMP'})</span>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-300">
+                Home Dept: {item.from_department?.name ?? 'FC'}
+              </span>
+            </div>
+          </div>
+
+          {/* Destination Department Selector */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              Destination Department <span className="text-rose-400">*</span>
+            </label>
+            <select
+              value={targetDeptId}
+              onChange={e => setTargetDeptId(e.target.value)}
+              style={inputStyle}
+              required
+            >
+              {availableTargetDepts.map(d => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.code})
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-slate-400 mt-1">
+              Transfer hours and productivity will be attributed to this department.
+            </p>
+          </div>
+
+          {/* Transfer Date */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              Transfer Date <span className="text-rose-400">*</span>
+            </label>
+            <input
+              type="date"
+              value={transferDate}
+              onChange={e => setTransferDate(e.target.value)}
+              style={inputStyle}
+              required
+            >
+            </input>
+          </div>
+
+          {/* Time & Hours Configuration */}
+          <div className="p-3.5 rounded-xl bg-[#0f2137] border border-[#1e3a5a] space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 text-xs font-semibold text-white cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={hasEndTime}
+                  onChange={e => setHasEndTime(e.target.checked)}
+                  className="rounded border-slate-600 bg-slate-800 text-blue-500"
+                />
+                <span>Specific Time Window (Completed/Logged)</span>
+              </label>
+              <span className="text-[11px] text-slate-400 font-mono">
+                {hasEndTime ? `${calc.hours}h total` : 'Ongoing Live Clock'}
+              </span>
+            </div>
+
+            {hasEndTime ? (
+              <div className="space-y-3 pt-1">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] text-slate-300 mb-1">Start Time</label>
+                    <input
+                      type="time"
+                      value={startTime}
+                      onChange={e => setStartTime(e.target.value)}
+                      style={inputStyle}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-300 mb-1">End Time</label>
+                    <input
+                      type="time"
+                      value={endTime}
+                      onChange={e => setEndTime(e.target.value)}
+                      style={inputStyle}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-slate-300 mb-1">Unpaid Break (minutes)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="15"
+                    value={breakMinutes}
+                    onChange={e => setBreakMinutes(Number(e.target.value))}
+                    style={inputStyle}
+                  />
+                </div>
+
+                {/* Calculation summary */}
+                <div className="p-2.5 rounded-lg bg-[#0a1628] border border-blue-500/20 text-xs flex items-center justify-between">
+                  <div className="text-slate-400">
+                    Net Duration: <strong className="text-white font-mono">{calc.hours}h</strong>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-slate-400">Regular: <strong className="text-blue-300 font-mono">{calc.regularHours}h</strong></span>
+                    {calc.overtimeHours > 0 && (
+                      <span className="text-slate-400">OT: <strong className="text-amber-300 font-mono">+{calc.overtimeHours}h</strong></span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400">
+                This transfer has no fixed end time and will track duration in real time until marked completed.
+              </div>
+            )}
+          </div>
+
+          {/* Overtime in Destination Department */}
+          <div className="p-3 rounded-xl bg-[#0f2137] border border-[#1e3a5a] space-y-2.5">
+            <label className="flex items-center gap-2 text-xs font-semibold text-white cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isOt}
+                onChange={e => setIsOt(e.target.checked)}
+                className="rounded border-slate-600 bg-slate-800 text-amber-500"
+              />
+              <span>Transferred work includes Overtime in destination department</span>
+            </label>
+
+            {isOt && (
+              <div className="pt-1">
+                <label className="block text-[11px] text-slate-300 mb-1">Overtime Minutes</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="15"
+                  value={otMinutes}
+                  onChange={e => setOtMinutes(Number(e.target.value))}
+                  style={inputStyle}
+                  placeholder="e.g. 60 for 1h overtime"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Reason / Task */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Reason / Task</label>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {reasonPresets.map(preset => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setReason(preset)}
+                  className={`text-[11px] px-2.5 py-1 rounded-md border transition-colors ${
+                    reason === preset
+                      ? 'bg-blue-600 text-white border-blue-500'
+                      : 'bg-[#122338] text-slate-300 border-[#1e3a5a] hover:border-blue-400'
+                  }`}
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              placeholder="e.g. Afternoon sorting assistance in Mailroom"
+              style={inputStyle}
+            />
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Internal Notes</label>
+            <input
+              type="text"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Optional notes for managers"
+              style={inputStyle}
+            />
+          </div>
+
+          {/* Status */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Transfer Status</label>
+            <select
+              value={status}
+              onChange={e => setStatus(e.target.value as TransferStatus)}
+              style={inputStyle}
+            >
+              <option value="completed">Completed</option>
+              <option value="active">Active (Ongoing)</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#1e3a5a]">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={submitting}
+              className="px-4 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white bg-[#122338] border border-[#1e3a5a] transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex items-center gap-2 px-5 py-2 rounded-lg text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 transition-colors shadow-lg shadow-blue-500/20 disabled:opacity-50"
+            >
+              {submitting && <Loader2 size={13} className="animate-spin" />}
+              <span>Save Changes</span>
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

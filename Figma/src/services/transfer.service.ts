@@ -50,6 +50,21 @@ export interface CancelTransferInput {
   reason?: string;
 }
 
+export interface UpdateTransferInput {
+  organizationId: string;
+  transferId: string;
+  toDepartmentId?: string;
+  transferDate?: string;
+  startTime?: string;
+  endTime?: string | null;
+  breakMinutes?: number;
+  overtimeMinutes?: number;
+  transferType?: TransferType;
+  reason?: string;
+  notes?: string;
+  status?: TransferStatus;
+}
+
 export const transferService = {
   async listTransfers(filters: TransferListFilters): Promise<EmployeeTransferItem[]> {
     const client = getSupabaseClient();
@@ -254,6 +269,72 @@ export const transferService = {
           .select('*')
           .single(),
         'Unable to cancel transfer.',
+      );
+    }
+  },
+
+  async updateTransfer(input: UpdateTransferInput): Promise<EmployeeTransferRow> {
+    const client = getSupabaseClient();
+    try {
+      return await executeQuery<EmployeeTransferRow>(
+        client.rpc('update_employee_transfer', {
+          p_organization_id: input.organizationId,
+          p_transfer_id: input.transferId,
+          p_to_department_id: input.toDepartmentId ?? null,
+          p_transfer_date: input.transferDate ?? null,
+          p_start_time: input.startTime ?? null,
+          p_end_time: input.endTime ?? null,
+          p_break_minutes: input.breakMinutes ?? null,
+          p_overtime_minutes: input.overtimeMinutes ?? null,
+          p_transfer_type: input.transferType ?? null,
+          p_reason: input.reason ?? null,
+          p_notes: input.notes ?? null,
+          p_status: input.status ?? null,
+        }),
+        'Unable to update employee transfer.',
+      );
+    } catch {
+      const existing = await executeQuery<EmployeeTransferRow>(
+        client.from('employee_transfers').select('*').eq('id', input.transferId).single(),
+        'Unable to find transfer record.',
+      );
+
+      const startTime = input.startTime ?? existing.start_time;
+      const endTime = input.endTime !== undefined ? input.endTime : existing.end_time;
+      const breakMinutes = input.breakMinutes !== undefined ? input.breakMinutes : (existing.break_minutes ?? 0);
+      const overtimeMinutes = input.overtimeMinutes !== undefined ? input.overtimeMinutes : (existing.overtime_minutes ?? 0);
+      let transferredMinutes = 0;
+      let status = input.status ?? existing.status;
+
+      if (endTime) {
+        const calc = calculateTransferDuration(startTime, endTime, breakMinutes);
+        transferredMinutes = calc.netMinutes;
+        if (!input.status && existing.status === 'active') {
+          status = 'completed';
+        }
+      }
+
+      return executeQuery<EmployeeTransferRow>(
+        client
+          .from('employee_transfers')
+          .update({
+            to_department_id: input.toDepartmentId ?? existing.to_department_id,
+            transfer_date: input.transferDate ?? existing.transfer_date,
+            start_time: startTime,
+            end_time: endTime,
+            status,
+            transfer_type: input.transferType ?? existing.transfer_type,
+            transferred_minutes: transferredMinutes,
+            break_minutes: breakMinutes,
+            overtime_minutes: overtimeMinutes,
+            reason: input.reason !== undefined ? input.reason : existing.reason,
+            notes: input.notes !== undefined ? input.notes : existing.notes,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', input.transferId)
+          .select('*')
+          .single(),
+        'Unable to update employee transfer.',
       );
     }
   },

@@ -100,6 +100,7 @@ export interface TransferredLaborItem {
   totalHours: number;
   status: string;
   reason: string | null;
+  transferRole: 'incoming' | 'outgoing' | 'other';
 }
 
 export interface MailroomWorkspace {
@@ -163,6 +164,17 @@ export interface MailroomDayCapacity {
   scheduledDlp: number;
   eligibleDlpCount: number;
   otRequiredPerPerson: number;
+  transferredInRegHours: number;
+  transferredInOtHours: number;
+  transferredInCount: number;
+  transferredOutRegHours: number;
+  transferredWorkers: {
+    employeeName: string;
+    employeeCode: string;
+    fromDepartmentName: string;
+    regularHours: number;
+    overtimeHours: number;
+  }[];
 }
 
 export interface MailroomClientSummary {
@@ -247,6 +259,7 @@ export interface MailroomOperationalModel {
   draftDates: string[];
   totalTransferredInHours: number;
   totalTransferredInCount: number;
+  totalTransferredOtHours: number;
   totalTransferredOutHours: number;
   totalTransferredOutCount: number;
   transferredLabor: TransferredLaborItem[];
@@ -665,6 +678,14 @@ export function buildMailroomOperationalModel(
     let dayTransferredInRegHours = 0;
     let dayTransferredInOtHours = 0;
     let dayTransferredOutRegHours = 0;
+    let dayTransferredInCount = 0;
+    const dayTransferredWorkers: {
+      employeeName: string;
+      employeeCode: string;
+      fromDepartmentName: string;
+      regularHours: number;
+      overtimeHours: number;
+    }[] = [];
 
     dayTransfers.forEach(t => {
       const duration = t.status === 'completed'
@@ -672,14 +693,24 @@ export function buildMailroomOperationalModel(
         : calculateTransferDuration(t.start_time, null, t.break_minutes).netMinutes;
       const otM = t.overtime_minutes || 0;
       const regM = Math.max(0, duration - otM);
+      const regH = Math.round((regM / 60) * 10) / 10;
+      const otH = Math.round((otM / 60) * 10) / 10;
 
       if (isMailroomTarget(t)) {
-        dayTransferredInRegHours += regM / 60;
-        dayTransferredInOtHours += otM / 60;
+        dayTransferredInRegHours += regH;
+        dayTransferredInOtHours += otH;
+        dayTransferredInCount += 1;
         activeDlpCount += 1;
         scheduledDlp += 1;
+        dayTransferredWorkers.push({
+          employeeName: t.employee?.full_name || 'Transferred Employee',
+          employeeCode: t.employee?.employee_code || '',
+          fromDepartmentName: t.from_department?.name || 'Other Department',
+          regularHours: regH,
+          overtimeHours: otH,
+        });
       } else if (isMailroomSource(t)) {
-        dayTransferredOutRegHours += regM / 60;
+        dayTransferredOutRegHours += regH;
       }
     });
 
@@ -818,6 +849,11 @@ export function buildMailroomOperationalModel(
       scheduledDlp,
       eligibleDlpCount,
       otRequiredPerPerson,
+      transferredInRegHours: Math.round(dayTransferredInRegHours * 10) / 10,
+      transferredInOtHours: Math.round(dayTransferredInOtHours * 10) / 10,
+      transferredInCount: dayTransferredInCount,
+      transferredOutRegHours: Math.round(dayTransferredOutRegHours * 10) / 10,
+      transferredWorkers: dayTransferredWorkers,
     };
   });
 
@@ -1028,6 +1064,11 @@ export function buildMailroomOperationalModel(
         .filter(t => t.status !== 'cancelled' && (t.to_department?.name?.toLowerCase().includes('mailroom') || (workspace.department?.id && t.to_department_id === workspace.department.id)))
         .map(t => t.employee_id)
     ).size,
+    totalTransferredOtHours: Math.round(
+      (workspace.transfers ?? [])
+        .filter(t => t.status !== 'cancelled' && (t.to_department?.name?.toLowerCase().includes('mailroom') || (workspace.department?.id && t.to_department_id === workspace.department.id)))
+        .reduce((sum, t) => sum + (t.overtime_minutes || 0) / 60, 0) * 10
+    ) / 10,
     totalTransferredOutHours: Math.round(
       (workspace.transfers ?? [])
         .filter(t => t.status !== 'cancelled' && (t.from_department?.name?.toLowerCase().includes('mailroom') || (workspace.department?.id && t.from_department_id === workspace.department.id)))
@@ -1044,6 +1085,9 @@ export function buildMailroomOperationalModel(
         const netMin = t.status === 'completed' ? t.transferred_minutes : calculateTransferDuration(t.start_time, null, t.break_minutes).netMinutes;
         const otMin = t.overtime_minutes || 0;
         const regMin = Math.max(0, netMin - otMin);
+        const isTarget = (workspace.department?.id && t.to_department_id === workspace.department.id) || t.to_department?.name?.toLowerCase().includes('mailroom');
+        const isSource = (workspace.department?.id && t.from_department_id === workspace.department.id) || t.from_department?.name?.toLowerCase().includes('mailroom');
+        const role: 'incoming' | 'outgoing' | 'other' = isTarget ? 'incoming' : isSource ? 'outgoing' : 'other';
         return {
           id: t.id,
           employeeId: t.employee_id,
@@ -1059,6 +1103,7 @@ export function buildMailroomOperationalModel(
           totalHours: Math.round((netMin / 60) * 100) / 100,
           status: t.status,
           reason: t.reason,
+          transferRole: role,
         };
       }),
   };

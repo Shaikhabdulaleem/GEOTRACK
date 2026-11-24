@@ -346,3 +346,53 @@ test('EmployeeTransfer UI module contains live counter and modal components', as
   assert.match(appCode, /import\('\.\/views\/EmployeeTransfer'\)/);
   assert.match(appCode, /transfers:\s*EmployeeTransfer/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Transfer Editing & Productivity Showcase Tests
+// ─────────────────────────────────────────────────────────────────────────────
+test('transfer.service.ts provides updateTransfer method and UpdateTransferInput', async () => {
+  const serviceCode = await read('src/services/transfer.service.ts');
+
+  assert.match(serviceCode, /export interface UpdateTransferInput/);
+  assert.match(serviceCode, /async updateTransfer\(input: UpdateTransferInput\)/);
+  assert.match(serviceCode, /client\.rpc\('update_employee_transfer'/);
+});
+
+test('EmployeeTransfer.tsx supports editing transfers with EditTransferModal and Action button', async () => {
+  const viewCode = await read('src/views/EmployeeTransfer.tsx');
+
+  assert.match(viewCode, /EditTransferModal/);
+  assert.match(viewCode, /setEditingItem/);
+  assert.match(viewCode, /Edit Transfer/);
+  assert.match(viewCode, /Save Changes/);
+  assert.match(viewCode, /transferService\.updateTransfer/);
+});
+
+test('Productivity.tsx showcases transferred workforce in Overtime tracking and Daily capacity', async () => {
+  const [prodViewCode, prodServiceCode] = await Promise.all([
+    read('src/views/Productivity.tsx'),
+    read('src/services/productivity.service.ts'),
+  ]);
+
+  // View showcases
+  assert.match(prodViewCode, /Transferred Support:/);
+  assert.match(prodViewCode, /includes \+\{number\(model\.totalTransferredInHours, 1\)\}h transferred/);
+  assert.match(prodViewCode, /How Transferred Workforce Impacts Productivity/);
+  assert.match(prodViewCode, /\+\{day\.transferredInCount\} transfer/);
+  assert.match(prodViewCode, /\+\{number\(day\.transferredInRegHours, 1\)\}h transferred/);
+  assert.match(prodViewCode, /Impact on Mailroom/);
+
+  // Service model calculates transferred details per day
+  assert.match(prodServiceCode, /transferredInRegHours: number/);
+  assert.match(prodServiceCode, /transferredInOtHours: number/);
+  assert.match(prodServiceCode, /transferredInCount: number/);
+  assert.match(prodServiceCode, /totalTransferredOtHours: number/);
+  assert.match(prodServiceCode, /transferRole:\s*'incoming' \| 'outgoing' \| 'other'/);
+});
+
+test('database migration provides update_employee_transfer RPC function', async () => {
+  const migrationSql = await readFile(new URL('../../supabase/migrations/20261124160000_update_employee_transfer.sql', import.meta.url), 'utf8');
+
+  assert.match(migrationSql, /create or replace function public\.update_employee_transfer/);
+  assert.match(migrationSql, /grant execute on function public\.update_employee_transfer/);
+});

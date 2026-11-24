@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload, Calculator, ShieldAlert, Layers, ArrowRight, ArrowLeftRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload, Calculator, ShieldAlert, Layers, ArrowRight, ArrowLeftRight, Info } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts';
 import { useAuth } from '../auth/AuthContext';
 import { addDays, buildMailroomDayPreview, buildMailroomOperationalModel, calculateProductivityScenario, dateRange, getApprovedOvertimeMinutes, getClientProductivityProfiles, getEffectiveApprovedOvertimeMinutes, getEmployeeOtRate, isEmployeeActiveOnDate, productivityService, startOfSundayWeek, type ClientProductivityProfile, type MailroomDailyClientInput, type MailroomDailyDspInput, type MailroomDailyInput, type MailroomWorkspace } from '../services/productivity.service';
@@ -434,6 +434,7 @@ function OperationsDashboard({
                 <th className="text-left px-3.5 py-2">Employee</th>
                 <th className="text-left px-3.5 py-2">Home Dept</th>
                 <th className="text-left px-3.5 py-2">Assigned To</th>
+                <th className="text-center px-3.5 py-2">Impact on Mailroom</th>
                 <th className="text-left px-3.5 py-2">Date</th>
                 <th className="text-right px-3.5 py-2">Regular Hrs</th>
                 <th className="text-right px-3.5 py-2">Overtime Hrs</th>
@@ -448,6 +449,21 @@ function OperationsDashboard({
                   <td className="px-3.5 py-2 font-medium text-white">{item.employeeName} ({item.employeeCode})</td>
                   <td className="px-3.5 py-2 text-blue-300 font-semibold">{item.fromDepartmentName}</td>
                   <td className="px-3.5 py-2 text-emerald-300 font-semibold">{item.toDepartmentName}</td>
+                  <td className="px-3.5 py-2 text-center">
+                    {item.transferRole === 'incoming' ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        +{item.regularHours}h Capacity Added
+                      </span>
+                    ) : item.transferRole === 'outgoing' ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        -{item.regularHours}h Outgoing Support
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] text-slate-400 bg-slate-800">
+                        Other Transfer
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3.5 py-2 font-mono text-slate-300">{item.date}</td>
                   <td className="px-3.5 py-2 text-right font-mono text-white">{item.regularHours}h</td>
                   <td className="px-3.5 py-2 text-right font-mono text-amber-300">{item.overtimeHours > 0 ? `+${item.overtimeHours}h OT` : '—'}</td>
@@ -472,6 +488,14 @@ function OperationsDashboard({
           <div className="font-semibold text-sm text-white">Overtime tracking — Required vs Done (Approved)</div>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
+          {model.totalTransferredInHours > 0 && (
+            <div className="px-3 py-1.5 rounded-lg flex items-center gap-1.5 bg-blue-500/15 border border-blue-400/30 text-blue-300 shadow-sm">
+              <ArrowLeftRight size={13} className="text-emerald-400" />
+              <span className="text-slate-300">Transferred Support: </span>
+              <strong className="font-mono text-emerald-300">+{number(model.totalTransferredInHours, 1)}h</strong>
+              <span className="text-[10px] font-mono text-blue-200">({model.totalTransferredInCount} {model.totalTransferredInCount === 1 ? 'worker' : 'workers'})</span>
+            </div>
+          )}
           <div className="px-3 py-1.5 rounded-lg group relative cursor-help" style={{ background: '#122338', border: '1px solid #1e3a5a' }} title={`Own: ${model.ownDlp} · 3PL: ${model.threePlDlp}`}>
             <span style={{ color: '#94a3b8' }}>Active DLP: </span>
             <strong className="font-mono text-white">{model.totalActivePeriodDlpEmployees ?? model.eligibleDlpCount} employees</strong>
@@ -495,6 +519,11 @@ function OperationsDashboard({
             <span style={{ color: '#94a3b8' }}>Regular Capacity: </span>
             <strong className="font-mono text-white">{number(model.totalRegularUnitsCapacity)} units</strong>
             <span className="text-[10px] font-mono ml-1" style={{ color: '#93c5fd' }}>({number(model.totalRegularCapacityHours, 1)}h)</span>
+            {model.totalTransferredInHours > 0 && (
+              <span className="text-[10px] font-mono text-emerald-400 ml-1.5 font-medium">
+                (includes +{number(model.totalTransferredInHours, 1)}h transferred)
+              </span>
+            )}
           </div>
           <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
             <span style={{ color: '#94a3b8' }}>OT Required: </span>
@@ -509,6 +538,11 @@ function OperationsDashboard({
             <span style={{ color: '#94a3b8' }}>OT Done (Approved): </span>
             <strong className="font-mono" style={{ color: '#10b981' }}>{number(model.actualOvertimeHours, 1)}h</strong>
             <span className="text-[10px] font-mono ml-1 font-semibold" style={{ color: '#6ee7b7' }}>({model.totalApprovedOtEmployees ?? 0} {model.totalApprovedOtEmployees === 1 ? 'employee' : 'employees'})</span>
+            {model.totalTransferredOtHours > 0 && (
+              <span className="text-[10px] font-mono text-amber-300 ml-1.5">
+                (+{number(model.totalTransferredOtHours, 1)}h transfer OT)
+              </span>
+            )}
           </div>
           <div className="px-3 py-1.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
             <span style={{ color: '#94a3b8' }}>Total Approved Cost: </span>
@@ -525,6 +559,15 @@ function OperationsDashboard({
           </div>
         </div>
       </div>
+
+      {/* Cross-Department Impact Callout */}
+      <div className="px-4 py-2.5 border-b flex items-start sm:items-center gap-2.5 text-xs" style={{ background: 'rgba(30, 58, 90, 0.3)', borderColor: '#1e3a5a' }}>
+        <Info size={14} className="text-blue-400 shrink-0 mt-0.5 sm:mt-0" />
+        <div className="text-slate-300 leading-relaxed">
+          <strong className="text-white">How Transferred Workforce Impacts Productivity:</strong> Transferred-in employees (e.g. from FC) automatically expand Mailroom regular hours capacity ({number(model.totalTransferredInHours, 1)}h credited), directly reducing required overtime. Any cross-department overtime worked is tracked under OT Done.
+        </div>
+      </div>
+
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
@@ -572,22 +615,42 @@ function OperationsDashboard({
                   </td>
                   <td className="px-3 py-2 text-center">
                     <div
-                      className="group relative inline-flex items-center justify-center cursor-help px-2 py-0.5 rounded text-[11px] font-mono transition-colors"
+                      className="group relative inline-flex flex-col items-center justify-center cursor-help px-2 py-0.5 rounded text-[11px] font-mono transition-colors"
                       style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', color: '#93c5fd' }}
                       title={`Active DLP: ${day.activeDlpCount} employees (Own: ${day.activeOwnCount} · 3PL: ${day.activeThreePlCount})`}
                     >
                       <span className="font-medium">{day.activeDlpCount} {day.activeDlpCount === 1 ? 'employee' : 'employees'}</span>
+                      {day.transferredInCount > 0 && (
+                        <span className="text-[10px] font-semibold text-emerald-400 font-mono">
+                          +{day.transferredInCount} transfer
+                        </span>
+                      )}
                       <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col items-center z-30 whitespace-nowrap">
-                        <div className="px-2.5 py-1.5 rounded-lg shadow-xl text-[11px] font-sans font-medium text-white flex items-center gap-2 border" style={{ background: '#0b1623', borderColor: '#3b82f6' }}>
-                          <span className="flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-blue-400"></span>
-                            <span>Own: <strong className="font-mono text-blue-300">{day.activeOwnCount}</strong></span>
-                          </span>
-                          <span style={{ color: '#475569' }}>·</span>
-                          <span className="flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                            <span>3PL: <strong className="font-mono text-amber-300">{day.activeThreePlCount}</strong></span>
-                          </span>
+                        <div className="px-2.5 py-1.5 rounded-lg shadow-xl text-[11px] font-sans font-medium text-white flex flex-col gap-1 border" style={{ background: '#0b1623', borderColor: '#3b82f6' }}>
+                          <div className="flex items-center gap-2">
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                              <span>Own: <strong className="font-mono text-blue-300">{day.activeOwnCount}</strong></span>
+                            </span>
+                            <span style={{ color: '#475569' }}>·</span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                              <span>3PL: <strong className="font-mono text-amber-300">{day.activeThreePlCount}</strong></span>
+                            </span>
+                          </div>
+                          {day.transferredInCount > 0 && (
+                            <div className="pt-1 border-t border-slate-700/60 flex flex-col gap-0.5">
+                              <span className="flex items-center gap-1 text-emerald-300 font-semibold text-[11px]">
+                                <ArrowLeftRight size={11} />
+                                <span>Transferred Support: +{day.transferredInCount} ({day.transferredInRegHours}h regular{day.transferredInOtHours > 0 ? `, +${day.transferredInOtHours}h OT` : ''})</span>
+                              </span>
+                              {day.transferredWorkers?.map((w, idx) => (
+                                <span key={idx} className="text-[10px] text-slate-300 pl-2">
+                                  • {w.employeeName} ({w.fromDepartmentName}): {w.regularHours}h regular{w.overtimeHours > 0 ? ` + ${w.overtimeHours}h OT` : ''}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="w-2 h-1 border-x-4 border-t-4 border-x-transparent" style={{ borderTopColor: '#3b82f6' }}></div>
                       </div>
@@ -601,6 +664,11 @@ function OperationsDashboard({
                     <div className="text-[10px]" style={{ color: '#64748b' }}>
                       {number(day.regularCapacityHours, 1)}h ({day.received > 0 ? Math.round((day.regularUnitsCapacity / day.received) * 100) : 100}%)
                     </div>
+                    {day.transferredInRegHours > 0 && (
+                      <div className="text-[10px] text-emerald-400 font-mono font-medium">
+                        +{number(day.transferredInRegHours, 1)}h transferred
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono" style={{ color: '#93c5fd' }}>{number(day.requiredHours, 1)}h</td>
                   <td className="px-3 py-2 text-right font-mono font-medium" style={{ color: day.overtimeRecommendedHours > 0 ? '#8b5cf6' : '#64748b' }}>
@@ -618,6 +686,11 @@ function OperationsDashboard({
                     {day.actualOvertimeHours > 0 && (
                       <div className="text-[10px] font-normal" style={{ color: '#6ee7b7' }}>
                         {day.actualOtEmployeesCount} {day.actualOtEmployeesCount === 1 ? 'employee' : 'employees'}
+                      </div>
+                    )}
+                    {day.transferredInOtHours > 0 && (
+                      <div className="text-[10px] text-amber-300 font-mono font-normal">
+                        +{number(day.transferredInOtHours, 1)}h transfer OT
                       </div>
                     )}
                   </td>
@@ -651,11 +724,16 @@ function OperationsDashboard({
               <td colSpan={2} className="px-3 py-2.5 text-white">Period Totals</td>
               <td className="px-3 py-2.5 text-center">
                 <div
-                  className="group relative inline-flex items-center justify-center cursor-help px-2 py-0.5 rounded text-[11px] font-mono transition-colors"
+                  className="group relative inline-flex flex-col items-center justify-center cursor-help px-2 py-0.5 rounded text-[11px] font-mono transition-colors"
                   style={{ background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.35)', color: '#93c5fd' }}
                   title={`Active DLP: ${model.totalActivePeriodDlpEmployees ?? (model.ownDlp + model.threePlDlp)} employees (Own: ${model.ownDlp} · 3PL: ${model.threePlDlp})`}
                 >
                   <span className="font-medium">{model.totalActivePeriodDlpEmployees ?? (model.ownDlp + model.threePlDlp)} employees</span>
+                  {model.totalTransferredInCount > 0 && (
+                    <span className="text-[10px] text-emerald-400 font-mono font-normal">
+                      +{model.totalTransferredInCount} transferred
+                    </span>
+                  )}
                   <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col items-center z-30 whitespace-nowrap">
                     <div className="px-2.5 py-1.5 rounded-lg shadow-xl text-[11px] font-sans font-medium text-white flex items-center gap-2 border" style={{ background: '#0b1623', borderColor: '#3b82f6' }}>
                       <span className="flex items-center gap-1.5">
@@ -676,6 +754,11 @@ function OperationsDashboard({
               <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#93c5fd' }}>
                 {number(model.totalRegularUnitsCapacity)}
                 <div className="text-[10px]" style={{ color: '#64748b' }}>({number(model.totalRegularCapacityHours, 1)}h)</div>
+                {model.totalTransferredInHours > 0 && (
+                  <div className="text-[10px] text-emerald-400 font-mono font-normal">
+                    +{number(model.totalTransferredInHours, 1)}h transferred
+                  </div>
+                )}
               </td>
               <td className="px-3 py-2.5 text-right font-mono text-white">{number(model.totalRequiredHours, 1)}h</td>
               <td className="px-3 py-2.5 text-right font-mono" style={{ color: '#8b5cf6' }}>{number(model.overtimeRecommendedHours, 1)}h</td>
@@ -686,6 +769,11 @@ function OperationsDashboard({
                 <div className="text-[10px] font-normal" style={{ color: '#6ee7b7' }}>
                   {model.totalApprovedOtEmployees ?? 0} {model.totalApprovedOtEmployees === 1 ? 'employee' : 'employees'}
                 </div>
+                {model.totalTransferredOtHours > 0 && (
+                  <div className="text-[10px] text-amber-300 font-mono font-normal">
+                    +{number(model.totalTransferredOtHours, 1)}h transfer OT
+                  </div>
+                )}
               </td>
               <td className="px-3 py-2.5 text-right font-mono font-bold" style={{ color: '#f59e0b' }}>SAR {number(model.actualOvertimeCost, 2)}</td>
               <td className="px-3 py-2.5 text-right font-mono text-[11px]" style={{ color: model.actualOvertimeHours >= model.overtimeRecommendedHours ? '#10b981' : '#f59e0b' }}>

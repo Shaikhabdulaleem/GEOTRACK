@@ -1317,6 +1317,23 @@ export interface Database {
         };
         Returns: EmployeeTransferRow;
       };
+      update_employee_transfer: {
+        Args: {
+          p_organization_id: string;
+          p_transfer_id: string;
+          p_to_department_id?: string | null;
+          p_transfer_date?: string | null;
+          p_start_time?: string | null;
+          p_end_time?: string | null;
+          p_break_minutes?: number | null;
+          p_overtime_minutes?: number | null;
+          p_transfer_type?: string | null;
+          p_reason?: string | null;
+          p_notes?: string | null;
+          p_status?: string | null;
+        };
+        Returns: EmployeeTransferRow;
+      };
     };
     Enums: {
       app_role: AppRole;
