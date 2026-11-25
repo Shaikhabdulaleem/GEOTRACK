@@ -1,16 +1,16 @@
 # Current release artifact
 
-- Version code: 10
-- Version name: 0.2.8
-- Build date: 2026-11-15
-- Artifact: app/build/outputs/apk/release/geotrack-0.2.8-geofence-accuracy.apk
+- Version code: 11
+- Version name: 0.2.9
+- Build date: 2026-11-25
+- Artifact: app/build/outputs/apk/release/geotrack-0.2.9-realtime-telemetry.apk
 - Size: 3,913,207 bytes
-- APK SHA-256: F566A63043942CC95829804930B84C7D0AA3BBC0E321707E1336339D92E1ED02
+- APK SHA-256: DF6E29A1289EE397D6941CB2157430775F0ED9DDF88CC63CAE78B40ED1172661
 - Signature: APK Signature Scheme v2
 - Signer certificate SHA-256:
-  C80D1408BAAE76E58723B7FF172DF9B590C147A7ABB4559C51767CD8F690718F
+  B482D46B368210E100645E751CA04D600548A2D59C8E15047DDE8298F8BEF153
 - Signer certificate SHA-1:
-  06356A12A4DE4FD9193EEC7A25D55A859E0F0F80
+  B50A3212B4C4FEC29B7EFF44090CF90702119BD3
 
 This manifest identifies the locally verified release candidate. Repeat the
 build and update the hashes after any source, configuration or version change.
