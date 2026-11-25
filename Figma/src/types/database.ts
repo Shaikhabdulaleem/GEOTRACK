@@ -695,6 +695,7 @@ export interface MailroomDailyTurnaroundMetricRow {
   client_id: string;
   work_date: string;
   warehouse_code: string;
+  shift_type?: 'day' | 'night' | 'unassigned' | 'all';
   total_minutes: number;
   shipment_count: number;
   updated_at: string;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { aggregateAymakanReturns, aggregateAymakanReturnsByClient, aggregateAymakanSnapshot, aggregateAymakanTurnaroundMetrics, firstCompleteAymakanMonthDate, getAymakanImportGroup, getAymakanReceivingDates, groupAymakanImportDaysByMonth, parseAymakanCsv, parseAymakanSnapshot, validationBatchCloseDate } from '../src/lib/aymakan-import.ts';
+import { aggregateAymakanReturns, aggregateAymakanReturnsByClient, aggregateAymakanSnapshot, aggregateAymakanTurnaroundMetrics, buildShiftTimeWindows, detectShipmentShift, firstCompleteAymakanMonthDate, getAymakanImportGroup, getAymakanReceivingDates, groupAymakanImportDaysByMonth, parseAymakanCsv, parseAymakanSnapshot, validationBatchCloseDate } from '../src/lib/aymakan-import.ts';
 
 const clients = [
   { id: 'barq', code: 'BARQ', name: 'Barq' },
@@ -269,4 +269,38 @@ test('recognizes J&T Express and provider column variants for DSP partner alloca
 
   assert.equal(byCode.BARQ.jnt_units, 2); // J-1 and J-3
   assert.equal(byCode.ELM.jnt_units, 2);  // J-2 and J-4
+});
+
+test('detects Day and Night shift handovers including overnight Night shifts', () => {
+  const windows = buildShiftTimeWindows([
+    { name: 'Day Shift', start_time: '08:00', end_time: '17:00', crosses_midnight: false, status: 'active' },
+    { name: 'Night Shift', start_time: '21:00', end_time: '05:00', crosses_midnight: true, status: 'active' },
+  ]);
+
+  const dayDetect = detectShipmentShift(Date.UTC(2026, 10, 24, 14, 15, 0), windows);
+  assert.deepEqual(dayDetect, { shiftType: 'day', shiftWorkDate: '2026-11-24' });
+
+  const nightPreMidnight = detectShipmentShift(Date.UTC(2026, 10, 24, 22, 30, 0), windows);
+  assert.deepEqual(nightPreMidnight, { shiftType: 'night', shiftWorkDate: '2026-11-24' });
+
+  const nightPostMidnight = detectShipmentShift(Date.UTC(2026, 10, 25, 2, 12, 32), windows);
+  assert.deepEqual(nightPostMidnight, { shiftType: 'night', shiftWorkDate: '2026-11-24' });
+
+  const csv = [
+    'Tracking,Customer,Receiving Date,Validation Date,LMD Handed Over At,Destination WH,Status',
+    'D-1,Barq,2026-11-24 11:30:00,,2026-11-24 14:00:00,RUH,Delivered',
+    'N-1,Barq,2026-11-24 21:17:01,,2026-11-25 02:12:32,JED,Delivered',
+    'N-2,Barq,2026-11-24 21:48:17,,2026-11-25 02:11:40,RUH,Delivered',
+  ].join('\n');
+  const snapshot = parseAymakanCsv(csv);
+  const metrics = aggregateAymakanTurnaroundMetrics(snapshot, clients, '2026-11-24', windows);
+
+  assert.deepEqual(
+    metrics.map(row => [row.warehouse_code, row.shift_type, row.shipment_count]),
+    [
+      ['RUH', 'day', 1],
+      ['JED', 'night', 1],
+      ['RUH', 'night', 1],
+    ],
+  );
 });

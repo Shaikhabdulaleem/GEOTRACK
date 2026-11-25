@@ -52,9 +52,19 @@ export interface AymakanImportResult {
   clients: AymakanClientImportTotal[];
 }
 
+export type MailroomShiftType = 'day' | 'night' | 'unassigned';
+
+export interface ShiftTimeWindow {
+  shiftType: 'day' | 'night';
+  startMinutes: number;
+  endMinutes: number;
+  crossesMidnight: boolean;
+}
+
 export interface AymakanTurnaroundMetric {
   client_id: string;
   warehouse_code: string;
+  shift_type: MailroomShiftType;
   total_minutes: number;
   shipment_count: number;
 }
@@ -423,14 +433,77 @@ export function aggregateAymakanSnapshot(
   };
 }
 
+const DEFAULT_SHIFT_WINDOWS: ShiftTimeWindow[] = [
+  { shiftType: 'day', startMinutes: 6 * 60, endMinutes: 18 * 60, crossesMidnight: false },
+  { shiftType: 'night', startMinutes: 18 * 60, endMinutes: 6 * 60, crossesMidnight: true },
+];
+
+function parseTimeToMinutes(timeStr: string): number | null {
+  const match = /^(\d{1,2}):(\d{2})/.exec(timeStr.trim());
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+export function buildShiftTimeWindows(
+  shifts: Array<{ name: string; start_time: string; end_time: string; crosses_midnight?: boolean; status?: string }>,
+): ShiftTimeWindow[] {
+  const windows: ShiftTimeWindow[] = [];
+  for (const shift of shifts) {
+    if (shift.status && shift.status !== 'active') continue;
+    const startMinutes = parseTimeToMinutes(shift.start_time);
+    const endMinutes = parseTimeToMinutes(shift.end_time);
+    if (startMinutes == null || endMinutes == null) continue;
+    const crossesMidnight = Boolean(shift.crosses_midnight) || endMinutes <= startMinutes;
+    const lowerName = shift.name.toLowerCase();
+    let shiftType: 'day' | 'night' | null = null;
+    if (lowerName.includes('night') || crossesMidnight) {
+      shiftType = 'night';
+    } else if (lowerName.includes('day') || (startMinutes >= 5 * 60 && startMinutes < 17 * 60)) {
+      shiftType = 'day';
+    }
+    if (shiftType) {
+      windows.push({ shiftType, startMinutes, endMinutes, crossesMidnight });
+    }
+  }
+  return windows.length > 0 ? windows : DEFAULT_SHIFT_WINDOWS;
+}
+
+export function detectShipmentShift(
+  timestampMs: number,
+  windows: ShiftTimeWindow[] = DEFAULT_SHIFT_WINDOWS,
+): { shiftType: MailroomShiftType; shiftWorkDate: string } {
+  const activeWindows = windows.length > 0 ? windows : DEFAULT_SHIFT_WINDOWS;
+  const dt = new Date(timestampMs);
+  const minutesOfDay = dt.getUTCHours() * 60 + dt.getUTCMinutes();
+  const calendarDate = dt.toISOString().slice(0, 10);
+
+  for (const w of activeWindows) {
+    if (!w.crossesMidnight) {
+      if (minutesOfDay >= w.startMinutes && minutesOfDay < w.endMinutes) {
+        return { shiftType: w.shiftType, shiftWorkDate: calendarDate };
+      }
+    } else if (minutesOfDay >= w.startMinutes || minutesOfDay < w.endMinutes) {
+      const shiftWorkDate = minutesOfDay < w.endMinutes
+        ? new Date(timestampMs - 86_400_000).toISOString().slice(0, 10)
+        : calendarDate;
+      return { shiftType: w.shiftType, shiftWorkDate };
+    }
+  }
+
+  return { shiftType: 'unassigned', shiftWorkDate: calendarDate };
+}
+
 export function aggregateAymakanTurnaroundMetrics(
   snapshot: AymakanShipmentSnapshot,
   clients: AymakanClientDefinition[],
   selectedWorkDate: string,
+  shiftWindows?: ShiftTimeWindow[],
 ): AymakanTurnaroundMetric[] {
   const lookup = buildClientLookup(clients);
   const seen = new Set<string>();
   const totals = new Map<string, AymakanTurnaroundMetric>();
+  const windows = shiftWindows && shiftWindows.length > 0 ? shiftWindows : DEFAULT_SHIFT_WINDOWS;
+
   snapshot.shipments.forEach(shipment => {
     const tracking = normalize(shipment.tracking_number);
     if (seen.has(tracking)) return;
@@ -443,8 +516,15 @@ export function aggregateAymakanTurnaroundMetrics(
     const handover = shipment.lmd_handover_at_ms;
     if (startDate !== selectedWorkDate || start == null || handover == null || handover < start) return;
     const warehouse = shipment.warehouse_code?.trim() || 'Unspecified';
-    const key = `${client.id}:${warehouse}`;
-    const metric = totals.get(key) ?? { client_id: client.id, warehouse_code: warehouse, total_minutes: 0, shipment_count: 0 };
+    const { shiftType } = detectShipmentShift(handover, windows);
+    const key = `${client.id}:${warehouse}:${shiftType}`;
+    const metric = totals.get(key) ?? {
+      client_id: client.id,
+      warehouse_code: warehouse,
+      shift_type: shiftType,
+      total_minutes: 0,
+      shipment_count: 0,
+    };
     metric.total_minutes += (handover - start) / 60000;
     metric.shipment_count += 1;
     totals.set(key, metric);

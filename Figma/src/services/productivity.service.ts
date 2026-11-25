@@ -40,6 +40,7 @@ import type {
   OvertimeRecordRow,
   ProductivityRecordRow,
   ResolvedScheduleRow,
+  ShiftRow,
   TablesInsert,
   TablesUpdate,
 } from '../types/database';
@@ -81,6 +82,7 @@ export interface MailroomDailyInput {
 export interface MailroomTurnaroundMetricInput {
   client_id: string;
   warehouse_code: string;
+  shift_type?: 'day' | 'night' | 'unassigned' | 'all';
   total_minutes: number;
   shipment_count: number;
 }
@@ -121,6 +123,7 @@ export interface MailroomWorkspace {
   overtimeRecords: OvertimeRecordRow[];
   offDayCompensations?: OffDayCompensationRecord[];
   transfers?: EmployeeTransferItem[];
+  shifts?: ShiftRow[];
 }
 
 export interface MailroomActivityCapacity {
@@ -1469,7 +1472,7 @@ export const productivityService = {
     const department = departmentRows[0];
     if (!department) return null;
 
-    const [settingsRows, clients, activities, mappings, shipments, employees, employeeSettings, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations, transfers] = await Promise.all([
+    const [settingsRows, clients, activities, mappings, shipments, employees, employeeSettings, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations, transfers, shifts] = await Promise.all([
       executeQuery(client.from('mailroom_productivity_settings').select('*').eq('organization_id', organizationId).limit(1), 'Unable to load Mailroom settings.'),
       executeQuery(client.from('mailroom_clients').select('*').eq('organization_id', organizationId).order('sort_order'), 'Unable to load Mailroom clients.'),
       executeQuery(client.from('mailroom_activities').select('*').eq('organization_id', organizationId).order('sort_order'), 'Unable to load Mailroom activities.'),
@@ -1485,6 +1488,7 @@ export const productivityService = {
       executeQuery(client.from('overtime_records').select('*').eq('organization_id', organizationId), 'Unable to load Overtime records.'),
       shiftService.listOffDayCompensations(organizationId).catch(() => []),
       transferService.listTransfers({ organizationId, fromDate, toDate }).catch(() => []),
+      shiftService.listShifts(organizationId).catch(() => []),
     ]);
     const settings = settingsRows[0];
     if (!settings) return null;
@@ -1518,7 +1522,7 @@ export const productivityService = {
       employee.id,
       await executeQuery(client.rpc('resolve_employee_schedule', { p_employee_id: employee.id, p_start_date: fromDate, p_end_date: toDate }), 'Unable to resolve Mailroom schedules.'),
     ])));
-    return { department, settings, clients, activities, mappings, shipments, employees, employeeSettings, schedules, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations, transfers };
+    return { department, settings, clients, activities, mappings, shipments, employees, employeeSettings, schedules, attendance, dailyEntries, dspPartners, dspAllocations, turnaroundMetrics, overtimeRecords, offDayCompensations, transfers, shifts };
   },
 
   async updateMailroomSettings(id: string, updates: Record<string, unknown>) {

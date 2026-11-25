@@ -14,10 +14,15 @@ export interface TurnaroundAnalyticsProps {
 
 export default function TurnaroundAnalytics({ workspace }: TurnaroundAnalyticsProps) {
   const [warehouseFilter, setWarehouseFilter] = useState('all');
+  const [shiftFilter, setShiftFilter] = useState<'all' | 'day' | 'night'>('all');
 
   const turnaround = useMemo(() => {
     const branches = [...new Set(workspace.turnaroundMetrics.map(row => row.warehouse_code))].sort();
-    const selected = workspace.turnaroundMetrics.filter(row => warehouseFilter === 'all' || row.warehouse_code === warehouseFilter);
+    const selected = workspace.turnaroundMetrics.filter(row => {
+      if (warehouseFilter !== 'all' && row.warehouse_code !== warehouseFilter) return false;
+      if (shiftFilter !== 'all' && row.shift_type !== shiftFilter) return false;
+      return true;
+    });
     const rows = workspace.clients
       .filter(client => client.status === 'active')
       .map(client => {
@@ -43,7 +48,7 @@ export default function TurnaroundAnalytics({ workspace }: TurnaroundAnalyticsPr
       averageHours: totalShipments > 0 ? totalMinutes / totalShipments / 60 : null,
       totalShipments,
     };
-  }, [workspace, warehouseFilter]);
+  }, [workspace, warehouseFilter, shiftFilter]);
 
   return (
     <div className="rounded-xl overflow-hidden" style={panelStyle}>
@@ -54,20 +59,33 @@ export default function TurnaroundAnalytics({ workspace }: TurnaroundAnalyticsPr
             Barq/ELM: Receiving to LMD handover. Validation clients: Validation to LMD handover.
           </div>
         </div>
-        <select
-          aria-label="Destination branch filter"
-          value={warehouseFilter}
-          onChange={event => setWarehouseFilter(event.target.value)}
-          className="px-3 py-2 rounded-lg text-xs"
-          style={fieldStyle}
-        >
-          <option value="all">All destination branches</option>
-          {turnaround.branches.map(branch => (
-            <option key={branch} value={branch}>
-              {branch}
-            </option>
-          ))}
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Shift filter"
+            value={shiftFilter}
+            onChange={event => setShiftFilter(event.target.value as 'all' | 'day' | 'night')}
+            className="px-3 py-2 rounded-lg text-xs"
+            style={fieldStyle}
+          >
+            <option value="all">All shifts</option>
+            <option value="day">Day shift</option>
+            <option value="night">Night shift</option>
+          </select>
+          <select
+            aria-label="Destination branch filter"
+            value={warehouseFilter}
+            onChange={event => setWarehouseFilter(event.target.value)}
+            className="px-3 py-2 rounded-lg text-xs"
+            style={fieldStyle}
+          >
+            <option value="all">All destination branches</option>
+            {turnaround.branches.map(branch => (
+              <option key={branch} value={branch}>
+                {branch}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3 p-4 border-t" style={{ borderColor: '#1e3a5a' }}>
