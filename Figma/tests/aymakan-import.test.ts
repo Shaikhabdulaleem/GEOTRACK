@@ -210,10 +210,11 @@ test('closes only the remaining validation backlog on the next month 25th', () =
   assert.deepEqual([lateValidation?.processed_units, lateValidation?.backlog_released_units, lateValidation?.batch_closed_units], [1, 0, 0]);
 });
 
-test('calculates turnaround from receiving or validation and groups by destination warehouse', () => {
+test('calculates turnaround from receiving or validation and groups by destination bucket', () => {
   const snapshot = parseAymakanCsv([
     'Tracking,Customer,Receiving Date,Validation Date,LMD Handed Over At,Destination WH,Status,3PL Provider',
-    'B-1,Barq,11/18/2026 08:00,,11/18/2026 10:30,RUH,Delivered,J_AND_T',
+    'B-1,Barq,11/18/2026 08:00,,11/18/2026 10:30,RUH,Delivered,',
+    'B-2,Barq,11/18/2026 08:00,,11/18/2026 11:00,HOF,Delivered,',
     'U-1,Urpay,11/17/2026 08:00,11/18/2026 09:00,11/18/2026 11:00,JED,Delivered,j&t',
     'U-2,Urpay,11/18/2026 08:00,11/18/2026 10:00,11/18/2026 09:00,JED,Delivered,jnt',
   ].join('\n'));
@@ -222,9 +223,10 @@ test('calculates turnaround from receiving or validation and groups by destinati
 
   assert.deepEqual(metrics.map(row => [row.client_id, row.warehouse_code, row.total_minutes, row.shipment_count]), [
     ['barq', 'RUH', 150, 1],
-    ['urpay', 'JED', 120, 1],
+    ['barq', 'Other cities', 180, 1],
+    ['urpay', 'Makanex', 120, 1],
   ]);
-  assert.equal(totals.clients.find(row => row.client_code === 'BARQ')?.jnt_units, 1);
+  assert.equal(totals.clients.find(row => row.client_code === 'BARQ')?.jnt_units, 0);
   assert.equal(totals.clients.find(row => row.client_code === 'URPAY')?.jnt_units, 2);
 });
 
@@ -287,10 +289,10 @@ test('detects Day and Night shift handovers including overnight Night shifts', (
   assert.deepEqual(nightPostMidnight, { shiftType: 'night', shiftWorkDate: '2026-11-24' });
 
   const csv = [
-    'Tracking,Customer,Receiving Date,Validation Date,LMD Handed Over At,Destination WH,Status',
-    'D-1,Barq,2026-11-24 11:30:00,,2026-11-24 14:00:00,RUH,Delivered',
-    'N-1,Barq,2026-11-24 21:17:01,,2026-11-25 02:12:32,JED,Delivered',
-    'N-2,Barq,2026-11-24 21:48:17,,2026-11-25 02:11:40,RUH,Delivered',
+    'Tracking,Customer,Receiving Date,Validation Date,LMD Handed Over At,Destination WH,Status,3PL Provider',
+    'D-1,Barq,2026-11-24 11:30:00,,2026-11-24 14:00:00,RUH,Delivered,',
+    'N-1,Barq,2026-11-24 21:17:01,,2026-11-25 02:12:32,JED,Delivered,',
+    'N-2,Barq,2026-11-24 21:48:17,,2026-11-25 02:11:40,HOF,Delivered,JNT Express',
   ].join('\n');
   const snapshot = parseAymakanCsv(csv);
   const metrics = aggregateAymakanTurnaroundMetrics(snapshot, clients, '2026-11-24', windows);
@@ -300,7 +302,7 @@ test('detects Day and Night shift handovers including overnight Night shifts', (
     [
       ['RUH', 'day', 1],
       ['JED', 'night', 1],
-      ['RUH', 'night', 1],
+      ['Makanex', 'night', 1],
     ],
   );
 });

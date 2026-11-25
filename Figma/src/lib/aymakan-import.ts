@@ -493,6 +493,19 @@ export function detectShipmentShift(
   return { shiftType: 'unassigned', shiftWorkDate: calendarDate };
 }
 
+export type TurnaroundDestinationBucket = 'RUH' | 'JED' | 'DMM' | 'Makanex' | 'Other cities';
+
+export function normalizeTurnaroundDestination(
+  warehouseCode?: string | null,
+  thirdPartyProvider?: string | null,
+): TurnaroundDestinationBucket {
+  if (isJntProvider(thirdPartyProvider)) return 'Makanex';
+  const normalized = (warehouseCode ?? '').trim().toUpperCase();
+  if (normalized === 'RUH' || normalized === 'JED' || normalized === 'DMM') return normalized;
+  if (normalized === 'MAKANEX') return 'Makanex';
+  return 'Other cities';
+}
+
 export function aggregateAymakanTurnaroundMetrics(
   snapshot: AymakanShipmentSnapshot,
   clients: AymakanClientDefinition[],
@@ -515,7 +528,7 @@ export function aggregateAymakanTurnaroundMetrics(
     const start = validationGated ? shipment.validation_at_ms : shipment.receiving_at_ms;
     const handover = shipment.lmd_handover_at_ms;
     if (startDate !== selectedWorkDate || start == null || handover == null || handover < start) return;
-    const warehouse = shipment.warehouse_code?.trim() || 'Unspecified';
+    const warehouse = normalizeTurnaroundDestination(shipment.warehouse_code, shipment.third_party_provider);
     const { shiftType } = detectShipmentShift(handover, windows);
     const key = `${client.id}:${warehouse}:${shiftType}`;
     const metric = totals.get(key) ?? {
