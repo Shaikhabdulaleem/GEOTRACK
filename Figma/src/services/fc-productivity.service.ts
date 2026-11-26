@@ -3,6 +3,7 @@ import { executeQuery } from './database.service';
 import { shiftService } from './shift.service';
 import { transferService } from './transfer.service';
 import type { OffDayCompensationRecord } from '../lib/employee-status';
+import { getOffDayOvertimeHours, isEmployeeActiveOnDate } from '../lib/employee-status';
 import type {
   AttendanceRecordRow, DepartmentRow, EmployeeProfileRow, EmployeeTransferItem, FcDailyPackerMetricRow, FcDailySellerMetricRow,
   FcPackerMappingRow, FcProductivityWeekRow, FcWeeklyAdhocTaskRow,
@@ -150,6 +151,7 @@ function buildWorkforceDays(
   employeeSettings?: FcEmployeeSettingsRow[],
   standardHoursPerDay = 8,
   attendance: AttendanceRecordRow[] = [],
+  offDayCompensations: OffDayCompensationRecord[] = [],
 ): FcWorkforceDay[] {
   const settingByEmp = new Map((employeeSettings ?? []).map(row => [row.employee_id, row]));
   const isDlp = (emp: FcEmployeeOption) => {
@@ -161,7 +163,6 @@ function buildWorkforceDays(
     return s ? s.employment_source === '3pl' : isContractLabor(emp);
   };
   const directLabor = employees.filter(isDlp);
-  const nonDlpCount = employees.length - directLabor.length;
   const attendanceByDate = new Map<string, Set<string>>();
   attendance.forEach(a => {
     if (a.status === 'present' || a.status === 'late' || a.check_in_at != null) {
@@ -170,9 +171,13 @@ function buildWorkforceDays(
     }
   });
   return dateRange(fromDate, toDate).map(workDate => {
-    const rows = directLabor.map(employee => ({ employee, schedule: schedules[employee.id]?.find(row => row.work_date === workDate) }));
+    const activeOnDate = employees.filter(emp => isEmployeeActiveOnDate(emp as EmployeeProfileRow, workDate));
+    const activeDlpOnDate = directLabor.filter(emp => isEmployeeActiveOnDate(emp as EmployeeProfileRow, workDate));
+    const nonDlpCount = Math.max(0, activeOnDate.length - activeDlpOnDate.length);
+    const rows = activeDlpOnDate.map(employee => ({ employee, schedule: schedules[employee.id]?.find(row => row.work_date === workDate) }));
     const hasConfiguredSchedule = rows.some(({ schedule }) => schedule && schedule.state !== 'unassigned');
-    const available = hasConfiguredSchedule ? rows.filter(({ schedule }) => schedule?.state === 'working') : rows;
+    const scheduledWorking = hasConfiguredSchedule ? rows.filter(({ schedule }) => schedule?.state === 'working') : rows;
+    const available = scheduledWorking.filter(({ employee }) => getOffDayOvertimeHours(employee.id, workDate, offDayCompensations) === 0);
     const ownDlp = available.filter(({ employee }) => !is3pl(employee)).length;
     const contractDlp = available.filter(({ employee }) => is3pl(employee)).length;
     const presentSet = attendanceByDate.get(workDate) ?? new Set<string>();
@@ -189,7 +194,7 @@ function buildWorkforceDays(
       presentDlp,
       absentDlp,
       availableLaborHours,
-      activeRosterDlp: directLabor.length,
+      activeRosterDlp: activeDlpOnDate.length,
       source: hasConfiguredSchedule ? 'shift_schedule' : 'active_roster',
     };
   });
@@ -224,7 +229,7 @@ export const fcProductivityService = {
     ] = await Promise.all([
       executeQuery<FcProductivityWeekRow[]>(client.from('fc_productivity_weeks').select('*').eq('organization_id', organizationId).eq('department_id', department.id).eq('week_start', weekStart).limit(1), 'Unable to load the FC productivity week.'),
       executeQuery<FcPackerMappingRow[]>(client.from('fc_packer_mappings').select('*').eq('organization_id', organizationId).eq('department_id', department.id), 'Unable to load FC packer mappings.'),
-      executeQuery<FcEmployeeOption[]>(client.from('employee_profiles').select('id, organization_id, employee_code, full_name, branch_id, department_id, employment_status, job_title, joining_date, status_effective_date, created_at').eq('organization_id', organizationId).eq('department_id', department.id).eq('employment_status', 'active').order('full_name'), 'Unable to load FC employees.'),
+      executeQuery<FcEmployeeOption[]>(client.from('employee_profiles').select('id, organization_id, employee_code, full_name, branch_id, department_id, employment_status, job_title, joining_date, status_effective_date, created_at').eq('organization_id', organizationId).eq('department_id', department.id).order('full_name'), 'Unable to load FC employees.'),
       transferService.listTransfers({ organizationId, fromDate: periodFrom, toDate: manpowerEndDate }).catch(() => []),
       executeQuery<FcActivityStandardRow[]>(client.from('fc_activity_standards').select('*').eq('organization_id', organizationId).eq('department_id', department.id).order('sort_order'), 'Unable to load FC activity standards.'),
       executeQuery<FcDailyManpowerProductivityRow[]>(client.from('fc_daily_manpower_productivity').select('*').eq('organization_id', organizationId).eq('department_id', department.id).gte('work_date', periodFrom).lte('work_date', manpowerEndDate).order('work_date'), 'Unable to load FC daily manpower productivity.'),
@@ -265,7 +270,7 @@ export const fcProductivityService = {
         p_end_date: manpowerEndDate,
       }), 'Unable to resolve FC workforce schedules.'),
     ])));
-    const workforceDays = buildWorkforceDays(employees, schedules, periodFrom, manpowerEndDate, employeeSettings, settings.standard_hours_per_day, attendance);
+    const workforceDays = buildWorkforceDays(employees, schedules, periodFrom, manpowerEndDate, employeeSettings, settings.standard_hours_per_day, attendance, offDayCompensations);
     const week = weeks[0] ?? null;
     if (!week) {
       return {

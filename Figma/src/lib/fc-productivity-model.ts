@@ -336,11 +336,17 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
 
   allDates.forEach(date => {
     (workspace.employees ?? []).forEach(emp => {
+      if (!isEmployeeActiveOnDate(emp as EmployeeProfileRow, date)) return;
       const otRes = getEffectiveApprovedOvertimeMinutes(emp.id, date, attendance, overtimeRecords);
       if (otRes.effectiveMinutes > 0) {
         addOtEntry(date, emp.id, otRes.effectiveMinutes / 60, 'overtime_record');
-      } else {
-        const offHrs = getOffDayOvertimeHours(emp.id, date, offDayComps);
+      } else if (otRes.status !== 'rejected') {
+        const sched = workspace.schedules?.[emp.id]?.find(row => row.work_date === date);
+        const schedHours = netScheduleHours(sched, workspace.settings?.standard_hours_per_day ?? 8);
+        const workedHours = attendance
+          .filter(a => a.employee_id === emp.id && a.attendance_date === date)
+          .reduce((sum, a) => sum + (a.worked_minutes || 0) / 60, 0);
+        const offHrs = getOffDayOvertimeHours(emp.id, date, offDayComps, schedHours, workedHours);
         if (offHrs > 0) {
           addOtEntry(date, emp.id, offHrs, 'off_day_compensation');
         }
@@ -369,13 +375,17 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
   const draftDates = scopedDays
     .filter(day => day.status === 'draft')
     .map(day => day.work_date);
+  const officialManpowerDays = scopedDays.filter(day => day.status !== 'draft');
+  const effectiveManpowerDays = officialManpowerDays.length > 0
+    ? officialManpowerDays
+    : (scopedDays.length === 1 ? scopedDays : officialManpowerDays);
 
   const employeeRegularHoursMap = new Map<string, number>();
   const employeeRegularUnitsMap = new Map<string, number>();
   const employeeAllocationTotals = new Map<string, number>();
   const employeeScheduledDaysMap = new Map<string, number>();
 
-  const daily: FcManpowerDayModel[] = scopedDays.map(day => {
+  const daily: FcManpowerDayModel[] = effectiveManpowerDays.map(day => {
     const requiredDlp = standards.reduce((sum, standard) => sum + requiredFor(day, standard), 0);
     const absenteeismBuffer = requiredDlp * (absencePercent / 100);
     const totalRequiredDlp = requiredDlp + absenteeismBuffer;
@@ -398,16 +408,6 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
       : throughput;
     const unmetUnits = Math.max(0, throughput - regularUnitsCapacity);
 
-    const shortageHours = Math.max(0, requiredLaborHours - availableLaborHours);
-    const otEligibleDlp = actualDlp > 0 ? actualDlp : eligibleDlpCount;
-    const overtimeCapacityHours = otEligibleDlp * maxOtPerDay;
-    const overtimeRecommendedHours = Math.min(shortageHours, overtimeCapacityHours);
-    const uncoveredHours = Math.max(0, shortageHours - overtimeRecommendedHours);
-    const additional3pl = day.available_hours > 0 ? Math.ceil(uncoveredHours / day.available_hours) : 0;
-    const otRequiredPerPerson = otEligibleDlp > 0 ? overtimeRecommendedHours / otEligibleDlp : 0;
-    const overtimeRecommendedCost = overtimeRecommendedHours * avgOtRate;
-
-    // Distribute regular hours, regular units capacity, and required OT across scheduled/active DLP employees for this day
     const activeDlpEmployees = (workspace.employees ?? []).filter(emp => {
       const setting = empSettingMap.get(emp.id);
       const isDlp = setting ? setting.labor_class === 'dlp' : !/manager|supervisor|security|housekeep|administrat|coordinator|team lead/i.test(emp.job_title ?? '');
@@ -430,6 +430,17 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
       eligible: setting?.overtime_eligible ?? true,
       regHours: hasConfiguredDaySchedule ? netScheduleHours(sched, day.available_hours) : day.available_hours,
     }));
+
+    const shortageHours = Math.max(0, requiredLaborHours - availableLaborHours);
+    const eligibleForOt = empDayRegHours.filter(item => item.eligible);
+    const otEligibleDlp = empDayRegHours.length > 0 ? eligibleForOt.length : (actualDlp > 0 ? actualDlp : eligibleDlpCount);
+    const overtimeCapacityHours = otEligibleDlp * maxOtPerDay;
+    const overtimeRecommendedHours = Math.min(shortageHours, overtimeCapacityHours);
+    const uncoveredHours = Math.max(0, shortageHours - overtimeRecommendedHours);
+    const additional3pl = day.available_hours > 0 ? Math.ceil(uncoveredHours / day.available_hours) : 0;
+    const otRequiredPerPerson = otEligibleDlp > 0 ? overtimeRecommendedHours / otEligibleDlp : 0;
+    const overtimeRecommendedCost = overtimeRecommendedHours * avgOtRate;
+
     const totalDayRegHours = empDayRegHours.reduce((s, item) => s + item.regHours, 0);
     empDayRegHours.forEach(item => {
       employeeScheduledDaysMap.set(item.id, (employeeScheduledDaysMap.get(item.id) ?? 0) + 1);
@@ -438,15 +449,25 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
       employeeRegularUnitsMap.set(item.id, (employeeRegularUnitsMap.get(item.id) ?? 0) + unitShare);
     });
 
-    if (overtimeRecommendedHours > 0) {
-      const eligibleForOt = empDayRegHours.filter(item => item.eligible);
+    if (overtimeRecommendedHours > 0 && eligibleForOt.length > 0 && maxOtPerDay > 0) {
       let remainingOt = overtimeRecommendedHours;
-      if (eligibleForOt.length > 0 && maxOtPerDay > 0) {
-        const perEmpOt = Math.min(maxOtPerDay, remainingOt / eligibleForOt.length);
-        eligibleForOt.forEach(item => {
-          employeeAllocationTotals.set(item.id, (employeeAllocationTotals.get(item.id) ?? 0) + perEmpOt);
-          remainingOt -= perEmpOt;
-        });
+      let activeEligible = eligibleForOt.map(item => ({ id: item.id, assigned: 0 }));
+      while (remainingOt > 0.001 && activeEligible.length > 0) {
+        const share = remainingOt / activeEligible.length;
+        const nextActive: typeof activeEligible = [];
+        let assignedAny = false;
+        for (const item of activeEligible) {
+          const capLeft = maxOtPerDay - item.assigned;
+          if (capLeft <= 0.001) continue;
+          const add = Math.min(capLeft, share);
+          item.assigned += add;
+          remainingOt -= add;
+          assignedAny = true;
+          employeeAllocationTotals.set(item.id, (employeeAllocationTotals.get(item.id) ?? 0) + add);
+          if (maxOtPerDay - item.assigned > 0.001) nextActive.push(item);
+        }
+        activeEligible = nextActive;
+        if (!assignedAny) break;
       }
     }
 
@@ -501,14 +522,14 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
   });
 
   const activities = standards.map(standard => {
-    const reqDlp = scopedDays.reduce((sum, day) => sum + requiredFor(day, standard), 0);
-    const laborHours = scopedDays.reduce((sum, day) => sum + requiredFor(day, standard) * day.available_hours, 0);
+    const reqDlp = effectiveManpowerDays.reduce((sum, day) => sum + requiredFor(day, standard), 0);
+    const laborHours = effectiveManpowerDays.reduce((sum, day) => sum + requiredFor(day, standard) * day.available_hours, 0);
     return {
       code: standard.activity_code,
       name: standard.activity_name,
       uom: standard.target_uom,
       target: standard.units_per_worker,
-      volume: scopedDays.reduce((sum, day) => sum + driverVolume(day, standard.volume_driver), 0),
+      volume: effectiveManpowerDays.reduce((sum, day) => sum + driverVolume(day, standard.volume_driver), 0),
       laborHours,
       requiredDlp: reqDlp,
     };
@@ -617,10 +638,10 @@ export function buildFcManpowerDashboard(workspace: FcWorkspace, channelFilter: 
   }).filter(c => c.totalThroughput > 0).sort((a, b) => b.totalThroughput - a.totalThroughput);
 
   const sum = (field: keyof FcManpowerDayModel) => daily.reduce((total, day) => total + (typeof day[field] === 'number' ? day[field] as number : 0), 0);
-  const b2cQuantity = scopedDays.reduce((total, day) => total + day.outbound_b2c_quantity, 0);
-  const b2bQuantity = scopedDays.reduce((total, day) => total + day.outbound_b2b_quantity, 0);
-  const b2cOrders = scopedDays.reduce((total, day) => total + day.b2c_orders, 0);
-  const b2bOrders = scopedDays.reduce((total, day) => total + day.b2b_orders, 0);
+  const b2cQuantity = effectiveManpowerDays.reduce((total, day) => total + day.outbound_b2c_quantity, 0);
+  const b2bQuantity = effectiveManpowerDays.reduce((total, day) => total + day.outbound_b2b_quantity, 0);
+  const b2cOrders = effectiveManpowerDays.reduce((total, day) => total + day.b2c_orders, 0);
+  const b2bOrders = effectiveManpowerDays.reduce((total, day) => total + day.b2b_orders, 0);
   const totalRequiredDlp = sum('totalRequiredDlp');
   const actualDlp = sum('actualDlp');
   const overtimeRecommendedHours = sum('overtimeRecommendedHours');

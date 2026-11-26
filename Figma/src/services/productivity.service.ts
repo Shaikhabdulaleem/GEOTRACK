@@ -682,6 +682,7 @@ export function buildMailroomOperationalModel(
     let dayTransferredInOtHours = 0;
     let dayTransferredOutRegHours = 0;
     let dayTransferredInCount = 0;
+    const dayTransferredOtEmpIds = new Set<string>();
     const dayTransferredWorkers: {
       employeeName: string;
       employeeCode: string;
@@ -702,6 +703,7 @@ export function buildMailroomOperationalModel(
       if (isMailroomTarget(t)) {
         dayTransferredInRegHours += regH;
         dayTransferredInOtHours += otH;
+        if (otH > 0) dayTransferredOtEmpIds.add(t.employee_id);
         dayTransferredInCount += 1;
         activeDlpCount += 1;
         scheduledDlp += 1;
@@ -786,7 +788,7 @@ export function buildMailroomOperationalModel(
       }
     });
 
-    const empRegularUnitsShare = scheduledDlp > 0 ? Math.round(regularUnitsCapacity / scheduledDlp) : 0;
+    const empRegularUnitsShare = scheduledEmployees.length > 0 ? Math.round(regularUnitsCapacity / scheduledEmployees.length) : 0;
     scheduledEmployees.forEach(emp => {
       employeeScheduledDaysMap.set(emp.id, (employeeScheduledDaysMap.get(emp.id) ?? 0) + 1);
       employeeRegularHoursMap.set(emp.id, (employeeRegularHoursMap.get(emp.id) ?? 0) + emp.regularHours);
@@ -820,7 +822,8 @@ export function buildMailroomOperationalModel(
     });
     const actualOvertimeHours = dayApprovedOtHours + dayTransferredInOtHours;
     const actualOvertimeCost = dayApprovedOtCost + (dayTransferredInOtHours * baseOtRate);
-    const actualOtEmployeesCount = dayOtEmployeeIds.size + (dayTransferredInOtHours > 0 ? 1 : 0);
+    const uniqueDayOtIds = new Set([...dayOtEmployeeIds, ...dayTransferredOtEmpIds]);
+    const actualOtEmployeesCount = uniqueDayOtIds.size;
     return {
       date,
       received: dayReceived,
@@ -895,9 +898,9 @@ export function buildMailroomOperationalModel(
   const ownDlp = activeInPeriod.filter(employee => { const s = settingFor(employee); return s.labor_class === 'dlp' && s.employment_source === 'own'; }).length;
   const threePlDlp = activeInPeriod.filter(employee => { const s = settingFor(employee); return s.labor_class === 'dlp' && s.employment_source === '3pl'; }).length;
   const nonDlp = activeInPeriod.length - ownDlp - threePlDlp;
-  const totalRequiredHours = days.reduce((sum, day) => sum + day.requiredHours, 0);
   const officialDays = days.filter(day => day.status === 'finalized');
   const targetDays = officialDays.length > 0 ? officialDays : (dates.length === 1 && days[0].received > 0 ? days : officialDays);
+  const totalRequiredHours = targetDays.reduce((sum, day) => sum + day.requiredHours, 0);
   const totalReceived = targetDays.reduce((sum, day) => sum + day.received, 0);
   const totalValidated = targetDays.reduce((sum, day) => sum + day.processed, 0);
   const totalProcessed = targetDays.reduce((sum, day) => sum + day.processed, 0);
@@ -1179,14 +1182,30 @@ export function buildMailroomDayPreview(
     return workedMinutes > 0 ? workedMinutes / 60 : scheduledHours;
   };
 
+  const defaultEmpSetting = (employee: EmployeeProfileRow) => {
+    const direct = /labou?r|worker|operation assistant/i.test(employee.job_title ?? '');
+    return {
+      labor_class: direct ? 'dlp' : 'non_dlp',
+      employment_source: /^3PL/i.test(employee.employee_code) ? '3pl' : 'own',
+      overtime_eligible: direct,
+      max_overtime_hours_override: null,
+      overtime_hourly_cost: null,
+    } as const;
+  };
+  const settingFor = (employee: EmployeeProfileRow) => employeeSettingById.get(employee.id) ?? defaultEmpSetting(employee);
+
   let regularCapacityHours = 0;
   let overtimeCapacityHours = 0;
+  let scheduledDlp = 0;
+  let eligibleDlp = 0;
   workspace.employees.forEach(employee => {
     if (!isEmployeeActiveOnDate(employee, workDate)) return;
-    const setting = employeeSettingById.get(employee.id);
-    if (setting?.labor_class !== 'dlp') return;
+    const setting = settingFor(employee);
+    if (setting.labor_class !== 'dlp') return;
     const schedule = workspace.schedules[employee.id]?.find(row => row.work_date === workDate);
     if (!schedule || schedule.state !== 'working') return;
+    scheduledDlp += 1;
+    if (setting.overtime_eligible) eligibleDlp += 1;
 
     const offDayOt = getOffDayOtHours(employee.id, workDate);
     const isOffDayKeptForOt = offDayOt > 0;
@@ -1200,6 +1219,20 @@ export function buildMailroomDayPreview(
         : scheduledHours;
       if (setting.overtime_eligible) overtimeCapacityHours += setting.max_overtime_hours_override ?? workspace.settings.max_overtime_hours_per_day;
     }
+  });
+
+  // Include cross-department transfers on workDate to match buildMailroomOperationalModel
+  const mailroomDeptId = workspace.department?.id;
+  (workspace.transfers ?? []).forEach(t => {
+    if (t.transfer_date !== workDate || t.status === 'cancelled') return;
+    const duration = t.status === 'completed'
+      ? t.transferred_minutes
+      : calculateTransferDuration(t.start_time, null, t.break_minutes).netMinutes;
+    const regH = Math.round((Math.max(0, duration - (t.overtime_minutes || 0)) / 60) * 10) / 10;
+    const isTarget = (mailroomDeptId && t.to_department_id === mailroomDeptId) || t.to_department?.name?.toLowerCase().includes('mailroom');
+    const isSource = (mailroomDeptId && t.from_department_id === mailroomDeptId) || t.from_department?.name?.toLowerCase().includes('mailroom');
+    if (isTarget) regularCapacityHours += regH;
+    else if (isSource) regularCapacityHours = Math.max(0, regularCapacityHours - regH);
   });
   const totalReceived = clientInputs.reduce((sum, input) => sum + (input.received_units || 0), 0);
   const totalProcessed = clientInputs.reduce((sum, input) => sum + (input.processed_units || 0), 0);
@@ -1219,18 +1252,6 @@ export function buildMailroomDayPreview(
     }
   }
   const shortageUnits = Math.max(0, totalReceived - regularUnitsCapacity);
-
-  let scheduledDlp = 0;
-  let eligibleDlp = 0;
-  workspace.employees.forEach(employee => {
-    if (!isEmployeeActiveOnDate(employee, workDate)) return;
-    const setting = employeeSettingById.get(employee.id);
-    if (setting?.labor_class !== 'dlp') return;
-    const schedule = workspace.schedules[employee.id]?.find(row => row.work_date === workDate);
-    if (!schedule || schedule.state !== 'working') return;
-    scheduledDlp += 1;
-    if (setting.overtime_eligible) eligibleDlp += 1;
-  });
 
   const shortageHours = Math.max(0, requiredHours - regularCapacityHours);
   const overtimeHours = Math.min(shortageHours, overtimeCapacityHours);

@@ -126,7 +126,7 @@ function OperationsDashboard({
       <MetricCard label="Additional 3PL" value={number(model.peakAdditional3pl)} detail="After available OT" color={model.peakAdditional3pl ? '#ef4444' : '#10b981'} />
     </div>
 
-    <TurnaroundAnalytics workspace={workspace} />
+    <TurnaroundAnalytics workspace={workspace} fromDate={fromDate} toDate={toDate} />
 
     <div className="grid xl:grid-cols-3 gap-4">
       <div className="xl:col-span-2 rounded-xl p-4" style={panelStyle}>

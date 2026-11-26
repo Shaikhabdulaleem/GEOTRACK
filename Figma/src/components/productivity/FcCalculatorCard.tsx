@@ -76,11 +76,26 @@ export default function FcCalculatorCard({
   const [currentEmployees, setCurrentEmployees] = useState<number>(activeDlpCount);
   const [standardHoursPerDay, setStandardHoursPerDay] = useState<number>(workspace.settings?.standard_hours_per_day || 8);
   const [maxOvertimeHoursPerDay, setMaxOvertimeHoursPerDay] = useState<number>(workspace.settings?.max_overtime_hours_per_day || 3);
-  const [plannedAbsencePercent] = useState<number>(workspace.settings?.planned_absence_percent ?? 5);
+  const [plannedAbsencePercent, setPlannedAbsencePercent] = useState<number>(workspace.settings?.planned_absence_percent ?? 5);
   const [overtimeHourlyCost, setOvertimeHourlyCost] = useState<number>(
     workspace.settings?.overtime_hourly_cost_own || workspace.settings?.overtime_hourly_cost_3pl || 25,
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  useEffect(() => {
+    setStandardHoursPerDay(workspace.settings?.standard_hours_per_day || 8);
+    setMaxOvertimeHoursPerDay(workspace.settings?.max_overtime_hours_per_day || 3);
+    setPlannedAbsencePercent(workspace.settings?.planned_absence_percent ?? 5);
+    setOvertimeHourlyCost(
+      workspace.settings?.overtime_hourly_cost_own || workspace.settings?.overtime_hourly_cost_3pl || 25,
+    );
+  }, [
+    workspace.settings?.standard_hours_per_day,
+    workspace.settings?.max_overtime_hours_per_day,
+    workspace.settings?.planned_absence_percent,
+    workspace.settings?.overtime_hourly_cost_own,
+    workspace.settings?.overtime_hourly_cost_3pl,
+  ]);
 
   useEffect(() => {
     if (initialVolume != null && initialVolume > 0) {
@@ -354,6 +369,19 @@ export default function FcCalculatorCard({
                   step="1"
                   value={overtimeHourlyCost}
                   onChange={e => setOvertimeHourlyCost(Math.max(0, Number(e.target.value) || 0))}
+                  className="mt-1 w-full px-2 py-1.5 rounded font-mono"
+                  style={fieldStyle}
+                />
+              </label>
+              <label className="text-[11px]" style={{ color: '#94a3b8' }}>
+                Absence %
+                <input
+                  type="number"
+                  min="0"
+                  max="99"
+                  step="1"
+                  value={plannedAbsencePercent}
+                  onChange={e => setPlannedAbsencePercent(Math.min(99, Math.max(0, Number(e.target.value) || 0)))}
                   className="mt-1 w-full px-2 py-1.5 rounded font-mono"
                   style={fieldStyle}
                 />

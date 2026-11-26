@@ -380,7 +380,10 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
       setDepartments(lookups.departments);
       setShifts(lookups.shifts);
       
-      const emps = empData || [];
+      const allEmps = empData || [];
+      const emps = isManager
+        ? allEmps.filter(e => e.department_id && assignedDepartmentIds.includes(e.department_id))
+        : allEmps;
       setEmployeeProfiles(emps);
       
       // Extract unique managers
@@ -584,6 +587,9 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const totalOvertimeHours = metrics ? metrics.totalOvertimeHours : 0;
   const pendingApprovals = metrics ? metrics.pendingApprovals : 0;
   const geofenceViolations = metrics ? metrics.geofenceViolations : 0;
+  const missingOut = metrics ? (metrics.missingOutCount ?? 0) : 0;
+  const pendingCorrections = metrics ? (metrics.pendingCorrectionsCount ?? 0) : 0;
+  const otPending = metrics ? (metrics.otPendingCount ?? pendingApprovals) : 0;
 
   const avgProd = supabaseReady && prodMetrics ? prodMetrics.averageProductivity : 0;
 
@@ -618,7 +624,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const attendanceTrend = supabaseReady && metrics ? metrics.attendanceTrend : [];
   const otTrend = supabaseReady && metrics ? metrics.otTrend : [];
   const productivityTrend = supabaseReady && metrics ? metrics.productivityTrend : [];
-  const alertCounts = { missing: missing, missingOut: 0, otApproval: pendingApprovals, correction: 0, geofence: geofenceViolations };
+  const alertCounts = { missing: missing, missingOut, otApproval: otPending, correction: pendingCorrections, geofence: geofenceViolations };
 
   const visibleDepartments = isManager
     ? departments.filter(d => assignedDepartmentIds.includes(d.id))
@@ -804,6 +810,14 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
                 </div>
               </div>
             ))}
+            {realRanking.length === 0 && (
+              <div className="text-xs text-center py-4" style={{ color: '#4b6a8a' }}>
+                No individual productivity records for this date.{' '}
+                <button onClick={() => onNav('productivity')} className="underline" style={{ color: '#3b82f6' }}>
+                  Open Mailroom &amp; FC Productivity
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

@@ -145,6 +145,7 @@ export const dashboardService = {
     let dayShiftCount = 0;
     let nightShiftCount = 0;
     const offEmpIds = new Set<string>();
+    const shiftMatchedEmpIds = new Set<string>();
 
     try {
       const schedules = await Promise.all(
@@ -158,6 +159,7 @@ export const dashboardService = {
             offEmpIds.add(empId);
           } else if (row.state === 'working') {
             if (!filters.shiftId || row.shift_id === filters.shiftId) {
+              shiftMatchedEmpIds.add(empId);
               if (row.crosses_midnight) nightShiftCount++;
               else dayShiftCount++;
             }
@@ -193,21 +195,28 @@ export const dashboardService = {
         }
         if (assignment.status !== 'scheduled') return;
         if (!assignment.shift || (filters.shiftId && assignment.shift_id !== filters.shiftId)) return;
+        shiftMatchedEmpIds.add(assignment.employee_id);
         if (assignment.shift.crosses_midnight) nightShiftCount++;
         else dayShiftCount++;
       });
     }
 
+    const effectiveEmpIds = filters.shiftId ? [...shiftMatchedEmpIds] : validEmpIds;
+    const effectiveEmpSet = new Set(effectiveEmpIds);
+    const effectiveTotalEmployees = effectiveEmpIds.length;
+
     let presentCount = 0;
     let absentCount = 0;
     let lateCount = 0;
     let missingCount = 0;
+    let missingOutCount = 0;
     let currentlyWorkingCount = 0; // Present but no checkout yet
     
     let totalWorkedMins = 0;
     let totalOvertimeMins = 0;
     
     allAttendance.forEach(a => {
+      if (!effectiveEmpSet.has(a.employee_id)) return;
       totalWorkedMins += (a.worked_minutes || 0);
       totalOvertimeMins += (a.overtime_minutes || 0);
       
@@ -227,25 +236,38 @@ export const dashboardService = {
           }
           break;
         case 'missing_check_in': 
+          if (!offEmpIds.has(a.employee_id)) {
+            missingCount++;
+          }
+          break;
         case 'missing_check_out':
           if (!offEmpIds.has(a.employee_id)) {
             missingCount++;
+            missingOutCount++;
           }
           break;
       }
     });
     
-    // Pending Approvals (Overtime + Manual)
-    const [otReqs, manualReqs] = await Promise.all([
-      client.from('overtime_records').select('id', { count: 'exact', head: true })
-        .eq('organization_id', organizationId)
-        .eq('status', 'pending'),
-      client.from('manual_attendance_requests').select('id', { count: 'exact', head: true })
-        .eq('organization_id', organizationId)
-        .eq('status', 'pending')
-    ]);
-    
-    const pendingApprovals = (otReqs.count || 0) + (manualReqs.count || 0);
+    // Pending Approvals (Overtime + Manual) scoped to filtered employees
+    let otPendingCount = 0;
+    let manualPendingCount = 0;
+    for (let i = 0; i < effectiveEmpIds.length; i += batchSize) {
+      const batchIds = effectiveEmpIds.slice(i, i + batchSize);
+      const [otReqs, manualReqs] = await Promise.all([
+        client.from('overtime_records').select('id', { count: 'exact', head: true })
+          .eq('organization_id', organizationId)
+          .eq('status', 'pending')
+          .in('employee_id', batchIds),
+        client.from('manual_attendance_requests').select('id', { count: 'exact', head: true })
+          .eq('organization_id', organizationId)
+          .eq('status', 'pending')
+          .in('employee_id', batchIds),
+      ]);
+      otPendingCount += otReqs.count || 0;
+      manualPendingCount += manualReqs.count || 0;
+    }
+    const pendingApprovals = otPendingCount + manualPendingCount;
     
     const { data: trendData, error: trendError } = await client.rpc('get_dashboard_trends', {
       p_organization_id: organizationId,
@@ -266,11 +288,14 @@ export const dashboardService = {
     const geofencesData: DashboardGeofencePoint[] = [];
     
     return {
-      totalEmployees,
+      totalEmployees: effectiveTotalEmployees,
       presentCount,
       absentCount,
       lateCount,
       missingCount,
+      missingOutCount,
+      pendingCorrectionsCount: manualPendingCount,
+      otPendingCount,
       currentlyWorkingCount,
       dayShiftCount,
       nightShiftCount,
@@ -278,7 +303,7 @@ export const dashboardService = {
       totalOvertimeHours: +(totalOvertimeMins / 60).toFixed(1),
       pendingApprovals,
       geofenceViolations,
-      validEmpIds, // Pass this for downstream productivity filtering
+      validEmpIds: effectiveEmpIds, // Pass this for downstream productivity filtering
       attendanceTrend,
       otTrend,
       productivityTrend,
@@ -293,6 +318,9 @@ export const dashboardService = {
       absentCount: 0,
       lateCount: 0,
       missingCount: 0,
+      missingOutCount: 0,
+      pendingCorrectionsCount: 0,
+      otPendingCount: 0,
       currentlyWorkingCount: 0,
       dayShiftCount: 0,
       nightShiftCount: 0,
@@ -545,7 +573,24 @@ export const dashboardService = {
       if (!assignMap.has(a.employee_id)) assignMap.set(a.employee_id, a.geofence_id);
     }
     const shiftSet = filters.shiftId
-      ? new Set((shiftAssignments || []).filter(s => s.shift_id === filters.shiftId).map(s => s.employee_id))
+      ? await (async () => {
+          try {
+            const resolved = await Promise.all(
+              ids.map(async empId => {
+                const rows = await shiftService.resolveSchedule(empId, filters.date, filters.date);
+                return { empId, row: rows[0] ?? null };
+              })
+            );
+            return new Set(
+              resolved
+                .filter(({ row }) => row?.state === 'working' && row.shift_id === filters.shiftId)
+                .map(({ empId }) => empId)
+            );
+          } catch (error) {
+            if (!isMissingScheduleResolver(error)) throw error;
+            return new Set((shiftAssignments || []).filter(s => s.shift_id === filters.shiftId).map(s => s.employee_id));
+          }
+        })()
       : null;
     const fenceById = new Map(geofences.map(g => [g.id, g]));
 

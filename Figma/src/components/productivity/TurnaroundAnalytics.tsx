@@ -10,15 +10,22 @@ function number(value: number, digits = 0): string {
 
 export interface TurnaroundAnalyticsProps {
   workspace: MailroomWorkspace;
+  fromDate?: string;
+  toDate?: string;
 }
 
-export default function TurnaroundAnalytics({ workspace }: TurnaroundAnalyticsProps) {
+export default function TurnaroundAnalytics({ workspace, fromDate, toDate }: TurnaroundAnalyticsProps) {
   const [warehouseFilter, setWarehouseFilter] = useState('all');
   const [shiftFilter, setShiftFilter] = useState<'all' | 'day' | 'night'>('all');
 
   const turnaround = useMemo(() => {
-    const branches = [...new Set(workspace.turnaroundMetrics.map(row => row.warehouse_code))].sort();
-    const selected = workspace.turnaroundMetrics.filter(row => {
+    const scopedMetrics = workspace.turnaroundMetrics.filter(row => {
+      if (fromDate && row.work_date < fromDate) return false;
+      if (toDate && row.work_date > toDate) return false;
+      return true;
+    });
+    const branches = [...new Set(scopedMetrics.map(row => row.warehouse_code))].sort();
+    const selected = scopedMetrics.filter(row => {
       if (warehouseFilter !== 'all' && row.warehouse_code !== warehouseFilter) return false;
       if (shiftFilter !== 'all' && row.shift_type !== shiftFilter) return false;
       return true;
@@ -48,7 +55,7 @@ export default function TurnaroundAnalytics({ workspace }: TurnaroundAnalyticsPr
       averageHours: totalShipments > 0 ? totalMinutes / totalShipments / 60 : null,
       totalShipments,
     };
-  }, [workspace, warehouseFilter, shiftFilter]);
+  }, [workspace, fromDate, toDate, warehouseFilter, shiftFilter]);
 
   return (
     <div className="rounded-xl overflow-hidden" style={panelStyle}>
