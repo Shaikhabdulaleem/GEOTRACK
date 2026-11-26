@@ -354,7 +354,7 @@ export const fcProductivityService = {
     }), 'Unable to save FC employee labor classification.');
   },
 
-  createClient(organizationId: string, input: {
+  async createClient(organizationId: string, input: {
     code: string;
     name: string;
     templateClientId?: string | null;
@@ -365,20 +365,29 @@ export const fcProductivityService = {
     vas_rate_override?: number | null;
     notes?: string | null;
   }): Promise<string> {
-    return executeQuery(getSupabaseClient().rpc('create_fc_client', {
-      p_organization_id: organizationId,
-      p_code: input.code,
-      p_name: input.name,
-      p_template_client_id: input.templateClientId ?? null,
-      p_overrides: {
-        inbound_rate_override: input.inbound_rate_override ?? null,
-        outbound_b2c_rate_override: input.outbound_b2c_rate_override ?? null,
-        outbound_b2b_rate_override: input.outbound_b2b_rate_override ?? null,
-        returns_rate_override: input.returns_rate_override ?? null,
-        vas_rate_override: input.vas_rate_override ?? null,
-        notes: input.notes ?? null,
-      } as Json,
-    }), 'Unable to create FC client.');
+    const code = input.code.trim().toUpperCase();
+    try {
+      return await executeQuery(getSupabaseClient().rpc('create_fc_client', {
+        p_organization_id: organizationId,
+        p_code: code,
+        p_name: input.name.trim(),
+        p_template_client_id: input.templateClientId ?? null,
+        p_overrides: {
+          inbound_rate_override: input.inbound_rate_override ?? null,
+          outbound_b2c_rate_override: input.outbound_b2c_rate_override ?? null,
+          outbound_b2b_rate_override: input.outbound_b2b_rate_override ?? null,
+          returns_rate_override: input.returns_rate_override ?? null,
+          vas_rate_override: input.vas_rate_override ?? null,
+          notes: input.notes ?? null,
+        } as Json,
+      }), 'Unable to create FC client.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('duplicate key') || msg.includes('fc_clients_')) {
+        throw new Error(`An FC client with code "${code}" already exists.`);
+      }
+      throw err;
+    }
   },
 
   updateClient(organizationId: string, clientId: string, updates: Partial<Pick<FcClientRow, 'name' | 'status' | 'inbound_rate_override' | 'outbound_b2c_rate_override' | 'outbound_b2b_rate_override' | 'returns_rate_override' | 'vas_rate_override' | 'notes'>>): Promise<undefined> {
@@ -387,5 +396,12 @@ export const fcProductivityService = {
       p_client_id: clientId,
       p_updates: updates as Json,
     }), 'Unable to update FC client.');
+  },
+
+  deleteClient(organizationId: string, clientId: string): Promise<undefined> {
+    return executeQuery(getSupabaseClient().rpc('delete_fc_client', {
+      p_organization_id: organizationId,
+      p_client_id: clientId,
+    }), 'Unable to delete FC client.');
   },
 };

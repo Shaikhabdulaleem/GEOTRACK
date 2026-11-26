@@ -1256,6 +1256,10 @@ export interface Database {
         Args: { p_organization_id: string; p_client_id: string; p_updates: Json };
         Returns: undefined;
       };
+      delete_fc_client: {
+        Args: { p_organization_id: string; p_client_id: string };
+        Returns: undefined;
+      };
       save_fc_client_daily_volumes: {
         Args: { p_organization_id: string; p_sources: Json; p_from_date: string; p_to_date: string; p_rows: Json };
         Returns: number;

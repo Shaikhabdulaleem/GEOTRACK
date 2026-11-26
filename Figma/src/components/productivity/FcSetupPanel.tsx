@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, Loader2, Plus } from 'lucide-react';
+import { AlertCircle, Loader2, Plus, Trash2 } from 'lucide-react';
 import { fcProductivityService, type FcWorkspace } from '../../services/fc-productivity.service';
 import type { FcActivityStandardRow, FcClientRow, FcEmployeeSettingsRow } from '../../types/database';
 
@@ -17,6 +17,9 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
   const [setupError, setSetupError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [standards, setStandards] = useState<FcActivityStandardRow[]>(workspace.standards);
+  const [policyDrafts, setPolicyDrafts] = useState<Record<string, string>>({});
+  const [clientRateDrafts, setClientRateDrafts] = useState<Record<string, string>>({});
+  const [empOtDrafts, setEmpOtDrafts] = useState<Record<string, string>>({});
   const [newClient, setNewClient] = useState({
     name: '',
     code: '',
@@ -30,7 +33,26 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
 
   useEffect(() => {
     setStandards(workspace.standards);
-  }, [workspace.standards]);
+    setPolicyDrafts({
+      standard_hours_per_day: String(workspace.settings?.standard_hours_per_day ?? 8),
+      planned_absence_percent: String(workspace.settings?.planned_absence_percent ?? 5),
+      max_overtime_hours_per_day: String(workspace.settings?.max_overtime_hours_per_day ?? 3),
+      overtime_hourly_cost_own: String(workspace.settings?.overtime_hourly_cost_own ?? 0),
+      overtime_hourly_cost_3pl: String(workspace.settings?.overtime_hourly_cost_3pl ?? 0),
+    });
+    const nextRates: Record<string, string> = {};
+    (workspace.clients ?? []).forEach(c => {
+      (['inbound_rate_override', 'outbound_b2c_rate_override', 'outbound_b2b_rate_override', 'returns_rate_override', 'vas_rate_override'] as const).forEach(k => {
+        nextRates[`${c.id}:${k}`] = c[k] != null ? String(c[k]) : '';
+      });
+    });
+    setClientRateDrafts(nextRates);
+    const nextEmpOt: Record<string, string> = {};
+    (workspace.employeeSettings ?? []).forEach(s => {
+      nextEmpOt[s.employee_id] = s.overtime_hourly_cost != null ? String(s.overtime_hourly_cost) : '';
+    });
+    setEmpOtDrafts(nextEmpOt);
+  }, [workspace.standards, workspace.settings, workspace.clients, workspace.employeeSettings]);
 
   const settings = workspace.settings;
   const employeeSettings = workspace.employeeSettings ?? [];
@@ -71,6 +93,7 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
     };
     const [minimum, maximum] = limits[key];
     const validValue = Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : minimum;
+    setPolicyDrafts(current => ({ ...current, [key]: String(validValue) }));
     await runSetupChange(async () => {
       if (typeof window !== 'undefined') {
         if (key === 'overtime_hourly_cost_own') localStorage.setItem(`fc_ot_rate_own_${organizationId}`, String(validValue));
@@ -119,6 +142,14 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
       });
       await refresh();
     }, `Unable to update ${client.name}.`);
+  };
+
+  const deleteClient = async (client: FcClientRow) => {
+    if (!window.confirm(`Delete FC client "${client.name}" (${client.code})?`)) return;
+    await runSetupChange(async () => {
+      await fcProductivityService.deleteClient(organizationId, client.id);
+      await refresh();
+    }, `Unable to delete ${client.name}.`, `FC client "${client.name}" deleted.`);
   };
 
   const updateEmployeeSetting = async (
@@ -186,12 +217,12 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
           <div className="font-semibold text-sm text-white mb-3">Planning policy</div>
           <div className="space-y-3">
             {[
-              ['Standard productive hours/day', 'standard_hours_per_day', settings?.standard_hours_per_day ?? 8, 0.25, 24],
-              ['Planned absence %', 'planned_absence_percent', settings?.planned_absence_percent ?? 5, 0, 99],
-              ['Maximum OT hours/day', 'max_overtime_hours_per_day', settings?.max_overtime_hours_per_day ?? 3, 0, 12],
-              ['Own OT rate (SAR/h)', 'overtime_hourly_cost_own', settings?.overtime_hourly_cost_own ?? 0, 0, 10000],
-              ['3PL / Contract OT rate (SAR/h)', 'overtime_hourly_cost_3pl', settings?.overtime_hourly_cost_3pl ?? 0, 0, 10000],
-            ].map(([label, key, value, minimum, maximum]) => (
+              ['Standard productive hours/day', 'standard_hours_per_day', 0.25, 24],
+              ['Planned absence %', 'planned_absence_percent', 0, 99],
+              ['Maximum OT hours/day', 'max_overtime_hours_per_day', 0, 12],
+              ['Own OT rate (SAR/h)', 'overtime_hourly_cost_own', 0, 10000],
+              ['3PL / Contract OT rate (SAR/h)', 'overtime_hourly_cost_3pl', 0, 10000],
+            ].map(([label, key, minimum, maximum]) => (
               <label key={String(key)} className="block text-xs" style={{ color: '#94a3b8' }}>
                 {label}
                 <input
@@ -199,7 +230,8 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
                   min={Number(minimum)}
                   max={Number(maximum)}
                   step="0.5"
-                  defaultValue={Number(value)}
+                  value={policyDrafts[String(key)] ?? ''}
+                  onChange={e => setPolicyDrafts(current => ({ ...current, [String(key)]: e.target.value }))}
                   onBlur={e => void savePolicy(key as 'standard_hours_per_day', Number(e.target.value))}
                   className="mt-1 w-full px-3 py-2 rounded-lg font-mono"
                   style={field}
@@ -293,6 +325,7 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
                       <th className="text-right px-2 py-1.5">Returns u/h</th>
                       <th className="text-right px-2 py-1.5">VAS u/h</th>
                       <th className="text-center px-2 py-1.5">Status</th>
+                      <th className="text-right px-2 py-1.5"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -303,6 +336,7 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
                       ) => {
                         const trimmed = raw.trim();
                         const nextVal = trimmed === '' ? null : Math.max(0.01, Number(trimmed) || 0.01);
+                        setClientRateDrafts(current => ({ ...current, [`${client.id}:${rateKey}`]: nextVal != null ? String(nextVal) : '' }));
                         if (client[rateKey] === nextVal) return;
                         void runSetupChange(async () => {
                           await fcProductivityService.updateClient(organizationId, client.id, { [rateKey]: nextVal });
@@ -322,7 +356,8 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
                                 min="0.01"
                                 step="1"
                                 placeholder="Default"
-                                defaultValue={client[rateKey] ?? ''}
+                                value={clientRateDrafts[`${client.id}:${rateKey}`] ?? ''}
+                                onChange={e => setClientRateDrafts(current => ({ ...current, [`${client.id}:${rateKey}`]: e.target.value }))}
                                 onBlur={e => saveClientRate(rateKey, e.target.value)}
                                 className="w-20 px-2 py-1 rounded text-right font-mono text-[11px]"
                                 style={field}
@@ -343,6 +378,19 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
                               {client.status}
                             </button>
                           </td>
+                          <td className="px-2 py-1.5 text-right">
+                            <button
+                              type="button"
+                              disabled={saving}
+                              title={`Delete ${client.name}`}
+                              aria-label={`Delete ${client.name}`}
+                              onClick={() => void deleteClient(client)}
+                              className="p-1.5 rounded text-slate-400 hover:text-red-400 disabled:opacity-40"
+                              style={{ background: '#0d1b2e' }}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -355,7 +403,24 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
       </div>
 
       <div className="rounded-xl overflow-hidden" style={panel}>
-        <div className="px-4 py-3 font-semibold text-sm text-white">FC labor classification & OT rates</div>
+        <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="font-semibold text-sm text-white">FC labor classification & OT rates</div>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void initializeAll()}
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+            style={{
+              background: workspace.employees.some(emp => !employeeSettings.some(s => s.employee_id === emp.id)) ? '#2563eb' : '#122338',
+              color: '#fff',
+              border: '1px solid #1e3a5a',
+            }}
+          >
+            {workspace.employees.some(emp => !employeeSettings.some(s => s.employee_id === emp.id))
+              ? 'Re-run initialization (sync new employees)'
+              : 'Sync FC defaults'}
+          </button>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
@@ -417,7 +482,8 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
                         min="0"
                         step="1"
                         placeholder={`Default (${defaultRate})`}
-                        defaultValue={setting?.overtime_hourly_cost ?? ''}
+                        value={empOtDrafts[employee.id] ?? ''}
+                        onChange={e => setEmpOtDrafts(current => ({ ...current, [employee.id]: e.target.value }))}
                         onBlur={e =>
                           void updateEmployeeSetting(employee.id, {
                             overtime_hourly_cost: e.target.value.trim() === '' ? null : Math.max(0, Number(e.target.value) || 0),
