@@ -863,7 +863,18 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
         const setting = workspace.employeeSettings.find(s => s.employee_id === employee.id);
         const schedule = workspace.schedules[employee.id]?.find(s => s.work_date === workDate);
         const attendance = workspace.attendance.filter(a => a.employee_id === employee.id && a.attendance_date === workDate);
-        const workedHours = attendance.reduce((sum, a) => sum + (a.worked_minutes || 0) / 60, 0);
+        const nowMs = Date.now();
+        const workedHours = attendance.reduce((sum, a) => {
+          if (a.worked_minutes && a.worked_minutes > 0) return sum + a.worked_minutes / 60;
+          if (a.check_in_at && !a.check_out_at) {
+            return sum + Math.max(0, (nowMs - new Date(a.check_in_at).getTime()) / 3600000);
+          }
+          return sum;
+        }, 0);
+        const hasCheckedIn = attendance.some(
+          a => Boolean(a.check_in_at) || a.status === 'present' || a.status === 'late',
+        );
+        const isCurrentlyWorking = attendance.some(a => Boolean(a.check_in_at) && !a.check_out_at);
         const { effectiveMinutes, approvedMinutes, requestedMinutes, status } = getEffectiveApprovedOvertimeMinutes(
           employee.id,
           workDate,
@@ -889,6 +900,8 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
           scheduleState: schedule?.state ?? 'unassigned',
           shiftName: schedule?.shift_name ?? (schedule?.state === 'working' ? 'Working' : schedule?.state ?? '—'),
           workedHours,
+          hasCheckedIn,
+          isCurrentlyWorking,
           requestedHours,
           approvedHours,
           otHours,
@@ -1337,8 +1350,12 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
                     <span className="text-slate-300">{row.shiftName}</span>
                     {!row.overtimeEligible && <span className="ml-1.5 text-[9px] text-rose-400 font-semibold">(No OT)</span>}
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: row.workedHours > 0 ? '#93c5fd' : (row.scheduleState === 'working' ? '#f59e0b' : '#64748b') }}>
-                    {row.workedHours > 0 ? `${number(row.workedHours, 1)}h` : (row.scheduleState === 'working' ? '0h (Absent)' : '—')}
+                  <td className="px-3 py-2.5 text-right font-mono" style={{ color: row.isCurrentlyWorking || row.hasCheckedIn ? '#10b981' : row.workedHours > 0 ? '#93c5fd' : (row.scheduleState === 'working' ? '#f59e0b' : '#64748b') }}>
+                    {row.workedHours > 0
+                      ? `${number(row.workedHours, 1)}h${row.isCurrentlyWorking ? ' (In)' : ''}`
+                      : row.hasCheckedIn
+                        ? 'Present'
+                        : (row.scheduleState === 'working' ? '0h (Absent)' : '—')}
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono">
                     {row.status === 'rejected' ? (
