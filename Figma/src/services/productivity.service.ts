@@ -1613,7 +1613,7 @@ export const productivityService = {
     code: string;
     name: string;
     processingMode: 'immediate' | 'validation_gated';
-    templateClientId: string;
+    templateClientId?: string;
   }): Promise<MailroomClientRow> {
     const client = getSupabaseClient();
     const name = input.name.trim();
@@ -1629,24 +1629,61 @@ export const productivityService = {
       }).select('*').single(),
       'Unable to create the Mailroom client.',
     );
-    const templateMappings = await executeQuery(
-      client.from('mailroom_client_activities').select('*').eq('client_id', input.templateClientId),
-      'Unable to load the selected workflow template.',
-    );
-    if (templateMappings.length) {
-      await executeQuery(
-        client.from('mailroom_client_activities').insert(templateMappings.map(mapping => ({
-          organization_id: input.organizationId,
-          branch_id: input.branchId,
-          client_id: created.id,
-          activity_id: mapping.activity_id,
-          volume_driver: mapping.volume_driver,
-          workload_multiplier: mapping.workload_multiplier,
-        }))),
-        'The client was created, but its productivity workflow could not be copied.',
+    if (input.templateClientId) {
+      const templateMappings = await executeQuery(
+        client.from('mailroom_client_activities').select('*').eq('client_id', input.templateClientId),
+        'Unable to load the selected workflow template.',
       );
+      if (templateMappings.length) {
+        await executeQuery(
+          client.from('mailroom_client_activities').insert(templateMappings.map(mapping => ({
+            organization_id: input.organizationId,
+            branch_id: input.branchId,
+            client_id: created.id,
+            activity_id: mapping.activity_id,
+            volume_driver: mapping.volume_driver,
+            workload_multiplier: mapping.workload_multiplier,
+          }))),
+          'The client was created, but its productivity workflow could not be copied.',
+        );
+      }
     }
     return created;
+  },
+
+  async upsertMailroomClientActivity(input: {
+    organizationId: string;
+    branchId: string;
+    clientId: string;
+    activityId: string;
+    volumeDriver: 'received' | 'validated' | 'processed';
+    workloadMultiplier: number;
+  }): Promise<MailroomClientActivityRow> {
+    return executeQuery<MailroomClientActivityRow>(
+      getSupabaseClient()
+        .from('mailroom_client_activities')
+        .upsert(
+          {
+            organization_id: input.organizationId,
+            branch_id: input.branchId,
+            client_id: input.clientId,
+            activity_id: input.activityId,
+            volume_driver: input.volumeDriver,
+            workload_multiplier: input.workloadMultiplier,
+          },
+          { onConflict: 'client_id,activity_id' },
+        )
+        .select('*')
+        .single(),
+      'Unable to update the client activity workflow.',
+    );
+  },
+
+  async deleteMailroomClientActivity(id: string): Promise<void> {
+    await executeQuery(
+      getSupabaseClient().from('mailroom_client_activities').delete().eq('id', id),
+      'Unable to remove the client activity mapping.',
+    );
   },
   /**
    * List productivity records for an organization, optionally filtered by employee or date range.

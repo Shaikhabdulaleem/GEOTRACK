@@ -57,19 +57,21 @@ function OperationsDashboard({
 }) {
   const model = useMemo(() => buildMailroomOperationalModel(workspace, fromDate, toDate, today), [workspace, fromDate, toDate, today]);
   const dspBreakdown = useMemo(() => {
+    const activePartners = workspace.dspPartners.filter(partner => partner.status === 'active');
+    const activePartnerIds = new Set(activePartners.map(partner => partner.id));
     const entryIds = new Set(workspace.dailyEntries
       .filter(entry => entry.status === 'finalized' && entry.work_date >= fromDate && entry.work_date <= toDate)
       .map(entry => entry.id));
     const rows = workspace.clients.filter(client => client.status === 'active').map(client => {
-      const byPartner = Object.fromEntries(workspace.dspPartners.map(partner => [partner.id, 0])) as Record<string, number>;
+      const byPartner = Object.fromEntries(activePartners.map(partner => [partner.id, 0])) as Record<string, number>;
       workspace.dspAllocations.forEach(allocation => {
-        if (entryIds.has(allocation.daily_entry_id) && allocation.client_id === client.id) {
+        if (entryIds.has(allocation.daily_entry_id) && allocation.client_id === client.id && activePartnerIds.has(allocation.partner_id)) {
           byPartner[allocation.partner_id] = (byPartner[allocation.partner_id] ?? 0) + allocation.allocated_units;
         }
       });
       return { id: client.id, name: client.name, byPartner, total: Object.values(byPartner).reduce((sum, value) => sum + value, 0) };
     });
-    return { partners: workspace.dspPartners.filter(partner => partner.status === 'active'), rows };
+    return { partners: activePartners, rows };
   }, [workspace, fromDate, toDate]);
   const chartData = model.days.map(day => ({ date: shortDay(day.date), received: day.received, processed: day.processed, required: Number(day.requiredFte.toFixed(2)), available: day.scheduledDlp }));
   const utilization = model.totalRegularCapacityHours > 0 ? model.totalRequiredHours / model.totalRegularCapacityHours * 100 : 0;
@@ -1400,15 +1402,59 @@ function DailyEntry({ workspace, today, workDate, setWorkDate, saving, onSave, o
 function SetupPanel({ workspace, refresh }: { workspace: MailroomWorkspace; refresh: () => Promise<unknown> }) {
   const [saving, setSaving] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
-  const [newClient, setNewClient] = useState({ name: '', code: '', mode: 'validation_gated' as 'immediate' | 'validation_gated', template: workspace.clients[1]?.id ?? workspace.clients[0]?.id ?? '' });
+  const [setupNotice, setSetupNotice] = useState<string | null>(null);
+  const [newClient, setNewClient] = useState({
+    name: '',
+    code: '',
+    mode: 'validation_gated' as 'immediate' | 'validation_gated',
+    template: workspace.clients[1]?.id ?? workspace.clients[0]?.id ?? '',
+  });
   const [newPartner, setNewPartner] = useState({ name: '', code: '' });
-  const runSetupChange = async (operation: () => Promise<void>, fallback: string) => {
+  const [selectedClientId, setSelectedClientId] = useState<string>(workspace.clients[0]?.id ?? '');
+
+  // Controlled/synced form drafts so refreshes or clamped saves immediately reflect in inputs.
+  const [policyDrafts, setPolicyDrafts] = useState<Record<string, string>>({});
+  const [backlogDrafts, setBacklogDrafts] = useState<Record<string, string>>({});
+  const [activityRateDrafts, setActivityRateDrafts] = useState<Record<string, string>>({});
+  const [empOtDrafts, setEmpOtDrafts] = useState<Record<string, string>>({});
+  const [partnerNameDrafts, setPartnerNameDrafts] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setPolicyDrafts({
+      standard_hours_per_day: String(workspace.settings.standard_hours_per_day),
+      planned_absence_percent: String(workspace.settings.planned_absence_percent),
+      max_overtime_hours_per_day: String(workspace.settings.max_overtime_hours_per_day),
+      overtime_hourly_cost_own: String(workspace.settings.overtime_hourly_cost_own || workspace.settings.overtime_hourly_cost),
+      overtime_hourly_cost_3pl: String(workspace.settings.overtime_hourly_cost_3pl || workspace.settings.overtime_hourly_cost),
+      opening_return_backlog: String(workspace.settings.opening_return_backlog),
+    });
+    setBacklogDrafts(Object.fromEntries(workspace.clients.map(c => [c.id, String(c.opening_unprocessed_units)])));
+    setActivityRateDrafts(Object.fromEntries(workspace.activities.map(a => [a.id, String(a.units_per_labor_hour)])));
+    setEmpOtDrafts(Object.fromEntries(workspace.employeeSettings.map(s => [s.id, s.overtime_hourly_cost != null ? String(s.overtime_hourly_cost) : ''])));
+    setPartnerNameDrafts(Object.fromEntries(workspace.dspPartners.map(p => [p.id, p.name])));
+    setNewClient(current => ({
+      ...current,
+      template: current.template && workspace.clients.some(c => c.id === current.template)
+        ? current.template
+        : (workspace.clients[1]?.id ?? workspace.clients[0]?.id ?? ''),
+    }));
+    setSelectedClientId(current => (current && workspace.clients.some(c => c.id === current) ? current : (workspace.clients[0]?.id ?? '')));
+  }, [workspace]);
+
+  const runSetupChange = async (operation: () => Promise<void>, fallback: string, okMessage?: string) => {
     setSaving(true);
     setSetupError(null);
-    try { await operation(); }
-    catch (error) { setSetupError(error instanceof Error ? error.message : fallback); }
-    finally { setSaving(false); }
+    setSetupNotice(null);
+    try {
+      await operation();
+      if (okMessage) setSetupNotice(okMessage);
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : fallback);
+    } finally {
+      setSaving(false);
+    }
   };
+
   const savePolicy = async (field: string, value: number) => runSetupChange(async () => {
     const limits: Record<string, [number, number]> = {
       standard_hours_per_day: [0.25, 24],
@@ -1421,6 +1467,7 @@ function SetupPanel({ workspace, refresh }: { workspace: MailroomWorkspace; refr
     };
     const [minimum, maximum] = limits[field] ?? [0, Number.MAX_SAFE_INTEGER];
     const validValue = Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : minimum;
+    setPolicyDrafts(current => ({ ...current, [field]: String(validValue) }));
     if (typeof window !== 'undefined') {
       if (field === 'overtime_hourly_cost_own') {
         localStorage.setItem(`mailroom_ot_rate_own_${workspace.settings.organization_id}`, String(validValue));
@@ -1438,41 +1485,513 @@ function SetupPanel({ workspace, refresh }: { workspace: MailroomWorkspace; refr
     await productivityService.updateMailroomSettings(workspace.settings.id, updates);
     await refresh();
   }, 'Unable to update the Mailroom planning policy.');
+
   const createClient = async () => {
-    if (!newClient.name.trim() || !newClient.code.trim() || !newClient.template) return;
+    if (!newClient.name.trim() || !newClient.code.trim()) return;
     await runSetupChange(async () => {
-      await productivityService.createMailroomClient({ organizationId: workspace.settings.organization_id, branchId: workspace.settings.branch_id, code: newClient.code, name: newClient.name, processingMode: newClient.mode, templateClientId: newClient.template });
+      const created = await productivityService.createMailroomClient({
+        organizationId: workspace.settings.organization_id,
+        branchId: workspace.settings.branch_id,
+        code: newClient.code,
+        name: newClient.name,
+        processingMode: newClient.mode,
+        templateClientId: newClient.template || undefined,
+      });
       setNewClient(current => ({ ...current, name: '', code: '' }));
+      setSelectedClientId(created.id);
       await refresh();
-    }, 'Unable to add the Mailroom client.');
+    }, 'Unable to add the Mailroom client.', `Client "${newClient.name.trim()}" added.`);
   };
+
   const createPartner = async () => {
     if (!newPartner.name.trim() || !newPartner.code.trim()) return;
     await runSetupChange(async () => {
-      await productivityService.createDspPartner({ organizationId: workspace.settings.organization_id, branchId: workspace.settings.branch_id, code: newPartner.code, name: newPartner.name });
+      await productivityService.createDspPartner({
+        organizationId: workspace.settings.organization_id,
+        branchId: workspace.settings.branch_id,
+        code: newPartner.code,
+        name: newPartner.name,
+      });
       setNewPartner({ name: '', code: '' });
       await refresh();
-    }, 'Unable to add the DSP partner.');
+    }, 'Unable to add the DSP partner.', `DSP partner "${newPartner.name.trim()}" added.`);
   };
+
+  const reinitializeMailroom = async () => {
+    await runSetupChange(async () => {
+      await productivityService.initializeMailroom(workspace.settings.organization_id);
+      await refresh();
+    }, 'Unable to re-run Mailroom initialization.', 'Mailroom defaults and unclassified employees were synchronized.');
+  };
+
+  const selectedClient = workspace.clients.find(client => client.id === selectedClientId) ?? workspace.clients[0] ?? null;
+  const clientMappingActivities = workspace.activities.filter(activity => activity.volume_source === 'client_mapping');
+  const hasUnclassifiedEmployees = workspace.employees.some(
+    employee => !workspace.employeeSettings.some(item => item.employee_id === employee.id),
+  );
+  const hasActiveJntPartner = workspace.dspPartners.some(
+    partner => partner.status === 'active' && (isJntProvider(partner.code) || isJntProvider(partner.name)),
+  );
+
   return <div className="space-y-4">
-    <div className="grid lg:grid-cols-3 gap-4">
-      <div className="rounded-xl p-4" style={panelStyle}><div className="font-semibold text-sm text-white mb-3">Planning policy</div><div className="space-y-3">{[
-        ['Standard productive hours/day', 'standard_hours_per_day', workspace.settings.standard_hours_per_day, 0.25, 24],
-        ['Planned absence %', 'planned_absence_percent', workspace.settings.planned_absence_percent, 0, 99],
-        ['Maximum OT hours/day', 'max_overtime_hours_per_day', workspace.settings.max_overtime_hours_per_day, 0, 12],
-        ['Own OT rate (SAR/h)', 'overtime_hourly_cost_own', workspace.settings.overtime_hourly_cost_own || workspace.settings.overtime_hourly_cost, 0, 10000],
-        ['3PL OT rate (SAR/h)', 'overtime_hourly_cost_3pl', workspace.settings.overtime_hourly_cost_3pl || workspace.settings.overtime_hourly_cost, 0, 10000],
-      ].map(([label, field, value, minimum, maximum]) => <label key={String(field)} className="block text-xs" style={{ color: '#94a3b8' }}>{label}<input type="number" min={Number(minimum)} max={Number(maximum)} step="0.5" defaultValue={Number(value)} onBlur={e => void savePolicy(String(field), Number(e.target.value))} className="mt-1 w-full px-3 py-2 rounded-lg font-mono" style={fieldStyle} /></label>)}</div></div>
-      <div className="lg:col-span-2 rounded-xl p-4" style={panelStyle}><div className="font-semibold text-sm text-white mb-3">Add Mailroom client or bank</div><div className="grid sm:grid-cols-2 gap-3"><input value={newClient.name} onChange={e => setNewClient({ ...newClient, name: e.target.value })} placeholder="Client name" className="px-3 py-2 rounded-lg text-sm" style={fieldStyle} /><input value={newClient.code} onChange={e => setNewClient({ ...newClient, code: e.target.value })} placeholder="Client code" className="px-3 py-2 rounded-lg text-sm" style={fieldStyle} /><select value={newClient.mode} onChange={e => setNewClient({ ...newClient, mode: e.target.value as 'immediate' | 'validation_gated' })} className="px-3 py-2 rounded-lg text-sm" style={fieldStyle}><option value="validation_gated">Validation-gated</option><option value="immediate">Immediate processing</option></select><select value={newClient.template} onChange={e => setNewClient({ ...newClient, template: e.target.value })} className="px-3 py-2 rounded-lg text-sm" style={fieldStyle}>{workspace.clients.map(client => <option key={client.id} value={client.id}>Copy {client.name} workflow</option>)}</select></div><button onClick={() => void createClient()} disabled={saving || !newClient.name || !newClient.code} className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: '#2563eb', color: '#fff' }}><Plus size={14} />Add client</button></div>
-    </div>
-    <div className="grid xl:grid-cols-2 gap-4">
-      <div className="rounded-xl p-4" style={panelStyle}><div className="font-semibold text-sm text-white mb-3">Opening backlog</div><div className="text-xs mb-3" style={{ color: '#64748b' }}>Use these values when processing shipments received before the first day recorded in this module.</div><div className="grid sm:grid-cols-2 gap-3">{workspace.clients.filter(client => client.status === 'active').map(client => <label key={client.id} className="text-xs" style={{ color: '#94a3b8' }}>{client.name}<input type="number" min="0" defaultValue={client.opening_unprocessed_units} onBlur={event => void runSetupChange(async () => { await productivityService.updateMailroomClient(client.id, { opening_unprocessed_units: Math.max(0, Math.floor(Number(event.target.value) || 0)) }); await refresh(); }, `Unable to update ${client.name}'s opening backlog.`)} className="mt-1 w-full px-3 py-2 rounded font-mono" style={fieldStyle} /></label>)}<label className="text-xs" style={{ color: '#94a3b8' }}>Returns backlog<input type="number" min="0" defaultValue={workspace.settings.opening_return_backlog} onBlur={event => void savePolicy('opening_return_backlog', Math.max(0, Math.floor(Number(event.target.value) || 0)))} className="mt-1 w-full px-3 py-2 rounded font-mono" style={fieldStyle} /></label></div></div>
-      <div className="rounded-xl p-4" style={panelStyle}><div className="font-semibold text-sm text-white mb-3">DSP partners</div><div className="grid grid-cols-2 gap-3"><input value={newPartner.name} onChange={event => setNewPartner(current => ({ ...current, name: event.target.value }))} placeholder="Partner name" className="px-3 py-2 rounded-lg text-sm" style={fieldStyle} /><input value={newPartner.code} onChange={event => setNewPartner(current => ({ ...current, code: event.target.value }))} placeholder="Partner code" className="px-3 py-2 rounded-lg text-sm" style={fieldStyle} /></div><button type="button" onClick={() => void createPartner()} disabled={saving || !newPartner.name.trim() || !newPartner.code.trim()} className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: '#2563eb', color: '#fff' }}><Plus size={14} />Add DSP partner</button><div className="mt-4 space-y-2">{workspace.dspPartners.map(partner => <div key={partner.id} className="flex items-center justify-between p-2 rounded-lg" style={{ background: '#122338' }}><div><div className="text-xs text-white">{partner.name}</div><div className="text-[10px]" style={{ color: '#64748b' }}>{partner.code}</div></div><button type="button" disabled={saving} onClick={() => void runSetupChange(async () => { await productivityService.updateDspPartner(partner.id, { status: partner.status === 'active' ? 'inactive' : 'active' }); await refresh(); }, `Unable to update ${partner.name}.`)} className="text-[10px] uppercase font-semibold disabled:opacity-40" style={{ color: partner.status === 'active' ? '#10b981' : '#64748b' }}>{partner.status}</button></div>)}</div></div>
-    </div>
-    <div className="rounded-xl overflow-hidden" style={panelStyle}><div className="px-4 py-3 font-semibold text-sm text-white">Activity productivity rates</div><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr style={{ background: '#122338', color: '#64748b' }}><th className="text-left px-3 py-2">Activity</th><th className="text-right px-3 py-2">Shipments / labor-hour</th><th className="text-center px-3 py-2">Status</th></tr></thead><tbody>{workspace.activities.map(activity => <tr key={activity.id} className="border-t" style={{ borderColor: '#1e3a5a' }}><td className="px-3 py-2 text-white">{activity.name}</td><td className="px-3 py-2 text-right"><input type="number" min="0.01" defaultValue={activity.units_per_labor_hour} onBlur={event => void runSetupChange(async () => { const rate = Number(event.target.value); if (!Number.isFinite(rate) || rate <= 0) throw new Error('Productivity rate must be greater than zero.'); await productivityService.updateMailroomActivity(activity.id, { units_per_labor_hour: rate }); await refresh(); }, `Unable to update ${activity.name}.`)} className="w-28 px-2 py-1 rounded text-right font-mono" style={fieldStyle} /></td><td className="px-3 py-2 text-center" style={{ color: activity.status === 'active' ? '#10b981' : '#64748b' }}>{activity.status}</td></tr>)}</tbody></table></div></div>
-    <div className="rounded-xl overflow-hidden" style={panelStyle}><div className="px-4 py-3 font-semibold text-sm text-white">Mailroom labor classification & OT rates</div><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr style={{ background: '#122338', color: '#64748b' }}>{['Employee', 'Job title', 'Labor class', 'Source', 'OT eligible', 'OT rate (SAR/h)'].map(h => <th key={h} className="text-left px-3 py-2">{h}</th>)}</tr></thead><tbody>{workspace.employees.map(employee => { const setting = workspace.employeeSettings.find(item => item.employee_id === employee.id); if (!setting) return <tr key={employee.id}><td className="px-3 py-2 text-white">{employee.full_name}</td><td colSpan={5} className="px-3 py-2" style={{ color: '#f59e0b' }}>Re-run initialization to classify this employee.</td></tr>; const defaultRate = setting.employment_source === '3pl' ? (workspace.settings.overtime_hourly_cost_3pl || workspace.settings.overtime_hourly_cost) : (workspace.settings.overtime_hourly_cost_own || workspace.settings.overtime_hourly_cost); const update = async (changes: Record<string, unknown>) => runSetupChange(async () => { if ('overtime_hourly_cost' in changes && typeof window !== 'undefined') { localStorage.setItem(`mailroom_emp_ot_${setting.id}`, String(changes.overtime_hourly_cost ?? '')); setting.overtime_hourly_cost = changes.overtime_hourly_cost as number | null; } await productivityService.updateMailroomEmployee(setting.id, changes); await refresh(); }, `Unable to update ${employee.full_name}'s labor classification.`); return <tr key={employee.id} className="border-t" style={{ borderColor: '#1e3a5a' }}><td className="px-3 py-2 text-white">{employee.full_name}<div style={{ color: '#64748b' }}>{employee.employee_code}</div></td><td className="px-3 py-2" style={{ color: '#94a3b8' }}>{employee.job_title ?? '—'}</td><td className="px-3 py-2"><select disabled={saving} value={setting.labor_class} onChange={e => void update({ labor_class: e.target.value })} style={fieldStyle} className="px-2 py-1 rounded disabled:opacity-40"><option value="dlp">DLP</option><option value="non_dlp">Non-DLP</option></select></td><td className="px-3 py-2"><select disabled={saving} value={setting.employment_source} onChange={e => void update({ employment_source: e.target.value })} style={fieldStyle} className="px-2 py-1 rounded disabled:opacity-40"><option value="own">Own</option><option value="3pl">3PL</option></select></td><td className="px-3 py-2"><input disabled={saving} type="checkbox" checked={setting.overtime_eligible} onChange={e => void update({ overtime_eligible: e.target.checked })} /></td><td className="px-3 py-2"><input disabled={saving} type="number" min="0" step="1" placeholder={`Default (${defaultRate})`} defaultValue={setting.overtime_hourly_cost ?? ''} onBlur={e => void update({ overtime_hourly_cost: e.target.value.trim() === '' ? null : Math.max(0, Number(e.target.value) || 0) })} style={fieldStyle} className="w-28 px-2 py-1 rounded text-right font-mono disabled:opacity-40" /></td></tr>; })}</tbody></table></div></div>
     {setupError && <div className="flex items-center gap-2 p-3 rounded-lg text-xs" style={{ background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.25)', color: '#fca5a5' }}><AlertCircle size={13} />{setupError}</div>}
+    {setupNotice && <div className="p-3 rounded-lg text-xs" style={{ background: 'rgba(16,185,129,.08)', border: '1px solid rgba(16,185,129,.2)', color: '#6ee7b7' }}>{setupNotice}</div>}
     {saving && <div className="text-xs flex items-center gap-2" style={{ color: '#93c5fd' }}><Loader2 size={12} className="animate-spin" />Saving setup changes…</div>}
+
+    <div className="grid lg:grid-cols-3 gap-4">
+      <div className="rounded-xl p-4" style={panelStyle}>
+        <div className="font-semibold text-sm text-white mb-3">Planning policy</div>
+        <div className="space-y-3">{[
+          ['Standard productive hours/day', 'standard_hours_per_day', 0.25, 24],
+          ['Planned absence %', 'planned_absence_percent', 0, 99],
+          ['Maximum OT hours/day', 'max_overtime_hours_per_day', 0, 12],
+          ['Own OT rate (SAR/h)', 'overtime_hourly_cost_own', 0, 10000],
+          ['3PL OT rate (SAR/h)', 'overtime_hourly_cost_3pl', 0, 10000],
+        ].map(([label, field, minimum, maximum]) => (
+          <label key={String(field)} className="block text-xs" style={{ color: '#94a3b8' }}>
+            {label}
+            <input
+              type="number"
+              min={Number(minimum)}
+              max={Number(maximum)}
+              step="0.5"
+              value={policyDrafts[String(field)] ?? ''}
+              onChange={e => setPolicyDrafts(current => ({ ...current, [String(field)]: e.target.value }))}
+              onBlur={e => void savePolicy(String(field), Number(e.target.value))}
+              className="mt-1 w-full px-3 py-2 rounded-lg font-mono"
+              style={fieldStyle}
+            />
+          </label>
+        ))}</div>
+      </div>
+
+      <div className="lg:col-span-2 rounded-xl p-4" style={panelStyle}>
+        <div className="font-semibold text-sm text-white mb-3">Add Mailroom client or bank</div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <input value={newClient.name} onChange={e => setNewClient(current => ({ ...current, name: e.target.value }))} placeholder="Client name" className="px-3 py-2 rounded-lg text-sm" style={fieldStyle} />
+          <input value={newClient.code} onChange={e => setNewClient(current => ({ ...current, code: e.target.value }))} placeholder="Client code" className="px-3 py-2 rounded-lg text-sm" style={fieldStyle} />
+          <select value={newClient.mode} onChange={e => setNewClient(current => ({ ...current, mode: e.target.value as 'immediate' | 'validation_gated' }))} className="px-3 py-2 rounded-lg text-sm" style={fieldStyle}>
+            <option value="validation_gated">Validation-gated</option>
+            <option value="immediate">Immediate processing</option>
+          </select>
+          <select value={newClient.template} onChange={e => setNewClient(current => ({ ...current, template: e.target.value }))} className="px-3 py-2 rounded-lg text-sm" style={fieldStyle}>
+            <option value="">No workflow template</option>
+            {workspace.clients.map(client => <option key={client.id} value={client.id}>Copy {client.name} workflow</option>)}
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={() => void createClient()}
+          disabled={saving || !newClient.name.trim() || !newClient.code.trim()}
+          className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-40"
+          style={{ background: '#2563eb', color: '#fff' }}
+        >
+          <Plus size={14} />Add client
+        </button>
+
+        <div className="mt-4 space-y-2">
+          {workspace.clients.map(client => (
+            <div key={client.id} className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg" style={{ background: '#122338', border: selectedClient?.id === client.id ? '1px solid #3b82f6' : '1px solid transparent' }}>
+              <div>
+                <div className="text-xs font-medium text-white">{client.name}</div>
+                <div className="text-[10px]" style={{ color: '#64748b' }}>{client.code}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  disabled={saving}
+                  value={client.processing_mode}
+                  onChange={e => void runSetupChange(async () => {
+                    await productivityService.updateMailroomClient(client.id, { processing_mode: e.target.value as 'immediate' | 'validation_gated' });
+                    await refresh();
+                  }, `Unable to update ${client.name}'s processing mode.`)}
+                  className="px-2 py-1 rounded text-[11px]"
+                  style={fieldStyle}
+                >
+                  <option value="validation_gated">Validation-gated</option>
+                  <option value="immediate">Immediate</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setSelectedClientId(client.id)}
+                  className="px-2 py-1 rounded text-[11px] font-medium"
+                  style={{ background: selectedClient?.id === client.id ? '#2563eb' : '#0d1b2e', color: '#e2e8f0', border: '1px solid #1e3a5a' }}
+                >
+                  Workflow
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void runSetupChange(async () => {
+                    await productivityService.updateMailroomClient(client.id, { status: client.status === 'active' ? 'inactive' : 'active' });
+                    await refresh();
+                  }, `Unable to update ${client.name}.`)}
+                  className="text-[10px] uppercase font-semibold px-2 py-1 rounded disabled:opacity-40"
+                  style={{ color: client.status === 'active' ? '#10b981' : '#64748b', background: '#0d1b2e' }}
+                >
+                  {client.status}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    {selectedClient && (
+      <div className="rounded-xl overflow-hidden" style={panelStyle}>
+        <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-2 border-b" style={{ borderColor: '#1e3a5a' }}>
+          <div>
+            <div className="font-semibold text-sm text-white">Client workflow mapping — {selectedClient.name}</div>
+            <div className="text-xs mt-0.5" style={{ color: '#64748b' }}>
+              Select which activities apply to {selectedClient.name}, their volume driver, and workload multiplier.
+            </div>
+          </div>
+          <select
+            value={selectedClient.id}
+            onChange={e => setSelectedClientId(e.target.value)}
+            className="px-3 py-1.5 rounded-lg text-xs"
+            style={fieldStyle}
+          >
+            {workspace.clients.map(client => <option key={client.id} value={client.id}>{client.name} ({client.code})</option>)}
+          </select>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ background: '#122338', color: '#64748b' }}>
+                <th className="text-left px-3 py-2">Enabled</th>
+                <th className="text-left px-3 py-2">Activity</th>
+                <th className="text-left px-3 py-2">Volume driver</th>
+                <th className="text-right px-3 py-2">Multiplier</th>
+              </tr>
+            </thead>
+            <tbody>
+              {clientMappingActivities.map(activity => {
+                const mapping = workspace.mappings.find(m => m.client_id === selectedClient.id && m.activity_id === activity.id);
+                return (
+                  <tr key={activity.id} className="border-t" style={{ borderColor: '#1e3a5a' }}>
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        disabled={saving}
+                        checked={Boolean(mapping)}
+                        onChange={e => void runSetupChange(async () => {
+                          if (e.target.checked) {
+                            await productivityService.upsertMailroomClientActivity({
+                              organizationId: workspace.settings.organization_id,
+                              branchId: workspace.settings.branch_id,
+                              clientId: selectedClient.id,
+                              activityId: activity.id,
+                              volumeDriver: selectedClient.processing_mode === 'immediate' ? 'received' : 'processed',
+                              workloadMultiplier: 1,
+                            });
+                          } else if (mapping) {
+                            await productivityService.deleteMailroomClientActivity(mapping.id);
+                          }
+                          await refresh();
+                        }, `Unable to update ${activity.name} mapping for ${selectedClient.name}.`)}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-white">{activity.name}</td>
+                    <td className="px-3 py-2">
+                      <select
+                        disabled={saving || !mapping}
+                        value={mapping?.volume_driver ?? 'processed'}
+                        onChange={e => void runSetupChange(async () => {
+                          await productivityService.upsertMailroomClientActivity({
+                            organizationId: workspace.settings.organization_id,
+                            branchId: workspace.settings.branch_id,
+                            clientId: selectedClient.id,
+                            activityId: activity.id,
+                            volumeDriver: e.target.value as 'received' | 'validated' | 'processed',
+                            workloadMultiplier: mapping?.workload_multiplier ?? 1,
+                          });
+                          await refresh();
+                        }, `Unable to update volume driver for ${activity.name}.`)}
+                        className="px-2 py-1 rounded disabled:opacity-40"
+                        style={fieldStyle}
+                      >
+                        <option value="received">Received</option>
+                        <option value="processed">Processed</option>
+                      </select>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <input
+                        key={`${selectedClient.id}:${activity.id}:${mapping?.workload_multiplier ?? 'none'}`}
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        disabled={saving || !mapping}
+                        defaultValue={mapping?.workload_multiplier ?? 1}
+                        onBlur={e => {
+                          if (!mapping) return;
+                          const mult = Math.min(100, Math.max(0, Number(e.target.value) || 0));
+                          if (mult === mapping.workload_multiplier) return;
+                          void runSetupChange(async () => {
+                            await productivityService.upsertMailroomClientActivity({
+                              organizationId: workspace.settings.organization_id,
+                              branchId: workspace.settings.branch_id,
+                              clientId: selectedClient.id,
+                              activityId: activity.id,
+                              volumeDriver: mapping.volume_driver,
+                              workloadMultiplier: mult,
+                            });
+                            await refresh();
+                          }, `Unable to update multiplier for ${activity.name}.`);
+                        }}
+                        className="w-24 px-2 py-1 rounded text-right font-mono disabled:opacity-40"
+                        style={fieldStyle}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )}
+
+    <div className="grid xl:grid-cols-2 gap-4">
+      <div className="rounded-xl p-4" style={panelStyle}>
+        <div className="font-semibold text-sm text-white mb-3">Opening backlog</div>
+        <div className="text-xs mb-3" style={{ color: '#64748b' }}>Use these values when processing shipments received before the first day recorded in this module.</div>
+        <div className="grid sm:grid-cols-2 gap-3">
+          {workspace.clients.filter(client => client.status === 'active').map(client => (
+            <label key={client.id} className="text-xs" style={{ color: '#94a3b8' }}>
+              {client.name}
+              <input
+                type="number"
+                min="0"
+                value={backlogDrafts[client.id] ?? String(client.opening_unprocessed_units)}
+                onChange={event => setBacklogDrafts(current => ({ ...current, [client.id]: event.target.value }))}
+                onBlur={event => void runSetupChange(async () => {
+                  const val = Math.max(0, Math.floor(Number(event.target.value) || 0));
+                  setBacklogDrafts(current => ({ ...current, [client.id]: String(val) }));
+                  await productivityService.updateMailroomClient(client.id, { opening_unprocessed_units: val });
+                  await refresh();
+                }, `Unable to update ${client.name}'s opening backlog.`)}
+                className="mt-1 w-full px-3 py-2 rounded font-mono"
+                style={fieldStyle}
+              />
+            </label>
+          ))}
+          <label className="text-xs" style={{ color: '#94a3b8' }}>
+            Returns backlog
+            <input
+              type="number"
+              min="0"
+              value={policyDrafts.opening_return_backlog ?? String(workspace.settings.opening_return_backlog)}
+              onChange={event => setPolicyDrafts(current => ({ ...current, opening_return_backlog: event.target.value }))}
+              onBlur={event => void savePolicy('opening_return_backlog', Math.max(0, Math.floor(Number(event.target.value) || 0)))}
+              className="mt-1 w-full px-3 py-2 rounded font-mono"
+              style={fieldStyle}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="rounded-xl p-4" style={panelStyle}>
+        <div className="font-semibold text-sm text-white mb-1">DSP partners</div>
+        {!hasActiveJntPartner && (
+          <div className="text-[11px] mb-3 px-2.5 py-1.5 rounded" style={{ background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.25)', color: '#fbbf24' }}>
+            No active JNT partner detected. Add or activate a JNT partner (e.g. code J_AND_T) to import Aymakan JNT volumes.
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3 mt-2">
+          <input value={newPartner.name} onChange={event => setNewPartner(current => ({ ...current, name: event.target.value }))} placeholder="Partner name" className="px-3 py-2 rounded-lg text-sm" style={fieldStyle} />
+          <input value={newPartner.code} onChange={event => setNewPartner(current => ({ ...current, code: event.target.value }))} placeholder="Partner code" className="px-3 py-2 rounded-lg text-sm" style={fieldStyle} />
+        </div>
+        <button type="button" onClick={() => void createPartner()} disabled={saving || !newPartner.name.trim() || !newPartner.code.trim()} className="mt-3 flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-40" style={{ background: '#2563eb', color: '#fff' }}>
+          <Plus size={14} />Add DSP partner
+        </button>
+        <div className="mt-4 space-y-2">
+          {workspace.dspPartners.map(partner => (
+            <div key={partner.id} className="flex items-center justify-between gap-2 p-2 rounded-lg" style={{ background: '#122338' }}>
+              <div className="flex-1 min-w-0">
+                <input
+                  value={partnerNameDrafts[partner.id] ?? partner.name}
+                  onChange={e => setPartnerNameDrafts(current => ({ ...current, [partner.id]: e.target.value }))}
+                  onBlur={e => {
+                    const nextName = e.target.value.trim();
+                    if (!nextName || nextName === partner.name) {
+                      setPartnerNameDrafts(current => ({ ...current, [partner.id]: partner.name }));
+                      return;
+                    }
+                    void runSetupChange(async () => {
+                      await productivityService.updateDspPartner(partner.id, { name: nextName });
+                      await refresh();
+                    }, `Unable to rename ${partner.name}.`);
+                  }}
+                  className="text-xs text-white bg-transparent border border-transparent focus:border-[#1e3a5a] rounded px-1.5 py-0.5 w-full"
+                />
+                <div className="text-[10px] px-1.5" style={{ color: '#64748b' }}>{partner.code}</div>
+              </div>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void runSetupChange(async () => {
+                  await productivityService.updateDspPartner(partner.id, { status: partner.status === 'active' ? 'inactive' : 'active' });
+                  await refresh();
+                }, `Unable to update ${partner.name}.`)}
+                className="text-[10px] uppercase font-semibold px-2 py-1 rounded disabled:opacity-40"
+                style={{ color: partner.status === 'active' ? '#10b981' : '#64748b', background: '#0d1b2e' }}
+              >
+                {partner.status}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <div className="rounded-xl overflow-hidden" style={panelStyle}>
+      <div className="px-4 py-3 font-semibold text-sm text-white">Activity productivity rates</div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ background: '#122338', color: '#64748b' }}>
+              <th className="text-left px-3 py-2">Activity</th>
+              <th className="text-right px-3 py-2">Shipments / labor-hour</th>
+              <th className="text-center px-3 py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {workspace.activities.map(activity => (
+              <tr key={activity.id} className="border-t" style={{ borderColor: '#1e3a5a' }}>
+                <td className="px-3 py-2 text-white">{activity.name}</td>
+                <td className="px-3 py-2 text-right">
+                  <input
+                    type="number"
+                    min="0.01"
+                    value={activityRateDrafts[activity.id] ?? String(activity.units_per_labor_hour)}
+                    onChange={event => setActivityRateDrafts(current => ({ ...current, [activity.id]: event.target.value }))}
+                    onBlur={event => void runSetupChange(async () => {
+                      const rate = Number(event.target.value);
+                      if (!Number.isFinite(rate) || rate <= 0) {
+                        setActivityRateDrafts(current => ({ ...current, [activity.id]: String(activity.units_per_labor_hour) }));
+                        throw new Error('Productivity rate must be greater than zero.');
+                      }
+                      await productivityService.updateMailroomActivity(activity.id, { units_per_labor_hour: rate });
+                      await refresh();
+                    }, `Unable to update ${activity.name}.`)}
+                    className="w-28 px-2 py-1 rounded text-right font-mono"
+                    style={fieldStyle}
+                  />
+                </td>
+                <td className="px-3 py-2 text-center">
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void runSetupChange(async () => {
+                      await productivityService.updateMailroomActivity(activity.id, { status: activity.status === 'active' ? 'inactive' : 'active' });
+                      await refresh();
+                    }, `Unable to update ${activity.name}.`)}
+                    className="text-[10px] uppercase font-semibold px-2 py-1 rounded disabled:opacity-40"
+                    style={{ color: activity.status === 'active' ? '#10b981' : '#64748b', background: '#122338' }}
+                  >
+                    {activity.status}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div className="rounded-xl overflow-hidden" style={panelStyle}>
+      <div className="px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="font-semibold text-sm text-white">Mailroom labor classification &amp; OT rates</div>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => void reinitializeMailroom()}
+          className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+          style={{
+            background: hasUnclassifiedEmployees ? '#2563eb' : '#122338',
+            color: '#fff',
+            border: '1px solid #1e3a5a',
+          }}
+        >
+          {hasUnclassifiedEmployees ? 'Re-run initialization (sync new employees)' : 'Sync Mailroom defaults'}
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr style={{ background: '#122338', color: '#64748b' }}>
+              {['Employee', 'Job title', 'Labor class', 'Source', 'OT eligible', 'OT rate (SAR/h)'].map(h => <th key={h} className="text-left px-3 py-2">{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {workspace.employees.map(employee => {
+              const setting = workspace.employeeSettings.find(item => item.employee_id === employee.id);
+              if (!setting) {
+                return (
+                  <tr key={employee.id} className="border-t" style={{ borderColor: '#1e3a5a' }}>
+                    <td className="px-3 py-2 text-white">{employee.full_name}</td>
+                    <td colSpan={5} className="px-3 py-2" style={{ color: '#f59e0b' }}>
+                      Click &ldquo;Re-run initialization&rdquo; above to classify this employee.
+                    </td>
+                  </tr>
+                );
+              }
+              const defaultRate = setting.employment_source === '3pl'
+                ? (workspace.settings.overtime_hourly_cost_3pl || workspace.settings.overtime_hourly_cost)
+                : (workspace.settings.overtime_hourly_cost_own || workspace.settings.overtime_hourly_cost);
+              const update = async (changes: Record<string, unknown>) => runSetupChange(async () => {
+                if ('overtime_hourly_cost' in changes && typeof window !== 'undefined') {
+                  localStorage.setItem(`mailroom_emp_ot_${setting.id}`, String(changes.overtime_hourly_cost ?? ''));
+                  setting.overtime_hourly_cost = changes.overtime_hourly_cost as number | null;
+                }
+                await productivityService.updateMailroomEmployee(setting.id, changes);
+                await refresh();
+              }, `Unable to update ${employee.full_name}'s labor classification.`);
+              return (
+                <tr key={employee.id} className="border-t" style={{ borderColor: '#1e3a5a' }}>
+                  <td className="px-3 py-2 text-white">
+                    {employee.full_name}
+                    <div style={{ color: '#64748b' }}>{employee.employee_code}</div>
+                  </td>
+                  <td className="px-3 py-2" style={{ color: '#94a3b8' }}>{employee.job_title ?? '—'}</td>
+                  <td className="px-3 py-2">
+                    <select disabled={saving} value={setting.labor_class} onChange={e => void update({ labor_class: e.target.value })} style={fieldStyle} className="px-2 py-1 rounded disabled:opacity-40">
+                      <option value="dlp">DLP</option>
+                      <option value="non_dlp">Non-DLP</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <select disabled={saving} value={setting.employment_source} onChange={e => void update({ employment_source: e.target.value })} style={fieldStyle} className="px-2 py-1 rounded disabled:opacity-40">
+                      <option value="own">Own</option>
+                      <option value="3pl">3PL</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input disabled={saving} type="checkbox" checked={setting.overtime_eligible} onChange={e => void update({ overtime_eligible: e.target.checked })} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      disabled={saving}
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder={`Default (${defaultRate})`}
+                      value={empOtDrafts[setting.id] ?? ''}
+                      onChange={e => setEmpOtDrafts(current => ({ ...current, [setting.id]: e.target.value }))}
+                      onBlur={e => void update({ overtime_hourly_cost: e.target.value.trim() === '' ? null : Math.max(0, Number(e.target.value) || 0) })}
+                      style={fieldStyle}
+                      className="w-28 px-2 py-1 rounded text-right font-mono disabled:opacity-40"
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>;
 }
 
