@@ -58,6 +58,17 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
   const employeeSettings = workspace.employeeSettings ?? [];
   const clients = workspace.clients ?? [];
 
+  const normalizeCode = (name: string) =>
+    name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'CLIENT';
+
+  const existingClientKeys = new Set(
+    clients.flatMap(c => [c.name.trim().toUpperCase(), c.code.trim().toUpperCase()]),
+  );
+  const unregisteredSellers = [...new Set([
+    ...(workspace.clientDailyVolumes ?? []).map(v => v.client_name.trim()),
+    ...(workspace.sellers ?? []).map(s => s.seller_name.trim()),
+  ].filter(name => name.length > 0 && !existingClientKeys.has(name.toUpperCase()) && !existingClientKeys.has(normalizeCode(name))))].sort();
+
   const runSetupChange = async (operation: () => Promise<void>, fallback: string, okMsg?: string) => {
     setSaving(true);
     setSetupError(null);
@@ -150,6 +161,30 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
       await fcProductivityService.deleteClient(organizationId, client.id);
       await refresh();
     }, `Unable to delete ${client.name}.`, `FC client "${client.name}" deleted.`);
+  };
+
+  const syncOperationalSellers = async () => {
+    if (unregisteredSellers.length === 0) return;
+    await runSetupChange(async () => {
+      const usedCodes = new Set(clients.map(c => c.code.trim().toUpperCase()));
+      let createdCount = 0;
+      for (const sellerName of unregisteredSellers) {
+        const base = normalizeCode(sellerName);
+        let code = base;
+        let suffix = 2;
+        while (usedCodes.has(code)) {
+          code = `${base}_${suffix++}`;
+        }
+        usedCodes.add(code);
+        await fcProductivityService.createClient(organizationId, {
+          code,
+          name: sellerName,
+        });
+        createdCount += 1;
+      }
+      await refresh();
+      setMessage(`${createdCount} operational seller${createdCount === 1 ? '' : 's'} registered in FC Setup.`);
+    }, 'Unable to sync operational sellers into FC Setup.');
   };
 
   const updateEmployeeSetting = async (
@@ -311,7 +346,31 @@ export default function FcSetupPanel({ organizationId, workspace, refresh }: FcS
             Add FC client
           </button>
 
-          {clients.length > 0 && (
+          {unregisteredSellers.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg text-xs" style={{ background: 'rgba(37,99,235,0.1)', border: '1px solid rgba(59,130,246,0.3)', color: '#bfdbfe' }}>
+              <div>
+                <span className="font-semibold text-white">{unregisteredSellers.length}</span> operational seller{unregisteredSellers.length === 1 ? '' : 's'} from imported FC data not yet registered in Setup
+                <span className="ml-1" style={{ color: '#93c5fd' }}>
+                  ({unregisteredSellers.slice(0, 3).join(', ')}{unregisteredSellers.length > 3 ? `, +${unregisteredSellers.length - 3} more` : ''})
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void syncOperationalSellers()}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-40"
+                style={{ background: '#2563eb', color: '#fff' }}
+              >
+                Sync {unregisteredSellers.length} seller{unregisteredSellers.length === 1 ? '' : 's'}
+              </button>
+            </div>
+          )}
+
+          {clients.length === 0 ? (
+            <div className="pt-3 border-t text-xs" style={{ borderColor: '#1e3a5a', color: '#64748b' }}>
+              No FC clients registered in Setup yet. Add one above or sync imported operational sellers.
+            </div>
+          ) : (
             <div className="pt-3 border-t space-y-2" style={{ borderColor: '#1e3a5a' }}>
               <div className="text-xs font-semibold text-white">Configured FC clients & SLA rate overrides ({clients.length})</div>
               <div className="overflow-x-auto">
