@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload, Calculator, ShieldAlert, Layers, ArrowRight, ArrowLeftRight, Info } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, RefreshCw, Loader2, AlertCircle, Save, Settings, PackageCheck, Users, Clock, Plus, CalendarDays, ClipboardList, Copy, CheckCircle2, Upload, Calculator, ShieldAlert, Layers, ArrowRight, ArrowLeftRight, Info, Trash2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts';
 import { useAuth } from '../auth/AuthContext';
 import { addDays, buildMailroomDayPreview, buildMailroomOperationalModel, calculateProductivityScenario, dateRange, getApprovedOvertimeMinutes, getClientProductivityProfiles, getEffectiveApprovedOvertimeMinutes, getEmployeeOtRate, isEmployeeActiveOnDate, productivityService, startOfSundayWeek, type ClientProductivityProfile, type MailroomDailyClientInput, type MailroomDailyDspInput, type MailroomDailyInput, type MailroomWorkspace } from '../services/productivity.service';
@@ -1630,6 +1630,29 @@ function SetupPanel({ workspace, refresh }: { workspace: MailroomWorkspace; refr
                 >
                   {client.status}
                 </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  title={`Delete ${client.name}`}
+                  aria-label={`Delete ${client.name}`}
+                  onClick={() => {
+                    const hasHistory = workspace.shipments.some(s => s.client_id === client.id)
+                      || workspace.dspAllocations.some(a => a.client_id === client.id);
+                    if (hasHistory) {
+                      setSetupError(`Cannot delete ${client.name} because it has recorded shipments or DSP allocations. Set it to inactive instead.`);
+                      return;
+                    }
+                    if (!window.confirm(`Delete Mailroom client "${client.name}" (${client.code})?`)) return;
+                    void runSetupChange(async () => {
+                      await productivityService.deleteMailroomClient(client.id);
+                      await refresh();
+                    }, `Unable to delete ${client.name}.`, `Client "${client.name}" deleted.`);
+                  }}
+                  className="p-1.5 rounded text-slate-400 hover:text-red-400 disabled:opacity-40"
+                  style={{ background: '#0d1b2e' }}
+                >
+                  <Trash2 size={13} />
+                </button>
               </div>
             </div>
           ))}
@@ -1828,18 +1851,42 @@ function SetupPanel({ workspace, refresh }: { workspace: MailroomWorkspace; refr
                 />
                 <div className="text-[10px] px-1.5" style={{ color: '#64748b' }}>{partner.code}</div>
               </div>
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => void runSetupChange(async () => {
-                  await productivityService.updateDspPartner(partner.id, { status: partner.status === 'active' ? 'inactive' : 'active' });
-                  await refresh();
-                }, `Unable to update ${partner.name}.`)}
-                className="text-[10px] uppercase font-semibold px-2 py-1 rounded disabled:opacity-40"
-                style={{ color: partner.status === 'active' ? '#10b981' : '#64748b', background: '#0d1b2e' }}
-              >
-                {partner.status}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void runSetupChange(async () => {
+                    await productivityService.updateDspPartner(partner.id, { status: partner.status === 'active' ? 'inactive' : 'active' });
+                    await refresh();
+                  }, `Unable to update ${partner.name}.`)}
+                  className="text-[10px] uppercase font-semibold px-2 py-1 rounded disabled:opacity-40"
+                  style={{ color: partner.status === 'active' ? '#10b981' : '#64748b', background: '#0d1b2e' }}
+                >
+                  {partner.status}
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  title={`Delete ${partner.name}`}
+                  aria-label={`Delete ${partner.name}`}
+                  onClick={() => {
+                    const hasAllocations = workspace.dspAllocations.some(a => a.partner_id === partner.id);
+                    if (hasAllocations) {
+                      setSetupError(`Cannot delete ${partner.name} because it has historical DSP allocations. Set it to inactive instead.`);
+                      return;
+                    }
+                    if (!window.confirm(`Delete DSP partner "${partner.name}" (${partner.code})?`)) return;
+                    void runSetupChange(async () => {
+                      await productivityService.deleteDspPartner(partner.id);
+                      await refresh();
+                    }, `Unable to delete ${partner.name}.`, `DSP partner "${partner.name}" deleted.`);
+                  }}
+                  className="p-1.5 rounded text-slate-400 hover:text-red-400 disabled:opacity-40"
+                  style={{ background: '#0d1b2e' }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
             </div>
           ))}
         </div>

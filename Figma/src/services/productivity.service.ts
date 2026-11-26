@@ -1589,6 +1589,21 @@ export const productivityService = {
     return executeQuery(getSupabaseClient().from('mailroom_clients').update(updates).eq('id', id).select('*').single(), 'Unable to update the Mailroom client.');
   },
 
+  async deleteMailroomClient(id: string): Promise<void> {
+    try {
+      await executeQuery(
+        getSupabaseClient().from('mailroom_clients').delete().eq('id', id),
+        'Unable to delete the Mailroom client.',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('foreign key') || msg.includes('23503')) {
+        throw new Error('Cannot delete this client because it has recorded shipments or DSP allocations. Set it to inactive instead.');
+      }
+      throw err;
+    }
+  },
+
   async createDspPartner(input: { organizationId: string; branchId: string; code: string; name: string }): Promise<MailroomDspPartnerRow> {
     const name = input.name.trim();
     if (!name) throw new Error('Enter a DSP partner name.');
@@ -1614,6 +1629,21 @@ export const productivityService = {
 
   async updateDspPartner(id: string, updates: TablesUpdate<'mailroom_dsp_partners'>) {
     return executeQuery(getSupabaseClient().from('mailroom_dsp_partners').update(updates).eq('id', id).select('*').single(), 'Unable to update the DSP partner.');
+  },
+
+  async deleteDspPartner(id: string): Promise<void> {
+    try {
+      await executeQuery(
+        getSupabaseClient().from('mailroom_dsp_partners').delete().eq('id', id),
+        'Unable to delete the DSP partner.',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('foreign key') || msg.includes('23503')) {
+        throw new Error('Cannot delete this DSP partner because it has historical allocations. Set it to inactive instead.');
+      }
+      throw err;
+    }
   },
 
   async createMailroomClient(input: {
