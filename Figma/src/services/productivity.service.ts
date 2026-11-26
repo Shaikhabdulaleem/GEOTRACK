@@ -419,7 +419,7 @@ function isoDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function normalizeMailroomCode(value: string): string {
+export function normalizeMailroomCode(value: string): string {
   const code = value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   if (!code) throw new Error('Enter a code containing at least one letter or number.');
   return code;
@@ -1592,15 +1592,24 @@ export const productivityService = {
   async createDspPartner(input: { organizationId: string; branchId: string; code: string; name: string }): Promise<MailroomDspPartnerRow> {
     const name = input.name.trim();
     if (!name) throw new Error('Enter a DSP partner name.');
-    return executeQuery(
-      getSupabaseClient().from('mailroom_dsp_partners').insert({
-        organization_id: input.organizationId,
-        branch_id: input.branchId,
-        code: normalizeMailroomCode(input.code),
-        name,
-      }).select('*').single(),
-      'Unable to create the DSP partner.',
-    );
+    const code = normalizeMailroomCode(input.code);
+    try {
+      return await executeQuery(
+        getSupabaseClient().from('mailroom_dsp_partners').insert({
+          organization_id: input.organizationId,
+          branch_id: input.branchId,
+          code,
+          name,
+        }).select('*').single(),
+        'Unable to create the DSP partner.',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('duplicate key') || msg.includes('mailroom_dsp_partners_organization_id_code_key')) {
+        throw new Error(`A DSP partner with code "${code}" already exists.`);
+      }
+      throw err;
+    }
   },
 
   async updateDspPartner(id: string, updates: TablesUpdate<'mailroom_dsp_partners'>) {
@@ -1618,17 +1627,27 @@ export const productivityService = {
     const client = getSupabaseClient();
     const name = input.name.trim();
     if (!name) throw new Error('Enter a Mailroom client name.');
-    const created = await executeQuery<MailroomClientRow>(
-      client.from('mailroom_clients').insert({
-        organization_id: input.organizationId,
-        branch_id: input.branchId,
-        code: normalizeMailroomCode(input.code),
-        name,
-        processing_mode: input.processingMode,
-        sort_order: 100,
-      }).select('*').single(),
-      'Unable to create the Mailroom client.',
-    );
+    const code = normalizeMailroomCode(input.code);
+    let created: MailroomClientRow;
+    try {
+      created = await executeQuery<MailroomClientRow>(
+        client.from('mailroom_clients').insert({
+          organization_id: input.organizationId,
+          branch_id: input.branchId,
+          code,
+          name,
+          processing_mode: input.processingMode,
+          sort_order: 100,
+        }).select('*').single(),
+        'Unable to create the Mailroom client.',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('duplicate key') || msg.includes('mailroom_clients_organization_id_code_key')) {
+        throw new Error(`A Mailroom client with code "${code}" already exists.`);
+      }
+      throw err;
+    }
     if (input.templateClientId) {
       const templateMappings = await executeQuery(
         client.from('mailroom_client_activities').select('*').eq('client_id', input.templateClientId),
