@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { AlertCircle, ChevronDown, ChevronLeft, ChevronRight, Copy, Edit3, KeyRound, Loader2, Plus, Search, UserRound, X } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { employeeService, type EmployeeCreateInput, type EmployeeLookups } from '../services/employee.service';
+import { payrollService } from '../services/payroll.service';
 import { shiftService } from '../services/shift.service';
 import { authService, type EmployeeAccountCredentials } from '../services/auth.service';
 import { getErrorMessage } from '../lib/errors';
-import type { EmployeeProfileRow, EmploymentStatus } from '../types/database';
+import type { EmployeeCompensationRow, EmployeeProfileRow, EmploymentStatus } from '../types/database';
 
 const inputStyle = { background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#f0f6ff', borderRadius: 8, padding: '8px 12px', width: '100%', fontSize: 13, outline: 'none' } as const;
 const statuses: Array<EmploymentStatus | ''> = ['', 'active', 'inactive', 'on_leave', 'terminated'];
@@ -22,29 +23,111 @@ function Select({ value, onChange, children }: { value: string; onChange: (value
 }
 function Status({ status }: { status: EmploymentStatus }) { const color = status === 'active' ? '#10b981' : status === 'on_leave' ? '#f59e0b' : '#94a3b8'; return <span className="text-xs px-2 py-1 rounded-lg capitalize" style={{ color, background: `${color}18` }}>{status.replace(/_/g, ' ')}</span>; }
 
-function EmployeeModal({ employee, lookups, organizationId, onClose, onSaved }: { employee: EmployeeProfileRow | null; lookups: EmployeeLookups; organizationId: string; onClose: () => void; onSaved: (employee: EmployeeProfileRow) => void }) {
+function previousIsoDate(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
+}
+
+function EmployeeModal({ employee, lookups, organizationId, canManageSalary, onClose, onSaved }: { employee: EmployeeProfileRow | null; lookups: EmployeeLookups; organizationId: string; canManageSalary: boolean; onClose: () => void; onSaved: (employee: EmployeeProfileRow) => void }) {
   const [form, setForm] = useState<EmployeeCreateInput>(() => employee ? { organization_id: employee.organization_id, employee_code: employee.employee_code, iqama_number: employee.iqama_number, full_name: employee.full_name, mobile_number: employee.mobile_number, branch_id: employee.branch_id, department_id: employee.department_id, job_title: employee.job_title, manager_user_id: employee.manager_user_id, joining_date: employee.joining_date, employment_status: employee.employment_status, status_effective_date: employee.status_effective_date || employee.joining_date || '' } : { ...emptyForm, organization_id: organizationId });
+  const [currentComp, setCurrentComp] = useState<EmployeeCompensationRow | null>(null);
+  const [salaryEffectiveFrom, setSalaryEffectiveFrom] = useState(employee?.joining_date || today);
   const [schedule, setSchedule] = useState<Record<number, string>>(() => Object.fromEntries(WEEKDAYS.map(day => [day.value, 'OFF'])));
   const [effectiveFrom, setEffectiveFrom] = useState(employee?.joining_date || today);
   const [effectiveTo, setEffectiveTo] = useState('');
   const [saving, setSaving] = useState(false); const [error, setError] = useState('');
   useEffect(() => {
     if (!employee) return;
-    void employeeService.getRecurringSchedule(employee.id).then(current => {
-      if (!current) return;
-      setEffectiveFrom(current.schedule.effective_from);
-      setEffectiveTo(current.schedule.effective_to ?? '');
-      setSchedule(Object.fromEntries(current.rules.map(rule => [rule.weekday, rule.is_off ? 'OFF' : rule.shift_id ?? 'OFF'])));
-    }).catch(caught => setError(getErrorMessage(caught)));
-  }, [employee]);
+    let active = true;
+    void Promise.all([
+      employeeService.getRecurringSchedule(employee.id),
+      payrollService.listCompensations(organizationId, employee.id).catch(() => [] as EmployeeCompensationRow[]),
+    ]).then(([current, comps]) => {
+      if (!active) return;
+      if (current) {
+        setEffectiveFrom(current.schedule.effective_from);
+        setEffectiveTo(current.schedule.effective_to ?? '');
+        setSchedule(Object.fromEntries(current.rules.map(rule => [rule.weekday, rule.is_off ? 'OFF' : rule.shift_id ?? 'OFF'])));
+      }
+      const latest = comps.find(item => item.effective_to === null) ?? comps[0] ?? null;
+      setCurrentComp(latest);
+      if (latest) {
+        setForm(prev => ({ ...prev, monthly_base_salary: Number(latest.monthly_base_salary) }));
+        setSalaryEffectiveFrom(latest.effective_from);
+      } else {
+        setSalaryEffectiveFrom(employee.joining_date || today);
+      }
+    }).catch(caught => {
+      if (active) setError(getErrorMessage(caught));
+    });
+    return () => { active = false; };
+  }, [employee, organizationId]);
   const update = (key: keyof EmployeeCreateInput, value: string | number | null) => setForm(current => ({ ...current, [key]: value }));
   const save = async () => {
     if (!form.full_name.trim() || !form.employee_code.trim() || !form.iqama_number.trim() || !form.branch_id || !form.department_id || !form.joining_date) { setError('Name, employee ID, Iqama, site, department, and joining date are required.'); return; }
     if (!employee && (!Number.isFinite(form.monthly_base_salary) || Number(form.monthly_base_salary) <= 0)) { setError('Enter a monthly base salary greater than zero.'); return; }
+    const hasSalaryInput = form.monthly_base_salary !== undefined && form.monthly_base_salary !== null;
+    if (employee && canManageSalary && (currentComp || hasSalaryInput) && (!Number.isFinite(form.monthly_base_salary) || Number(form.monthly_base_salary) <= 0)) {
+      setError('Enter a monthly base salary greater than zero.');
+      return;
+    }
     if (!/^\d{10}$/.test(form.iqama_number)) { setError('Iqama number must contain 10 digits.'); return; }
     setSaving(true); setError('');
     try {
       const saved = employee ? await employeeService.update(employee.id, form as never) : await employeeService.create(form);
+      if (employee && canManageSalary && hasSalaryInput && Number(form.monthly_base_salary) > 0) {
+        const nextSalary = Number(form.monthly_base_salary);
+        const effFrom = salaryEffectiveFrom || form.joining_date || today;
+        const salaryChanged = !currentComp
+          || nextSalary !== Number(currentComp.monthly_base_salary)
+          || effFrom !== currentComp.effective_from;
+        if (salaryChanged) {
+          if (!currentComp) {
+            await payrollService.upsertCompensation({
+              organizationId,
+              employeeId: saved.id,
+              monthlyBaseSalary: nextSalary,
+              currencyCode: 'SAR',
+              effectiveFrom: effFrom,
+              effectiveTo: null,
+              notes: 'Salary added from Employees',
+            });
+          } else if (effFrom === currentComp.effective_from || effFrom < currentComp.effective_from) {
+            await payrollService.upsertCompensation({
+              id: currentComp.id,
+              organizationId,
+              employeeId: saved.id,
+              monthlyBaseSalary: nextSalary,
+              currencyCode: currentComp.currency_code || 'SAR',
+              effectiveFrom: effFrom,
+              effectiveTo: currentComp.effective_to,
+              notes: currentComp.notes,
+            });
+          } else {
+            if (currentComp.effective_to === null || currentComp.effective_to >= effFrom) {
+              await payrollService.upsertCompensation({
+                id: currentComp.id,
+                organizationId,
+                employeeId: saved.id,
+                monthlyBaseSalary: Number(currentComp.monthly_base_salary),
+                currencyCode: currentComp.currency_code || 'SAR',
+                effectiveFrom: currentComp.effective_from,
+                effectiveTo: previousIsoDate(effFrom),
+                notes: currentComp.notes,
+              });
+            }
+            await payrollService.upsertCompensation({
+              organizationId,
+              employeeId: saved.id,
+              monthlyBaseSalary: nextSalary,
+              currencyCode: currentComp.currency_code || 'SAR',
+              effectiveFrom: effFrom,
+              effectiveTo: null,
+              notes: 'Salary updated from Employees',
+            });
+          }
+        }
+      }
       await shiftService.setRecurringSchedule({ employee_id: saved.id, effective_from: effectiveFrom, effective_to: effectiveTo || null, days: WEEKDAYS.map(day => ({ weekday: day.value, shift_id: schedule[day.value] === 'OFF' ? null : schedule[day.value], is_off: schedule[day.value] === 'OFF' })) });
       onSaved(saved); onClose();
     } catch (caught) { setError(getErrorMessage(caught)); } finally { setSaving(false); }
@@ -63,6 +146,12 @@ function EmployeeModal({ employee, lookups, organizationId, onClose, onSaved }: 
       {field('Job title', <input style={inputStyle} value={form.job_title ?? ''} onChange={event => update('job_title', event.target.value)} />)}
       {field('Joining date', <input type="date" style={inputStyle} value={form.joining_date ?? ''} onChange={event => update('joining_date', event.target.value)} />)}
       {!employee && field('Monthly base salary (SAR)', <div><input type="number" min="0.01" step="0.01" style={inputStyle} value={form.monthly_base_salary ?? ''} onChange={event => update('monthly_base_salary', event.target.value === '' ? null : Number(event.target.value))} /><div className="mt-1" style={{ color: '#4b6a8a' }}>Saved to Payroll from the joining date. Future salary changes remain effective-dated in Payroll.</div></div>)}
+      {employee && canManageSalary && (
+        <>
+          {field('Monthly base salary (SAR)', <div><input type="number" min="0.01" step="0.01" style={inputStyle} value={form.monthly_base_salary ?? ''} onChange={event => update('monthly_base_salary', event.target.value === '' ? null : Number(event.target.value))} /><div className="mt-1" style={{ color: '#4b6a8a' }}>Synced directly with Payroll compensation.</div></div>)}
+          {field('Salary effective from', <div><input type="date" style={inputStyle} value={salaryEffectiveFrom} onChange={event => setSalaryEffectiveFrom(event.target.value)} /><div className="mt-1" style={{ color: '#4b6a8a' }}>Keep current date to edit in place, or choose a later date for a raise.</div></div>)}
+        </>
+      )}
       {field('Employment status', <Select value={form.employment_status ?? 'active'} onChange={value => update('employment_status', value)}>{statuses.filter(Boolean).map(item => <option key={item} value={item}>{item.replace(/_/g, ' ')}</option>)}</Select>)}
       <div className="col-span-2">
         {field('Status effective from (active / inactive date)', <input type="date" style={inputStyle} value={form.status_effective_date ?? ''} onChange={event => update('status_effective_date', event.target.value)} />)}
@@ -84,6 +173,18 @@ export default function Employees() {
   const canManageLogins = hasAnyRole(['administrator', 'manager']);
   const [rows, setRows] = useState<EmployeeProfileRow[]>([]); const [lookups, setLookups] = useState<EmployeeLookups>({ branches: [], departments: [], shifts: [], managers: [] }); const [search, setSearch] = useState(''); const [status, setStatus] = useState<EmploymentStatus | ''>(''); const [branchId, setBranchId] = useState(''); const [departmentId, setDepartmentId] = useState(''); const [sortBy, setSortBy] = useState<'full_name' | 'employee_code' | 'created_at' | 'employment_status'>('full_name'); const [ascending, setAscending] = useState(true); const [page, setPage] = useState(1); const [count, setCount] = useState(0); const [loading, setLoading] = useState(false); const [error, setError] = useState(''); const [selected, setSelected] = useState<EmployeeProfileRow | null>(null); const [editing, setEditing] = useState<EmployeeProfileRow | null | undefined>(undefined); const pageSize = 10;
   const [provisioning, setProvisioning] = useState(false); const [credentials, setCredentials] = useState<EmployeeAccountCredentials | null>(null); const [copied, setCopied] = useState(false);
+  const [selectedComp, setSelectedComp] = useState<EmployeeCompensationRow | null>(null);
+  useEffect(() => {
+    if (!organizationId || !selected) { setSelectedComp(null); return; }
+    let active = true;
+    void payrollService.listCompensations(organizationId, selected.id)
+      .then(comps => {
+        if (!active) return;
+        setSelectedComp(comps.find(item => item.effective_to === null) ?? comps[0] ?? null);
+      })
+      .catch(() => { if (active) setSelectedComp(null); });
+    return () => { active = false; };
+  }, [organizationId, selected]);
   const load = useCallback(async () => {
     if (!organizationId) return;
     setLoading(true);
@@ -140,13 +241,13 @@ export default function Employees() {
   const copyCredentials = async () => { if (!credentials) return; try { await navigator.clipboard.writeText(`Employee ID: ${credentials.identifier}\nTemporary password: ${credentials.temporary_password}`); setCopied(true); window.setTimeout(() => setCopied(false), 2000); } catch { /* clipboard unavailable */ } };
   if (!organizationId) return <div className="rounded-xl p-8 text-center" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><AlertCircle className="mx-auto mb-3" style={{ color: '#f59e0b' }} /><div className="text-white font-semibold">No active organization</div><div className="text-sm mt-1" style={{ color: '#4b6a8a' }}>Your account needs an active organization assignment.</div></div>;
   return <div className="space-y-4">
-    {editing !== undefined && <EmployeeModal employee={editing} lookups={lookups} organizationId={organizationId} onClose={() => setEditing(undefined)} onSaved={saved} />}
+    {editing !== undefined && <EmployeeModal employee={editing} lookups={lookups} organizationId={organizationId} canManageSalary={canCreate} onClose={() => setEditing(undefined)} onSaved={saved} />}
     <div className="flex items-center justify-between"><div><h1 className="text-xl font-bold text-white">Employees</h1><p className="text-sm mt-0.5" style={{ color: '#4b6a8a' }}>Manage employees, assignments, and employment status</p></div>{canCreate && <button onClick={() => setEditing(null)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold" style={{ background: '#2563eb', color: '#fff' }}><Plus size={15} /> Add employee</button>}</div>
     {error && <div className="rounded-xl p-3 flex gap-2 text-xs" style={{ background: 'rgba(239,68,68,0.1)', color: '#fca5a5' }} role="alert"><AlertCircle size={15} />{error}<button className="ml-auto underline" onClick={() => void load()}>Retry</button></div>}
     <div className="rounded-xl p-4 grid grid-cols-5 gap-3" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><div className="relative"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#4b6a8a' }} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search name, ID, Iqama…" style={{ ...inputStyle, paddingLeft: 34 }} /></div><Select value={branchId} onChange={setBranchId}><option value="">All sites</option>{lookups.branches.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Select value={departmentId} onChange={setDepartmentId}><option value="">All departments</option>{lookups.departments.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</Select><Select value={status} onChange={value => setStatus(value as EmploymentStatus | '')}><option value="">All statuses</option>{statuses.filter(Boolean).map(item => <option key={item} value={item}>{item.replace(/_/g, ' ')}</option>)}</Select><Select value={sortBy} onChange={value => setSortBy(value as typeof sortBy)}><option value="full_name">Sort: name</option><option value="employee_code">Sort: employee ID</option><option value="created_at">Sort: newest</option><option value="employment_status">Sort: status</option></Select></div>
     <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #1e3a5a' }}><table className="w-full"><thead><tr style={{ background: '#122338' }}>{['Employee','Employee ID','Site / Department','Manager','Status','Actions'].map(heading => <th key={heading} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider" style={{ color: '#4b6a8a' }}>{heading}</th>)}</tr></thead><tbody>{loading ? <tr><td colSpan={6} className="p-10 text-center"><Loader2 className="mx-auto animate-spin" style={{ color: '#3b82f6' }} /></td></tr> : rows.length === 0 ? <tr><td colSpan={6} className="p-12 text-center"><UserRound className="mx-auto mb-3" style={{ color: '#1e3a5a' }} /><div className="text-white font-semibold">No employees found</div><div className="text-xs mt-1" style={{ color: '#4b6a8a' }}>Adjust the filters or add the first employee.</div></td></tr> : rows.map(employee => <tr key={employee.id} className="border-t" style={{ borderColor: '#1e3a5a' }}><td className="px-4 py-3"><button onClick={() => setSelected(employee)} className="flex items-center gap-3 text-left"><div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: 'linear-gradient(135deg,#2563eb,#06b6d4)' }}>{employee.full_name.split(/\s+/).map(part => part[0]).join('').slice(0, 2)}</div><div><div className="text-sm font-semibold text-white">{employee.full_name}</div><div className="text-xs" style={{ color: '#4b6a8a' }}>{employee.job_title || 'Employee'}</div></div></button></td><td className="px-4 py-3 text-xs font-mono" style={{ color: '#93c5fd' }}>{employee.employee_code}<div style={{ color: '#4b6a8a' }}>{employee.iqama_number}</div></td><td className="px-4 py-3 text-xs" style={{ color: '#94a3b8' }}>{branchName.get(employee.branch_id) || '—'}<div style={{ color: '#4b6a8a' }}>{departmentName.get(employee.department_id) || '—'}</div></td><td className="px-4 py-3 text-xs" style={{ color: '#94a3b8' }}>{lookups.managers.find(item => item.id === employee.manager_user_id)?.display_name || '—'}</td><td className="px-4 py-3"><Status status={employee.employment_status} />{employee.status_effective_date && <div className="text-[10px] mt-0.5" style={{ color: '#64748b' }}>From {employee.status_effective_date}</div>}</td><td className="px-4 py-3"><div className="flex items-center gap-2">{canEdit && <button onClick={() => setEditing(employee)} className="p-1.5 rounded-lg" style={{ color: '#93c5fd', background: '#122338' }} title="Edit"><Edit3 size={14} /></button>}{canEdit && <button onClick={() => startStatusChange(employee)} className="px-2 py-1 rounded-lg text-xs" style={{ background: employee.employment_status === 'active' ? 'rgba(239,68,68,.12)' : 'rgba(16,185,129,.12)', color: employee.employment_status === 'active' ? '#fca5a5' : '#6ee7b7' }} title="Change status">{employee.employment_status === 'active' ? 'Deactivate' : 'Activate'}</button>}<button onClick={() => setSelected(employee)} className="p-1.5 rounded-lg" style={{ color: '#4b6a8a', background: '#122338' }} title="Details"><ChevronRight size={14} /></button></div></td></tr>)}</tbody></table></div>
     <div className="flex items-center justify-between text-xs" style={{ color: '#4b6a8a' }}><span>{count === 0 ? '0 employees' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, count)} of ${count}`}</span><div className="flex items-center gap-2"><button disabled={page <= 1} onClick={() => setPage(value => value - 1)} className="p-1.5 rounded-lg disabled:opacity-30" style={{ background: '#122338' }}><ChevronLeft size={14} /></button><span>Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage(value => value + 1)} className="p-1.5 rounded-lg disabled:opacity-30" style={{ background: '#122338' }}><ChevronRight size={14} /></button><button onClick={() => setAscending(value => !value)} className="ml-2 px-2 py-1 rounded" style={{ background: '#122338', color: '#93c5fd' }}>{ascending ? 'Ascending' : 'Descending'}</button></div></div>
-    {selected && <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: 'rgba(6,13,26,0.82)' }}><div className="w-full max-w-lg rounded-2xl p-6" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><div className="flex items-start justify-between"><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold" style={{ background: 'linear-gradient(135deg,#2563eb,#06b6d4)' }}>{selected.full_name.split(/\s+/).map(part => part[0]).join('').slice(0, 2)}</div><div><h2 className="font-bold text-white">{selected.full_name}</h2><div className="text-xs font-mono" style={{ color: '#3b82f6' }}>{selected.employee_code}</div></div></div><button onClick={() => setSelected(null)} style={{ color: '#4b6a8a' }}><X size={16} /></button></div><div className="grid grid-cols-2 gap-3 mt-6">{[['Iqama', selected.iqama_number],['Mobile', selected.mobile_number || '—'],['Site', branchName.get(selected.branch_id) || '—'],['Department', departmentName.get(selected.department_id) || '—'],['Manager', lookups.managers.find(item => item.id === selected.manager_user_id)?.display_name || '—'],['Joined', selected.joining_date || '—'],['Status effective', selected.status_effective_date || selected.joining_date || '—']].map(([label, value]) => <div key={label} className="rounded-xl p-3" style={{ background: '#122338' }}><div className="text-xs" style={{ color: '#4b6a8a' }}>{label}</div><div className="text-sm text-white mt-1">{value}</div></div>)}</div><div className="mt-4 rounded-xl p-3 flex items-center gap-2 text-xs" style={{ background: '#122338' }}><KeyRound size={14} style={{ color: selected.user_id ? '#6ee7b7' : '#f59e0b' }} /><span style={{ color: '#94a3b8' }}>{selected.user_id ? 'This employee can sign in to the mobile app.' : 'No login account yet — this employee cannot sign in.'}{selected.user_id && selected.must_change_password && <span className="ml-1" style={{ color: '#fcd34d' }}>Awaiting first password change.</span>}</span>{canManageLogins && !selected.user_id && <button disabled={provisioning} onClick={() => void provisionLogin(selected)} className="ml-auto px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1 disabled:opacity-50" style={{ background: '#2563eb', color: '#fff' }}>{provisioning ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />} Create login</button>}{canManageLogins && selected.user_id && <button disabled={provisioning} onClick={() => void resetLogin(selected)} className="ml-auto px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1 disabled:opacity-50" style={{ background: 'rgba(245,158,11,0.15)', color: '#fcd34d' }}>{provisioning ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />} Reset password</button>}</div><div className="flex items-center justify-between mt-6"><Status status={selected.employment_status} /><div className="flex gap-2">{canEdit && <><button onClick={() => { setEditing(selected); setSelected(null); }} className="px-3 py-2 rounded-lg text-xs flex items-center gap-1" style={{ background: '#122338', color: '#93c5fd' }}><Edit3 size={13} /> Edit</button><button onClick={() => startStatusChange(selected)} className="px-3 py-2 rounded-lg text-xs" style={{ background: selected.employment_status === 'active' ? 'rgba(239,68,68,.12)' : 'rgba(16,185,129,.12)', color: selected.employment_status === 'active' ? '#fca5a5' : '#6ee7b7' }}>{selected.employment_status === 'active' ? 'Deactivate' : 'Activate'}</button></>}</div></div></div></div>}
+    {selected && <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: 'rgba(6,13,26,0.82)' }}><div className="w-full max-w-lg rounded-2xl p-6" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><div className="flex items-start justify-between"><div className="flex items-center gap-3"><div className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold" style={{ background: 'linear-gradient(135deg,#2563eb,#06b6d4)' }}>{selected.full_name.split(/\s+/).map(part => part[0]).join('').slice(0, 2)}</div><div><h2 className="font-bold text-white">{selected.full_name}</h2><div className="text-xs font-mono" style={{ color: '#3b82f6' }}>{selected.employee_code}</div></div></div><button onClick={() => setSelected(null)} style={{ color: '#4b6a8a' }}><X size={16} /></button></div><div className="grid grid-cols-2 gap-3 mt-6">{[['Iqama', selected.iqama_number],['Mobile', selected.mobile_number || '—'],['Site', branchName.get(selected.branch_id) || '—'],['Department', departmentName.get(selected.department_id) || '—'],['Manager', lookups.managers.find(item => item.id === selected.manager_user_id)?.display_name || '—'],['Joined', selected.joining_date || '—'],['Status effective', selected.status_effective_date || selected.joining_date || '—'],['Monthly salary', selectedComp ? `${Number(selectedComp.monthly_base_salary).toLocaleString()} ${selectedComp.currency_code} (from ${selectedComp.effective_from})` : 'Not set']].map(([label, value]) => <div key={label} className="rounded-xl p-3" style={{ background: '#122338' }}><div className="text-xs" style={{ color: '#4b6a8a' }}>{label}</div><div className="text-sm text-white mt-1">{value}</div></div>)}</div><div className="mt-4 rounded-xl p-3 flex items-center gap-2 text-xs" style={{ background: '#122338' }}><KeyRound size={14} style={{ color: selected.user_id ? '#6ee7b7' : '#f59e0b' }} /><span style={{ color: '#94a3b8' }}>{selected.user_id ? 'This employee can sign in to the mobile app.' : 'No login account yet — this employee cannot sign in.'}{selected.user_id && selected.must_change_password && <span className="ml-1" style={{ color: '#fcd34d' }}>Awaiting first password change.</span>}</span>{canManageLogins && !selected.user_id && <button disabled={provisioning} onClick={() => void provisionLogin(selected)} className="ml-auto px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1 disabled:opacity-50" style={{ background: '#2563eb', color: '#fff' }}>{provisioning ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />} Create login</button>}{canManageLogins && selected.user_id && <button disabled={provisioning} onClick={() => void resetLogin(selected)} className="ml-auto px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1 disabled:opacity-50" style={{ background: 'rgba(245,158,11,0.15)', color: '#fcd34d' }}>{provisioning ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />} Reset password</button>}</div><div className="flex items-center justify-between mt-6"><Status status={selected.employment_status} /><div className="flex gap-2">{canEdit && <><button onClick={() => { setEditing(selected); setSelected(null); }} className="px-3 py-2 rounded-lg text-xs flex items-center gap-1" style={{ background: '#122338', color: '#93c5fd' }}><Edit3 size={13} /> Edit</button><button onClick={() => startStatusChange(selected)} className="px-3 py-2 rounded-lg text-xs" style={{ background: selected.employment_status === 'active' ? 'rgba(239,68,68,.12)' : 'rgba(16,185,129,.12)', color: selected.employment_status === 'active' ? '#fca5a5' : '#6ee7b7' }}>{selected.employment_status === 'active' ? 'Deactivate' : 'Activate'}</button></>}</div></div></div></div>}
     {credentials && <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(6,13,26,0.85)', backdropFilter: 'blur(4px)' }}><div className="w-full max-w-md rounded-2xl p-6" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}><div className="flex items-center gap-2"><KeyRound size={18} style={{ color: '#6ee7b7' }} /><h2 className="font-bold text-white">{credentials.status === 'reset' ? 'New password issued' : 'Login created'}</h2></div><div className="mt-2 text-xs rounded-lg p-3" style={{ background: 'rgba(245,158,11,0.12)', color: '#fcd34d' }}>Copy this now — the temporary password is shown only once and cannot be retrieved again. Hand it to the employee; they sign in with their Employee ID.</div><div className="mt-4 space-y-2"><div className="rounded-xl p-3" style={{ background: '#122338' }}><div className="text-xs" style={{ color: '#4b6a8a' }}>Employee ID</div><div className="text-sm font-mono text-white mt-1">{credentials.identifier}</div></div><div className="rounded-xl p-3" style={{ background: '#122338' }}><div className="text-xs" style={{ color: '#4b6a8a' }}>Temporary password</div><div className="text-sm font-mono text-white mt-1 select-all">{credentials.temporary_password}</div></div></div><div className="flex gap-2 mt-5"><button onClick={() => void copyCredentials()} className="flex-1 px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1" style={{ background: '#122338', color: '#93c5fd' }}><Copy size={13} /> {copied ? 'Copied' : 'Copy'}</button><button onClick={() => setCredentials(null)} className="flex-1 px-3 py-2 rounded-lg text-xs font-semibold" style={{ background: '#2563eb', color: '#fff' }}>Done</button></div></div></div>}
     {statusTarget && (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(6,13,26,0.85)', backdropFilter: 'blur(4px)' }}>
