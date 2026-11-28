@@ -35,6 +35,7 @@ import type {
   EmployeeCompensationRow,
   EmployeePayrollComponentRow,
   EmployeeProfileRow,
+  OvertimeRateMode,
   PayrollComponentKind,
   PayrollEntryDetail,
   PayrollEntryRow,
@@ -396,7 +397,7 @@ export default function Payroll() {
           <div className="flex flex-wrap items-center gap-3">
             <RunStatusBadge status={activeRun.status} />
             <span style={{ color: '#94a3b8' }}>
-              Basis: <strong className="text-white">{activeRun.currency_code}</strong> · {activeRun.month_basis_days}d month · {activeRun.daily_hours}h/day · {activeRun.overtime_multiplier}× OT
+              Basis: <strong className="text-white">{activeRun.currency_code}</strong> · {activeRun.month_basis_days}d month · {activeRun.daily_hours}h/day · {activeRun.overtime_rate_mode === 'fixed_hourly' ? `${activeRun.overtime_hourly_rate} ${activeRun.currency_code}/hr OT` : `${activeRun.overtime_multiplier}× OT`}
             </span>
             {activeRun.reopen_reason && (
               <span className="text-amber-300">Reopened: {activeRun.reopen_reason}</span>
@@ -675,7 +676,9 @@ function PayrollSettingsPanel({
   const [currencyCode, setCurrencyCode] = useState(settings?.currency_code ?? 'SAR');
   const [monthBasisDays, setMonthBasisDays] = useState(settings?.month_basis_days ?? 30);
   const [dailyHours, setDailyHours] = useState(settings?.daily_hours ?? 8);
+  const [otRateMode, setOtRateMode] = useState<OvertimeRateMode>(settings?.overtime_rate_mode ?? 'multiplier');
   const [otMultiplier, setOtMultiplier] = useState(settings?.overtime_multiplier ?? 1.5);
+  const [otHourlyRate, setOtHourlyRate] = useState(settings?.overtime_hourly_rate ?? 12);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -683,7 +686,9 @@ function PayrollSettingsPanel({
     setCurrencyCode(settings.currency_code);
     setMonthBasisDays(settings.month_basis_days);
     setDailyHours(settings.daily_hours);
+    setOtRateMode(settings.overtime_rate_mode ?? 'multiplier');
     setOtMultiplier(settings.overtime_multiplier);
+    setOtHourlyRate(settings.overtime_hourly_rate ?? 0);
   }, [settings]);
 
   const save = async () => {
@@ -696,6 +701,8 @@ function PayrollSettingsPanel({
         monthBasisDays,
         dailyHours,
         overtimeMultiplier: otMultiplier,
+        overtimeRateMode: otRateMode,
+        overtimeHourlyRate: otHourlyRate,
       });
       await onSaved();
     } catch (caught) {
@@ -710,7 +717,7 @@ function PayrollSettingsPanel({
       <div>
         <h2 className="text-sm font-semibold text-white">Organization Payroll Settings</h2>
         <p className="text-xs mt-1" style={{ color: '#94a3b8' }}>
-          Snapshotted into each new or draft payroll run. Existing finalized runs keep their original snapshot.
+          Snapshotted into each new, draft, or recalculated payroll run. Existing finalized runs keep their original snapshot.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -727,9 +734,29 @@ function PayrollSettingsPanel({
           <input type="number" min={1} max={24} step={0.5} value={dailyHours} onChange={e => setDailyHours(Number(e.target.value))} style={{ ...inputStyle, marginTop: 4 }} />
         </label>
         <label className="text-xs" style={{ color: '#94a3b8' }}>
-          Overtime Multiplier
-          <input type="number" min={1} max={10} step={0.1} value={otMultiplier} onChange={e => setOtMultiplier(Number(e.target.value))} style={{ ...inputStyle, marginTop: 4 }} />
+          Overtime Calculation Mode
+          <select value={otRateMode} onChange={e => setOtRateMode(e.target.value as OvertimeRateMode)} style={{ ...inputStyle, marginTop: 4 }}>
+            <option value="multiplier">Multiplier of hourly base salary (e.g. 1.5×)</option>
+            <option value="fixed_hourly">Fixed hourly rate ({currencyCode || 'SAR'}/hr)</option>
+          </select>
         </label>
+        {otRateMode === 'fixed_hourly' ? (
+          <label className="text-xs col-span-2" style={{ color: '#94a3b8' }}>
+            Fixed Overtime Rate ({currencyCode || 'SAR'} / hour)
+            <input type="number" min={0} max={10000} step={0.5} value={otHourlyRate} onChange={e => setOtHourlyRate(Number(e.target.value))} style={{ ...inputStyle, marginTop: 4 }} />
+            <div className="mt-1" style={{ color: '#4b6a8a' }}>
+              Pays a flat {otHourlyRate || 0} {currencyCode || 'SAR'} per approved OT hour for every employee. Editable anytime before finalizing a run.
+            </div>
+          </label>
+        ) : (
+          <label className="text-xs col-span-2" style={{ color: '#94a3b8' }}>
+            Overtime Multiplier
+            <input type="number" min={1} max={10} step={0.1} value={otMultiplier} onChange={e => setOtMultiplier(Number(e.target.value))} style={{ ...inputStyle, marginTop: 4 }} />
+            <div className="mt-1" style={{ color: '#4b6a8a' }}>
+              Multiplies each employee&apos;s hourly base salary (e.g. 1.5×).
+            </div>
+          </label>
+        )}
       </div>
       <button
         type="button"

@@ -1,4 +1,5 @@
 import type {
+  OvertimeRateMode,
   PayrollComponentKind,
   PayrollExceptionType,
   PayrollExportCsvRow,
@@ -10,6 +11,8 @@ export interface PayrollSettingsConfig {
   monthBasisDays: number;
   dailyHours: number;
   overtimeMultiplier: number;
+  overtimeRateMode?: OvertimeRateMode;
+  overtimeHourlyRate?: number;
 }
 
 export interface SalarySegmentInput {
@@ -173,6 +176,8 @@ function getSalaryOnDate(salaries: SalarySegmentInput[], date: string): number {
 export function calculateEmployeePayroll(input: EmployeePayrollInput): CalculatedPayrollResult {
   const { monthStart, monthEnd } = getMonthBounds(input.payrollMonth);
   const { monthBasisDays, dailyHours, overtimeMultiplier } = input.settings;
+  const overtimeRateMode = input.settings.overtimeRateMode ?? 'multiplier';
+  const overtimeHourlyRate = Number(input.settings.overtimeHourlyRate ?? 0);
 
   const joinDate = input.joiningDate ?? monthStart;
   let activeFrom = joinDate > monthStart ? joinDate : monthStart;
@@ -280,10 +285,16 @@ export function calculateEmployeePayroll(input: EmployeePayrollInput): Calculate
       pendingOvertimeCount += 1;
     } else if (ot.status === 'approved' && ot.approvedMinutes > 0) {
       approvedOvertimeMinutes += ot.approvedMinutes;
-      const salary = getSalaryOnDate(sortedSalaries, ot.attendanceDate);
-      if (salary > 0) {
-        const hourlyRate = salary / (monthBasisDays * dailyHours);
-        overtimePay = roundMoney(overtimePay + roundMoney((ot.approvedMinutes / 60) * hourlyRate * overtimeMultiplier));
+      if (overtimeRateMode === 'fixed_hourly') {
+        if (overtimeHourlyRate > 0) {
+          overtimePay = roundMoney(overtimePay + roundMoney((ot.approvedMinutes / 60) * overtimeHourlyRate));
+        }
+      } else {
+        const salary = getSalaryOnDate(sortedSalaries, ot.attendanceDate);
+        if (salary > 0) {
+          const hourlyRate = salary / (monthBasisDays * dailyHours);
+          overtimePay = roundMoney(overtimePay + roundMoney((ot.approvedMinutes / 60) * hourlyRate * overtimeMultiplier));
+        }
       }
     }
   }

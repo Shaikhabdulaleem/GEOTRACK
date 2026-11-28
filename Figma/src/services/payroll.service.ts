@@ -3,6 +3,7 @@ import { executeQuery } from './database.service';
 import type {
   EmployeeCompensationRow,
   EmployeePayrollComponentRow,
+  OvertimeRateMode,
   PayrollComponentKind,
   PayrollEntryDetail,
   PayrollEntryRow,
@@ -20,6 +21,8 @@ export interface UpsertPayrollSettingsInput {
   monthBasisDays: number;
   dailyHours: number;
   overtimeMultiplier: number;
+  overtimeRateMode?: OvertimeRateMode;
+  overtimeHourlyRate?: number;
 }
 
 export interface UpsertCompensationInput {
@@ -79,6 +82,8 @@ export const payrollService = {
         month_basis_days: 30,
         daily_hours: 8,
         overtime_multiplier: 1.5,
+        overtime_rate_mode: 'multiplier',
+        overtime_hourly_rate: 0,
         updated_at: null,
       }
     );
@@ -92,6 +97,8 @@ export const payrollService = {
         p_month_basis_days: input.monthBasisDays,
         p_daily_hours: input.dailyHours,
         p_overtime_multiplier: input.overtimeMultiplier,
+        p_overtime_rate_mode: input.overtimeRateMode ?? 'multiplier',
+        p_overtime_hourly_rate: input.overtimeHourlyRate ?? 0,
       }),
       'Unable to save payroll settings.',
     );

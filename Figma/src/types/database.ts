@@ -901,12 +901,16 @@ export interface AuditLogRow {
   created_at: string;
 }
 
+export type OvertimeRateMode = 'multiplier' | 'fixed_hourly';
+
 export interface PayrollSettingsRow {
   organization_id: string;
   currency_code: string;
   month_basis_days: number;
   daily_hours: number;
   overtime_multiplier: number;
+  overtime_rate_mode: OvertimeRateMode;
+  overtime_hourly_rate: number;
   updated_by?: string | null;
   created_at?: string;
   updated_at: string | null;
@@ -952,6 +956,8 @@ export interface PayrollRunRow {
   month_basis_days: number;
   daily_hours: number;
   overtime_multiplier: number;
+  overtime_rate_mode: OvertimeRateMode;
+  overtime_hourly_rate: number;
   organization_timezone: string;
   employee_count: number;
   total_gross_pay: number;
@@ -1713,6 +1719,8 @@ export interface Database {
           p_month_basis_days: number;
           p_daily_hours: number;
           p_overtime_multiplier: number;
+          p_overtime_rate_mode?: OvertimeRateMode;
+          p_overtime_hourly_rate?: number;
         };
         Returns: PayrollSettingsRow;
       };

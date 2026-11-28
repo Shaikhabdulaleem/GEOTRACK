@@ -321,3 +321,27 @@ test('Migration, SQL tests, and UI integration wire payroll security and feature
   const app = readFileSync('src/App.tsx', 'utf8');
   assert.match(app, /payroll:\s*Payroll/);
 });
+
+test('Fixed hourly OT rate pays flat SAR/hr regardless of base salary', () => {
+  const res = calculateEmployeePayroll({
+    payrollMonth: '2026-11',
+    joiningDate: '2026-01-01',
+    employmentStatus: 'active',
+    statusEffectiveDate: null,
+    settings: {
+      currencyCode: 'SAR',
+      monthBasisDays: 30,
+      dailyHours: 8,
+      overtimeMultiplier: 1.5,
+      overtimeRateMode: 'fixed_hourly',
+      overtimeHourlyRate: 12,
+    },
+    salaries: [{ monthlyBaseSalary: 3000, effectiveFrom: '2026-01-01', effectiveTo: null }],
+    overtime: [
+      { attendanceDate: '2026-11-10', status: 'approved', approvedMinutes: 150 },
+    ],
+  });
+  assert.equal(res.approvedOvertimeMinutes, 150);
+  assert.equal(res.overtimePay, 30); // 2.5 hrs * 12 SAR/hr
+  assert.equal(res.grossPay, 3030);
+});
