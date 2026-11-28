@@ -91,20 +91,18 @@ export default function EmployeeTransfer() {
     return () => clearInterval(timer);
   }, []);
 
-  // Compute date range from preset
+  // Compute date range from preset (aligned to Asia/Riyadh calendar date)
   const dateRange = useMemo(() => {
     if (datePreset === 'all') return { from: undefined, to: undefined };
-    const now = new Date();
     const to = today;
     if (datePreset === 'today') return { from: today, to: today };
+    const d = new Date(`${today}T00:00:00Z`);
     if (datePreset === 'week') {
-      const d = new Date(now);
-      d.setDate(d.getDate() - 7);
+      d.setUTCDate(d.getUTCDate() - 7);
       return { from: d.toISOString().slice(0, 10), to };
     }
     // month
-    const d = new Date(now);
-    d.setMonth(d.getMonth() - 1);
+    d.setUTCMonth(d.getUTCMonth() - 1);
     return { from: d.toISOString().slice(0, 10), to };
   }, [datePreset, today]);
 

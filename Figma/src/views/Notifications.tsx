@@ -138,7 +138,7 @@ export default function Notifications() {
         {[
           { label: 'Action Required', count: visible.filter(a=>a.severity === 'error').length, color: '#ef4444' },
           { label: 'Informational', count: visible.filter(a=>a.severity !== 'error').length, color: '#3b82f6' },
-          { label: 'Dismissed Today', count: dismissed.length, color: '#4b6a8a' },
+          { label: 'Dismissed', count: supabaseReady ? notifications.filter(a => Boolean(a.read_at) || dismissed.includes(a.id)).length : dismissed.length, color: '#4b6a8a' },
         ].map(s => (
           <div key={s.label} className="rounded-xl p-3 flex items-center gap-3" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
             <div className="text-2xl font-bold font-mono" style={{ color: s.color }}>{s.count}</div>

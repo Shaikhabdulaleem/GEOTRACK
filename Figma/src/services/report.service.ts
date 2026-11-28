@@ -96,21 +96,31 @@ export const reportService = {
     };
 
     let reportData: any[] = [];
+    const batchSize = 100;
+    const queryBatched = async <T,>(runBatch: (batchIds: string[]) => PromiseLike<{ data: T[] | null; error: unknown }>): Promise<T[]> => {
+      const rows: T[] = [];
+      for (let i = 0; i < empIds.length; i += batchSize) {
+        const { data, error } = await runBatch(empIds.slice(i, i + batchSize));
+        if (error) throw error;
+        if (data) rows.push(...data);
+      }
+      return rows;
+    };
     
     // Build efficient queries based on the requested report type
     switch (reportId) {
       case 'attendance_report':
       case 'employee_attendance_history': {
-        const { data } = await client
+        const data = await queryBatched<any>(batchIds => client
           .from('attendance_records')
           .select('employee_id, attendance_date, check_in_at, check_out_at, status, source, geofence_validated')
           .eq('organization_id', organizationId)
           .gte('attendance_date', filters.fromDate)
           .lte('attendance_date', filters.toDate)
-          .in('employee_id', empIds)
-          .order('attendance_date', { ascending: false });
+          .in('employee_id', batchIds)
+          .order('attendance_date', { ascending: false }));
           
-        reportData = (data || []).map(r => {
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
           return {
@@ -123,17 +133,17 @@ export const reportService = {
       }
       
       case 'late_attendance': {
-        const { data } = await client
+        const data = await queryBatched<any>(batchIds => client
           .from('attendance_records')
           .select('employee_id, attendance_date, check_in_at, late_minutes')
           .eq('organization_id', organizationId)
           .gte('attendance_date', filters.fromDate)
           .lte('attendance_date', filters.toDate)
-          .in('employee_id', empIds)
+          .in('employee_id', batchIds)
           .gt('late_minutes', 0)
-          .order('late_minutes', { ascending: false });
+          .order('late_minutes', { ascending: false }));
           
-        reportData = (data || []).map(r => {
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
           return {
@@ -146,16 +156,16 @@ export const reportService = {
       }
       
       case 'absence': {
-        const { data } = await client
+        const data = await queryBatched<any>(batchIds => client
           .from('attendance_records')
           .select('employee_id, attendance_date, status')
           .eq('organization_id', organizationId)
           .gte('attendance_date', filters.fromDate)
           .lte('attendance_date', filters.toDate)
-          .in('employee_id', empIds)
-          .eq('status', 'absent');
+          .in('employee_id', batchIds)
+          .eq('status', 'absent'));
           
-        reportData = (data || []).map(r => {
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
           return base;
@@ -164,16 +174,16 @@ export const reportService = {
       }
       
       case 'missing_attendance': {
-        const { data } = await client
+        const data = await queryBatched<any>(batchIds => client
           .from('attendance_records')
           .select('employee_id, attendance_date, status, missing_minutes')
           .eq('organization_id', organizationId)
           .gte('attendance_date', filters.fromDate)
           .lte('attendance_date', filters.toDate)
-          .in('employee_id', empIds)
-          .in('status', ['missing_check_in', 'missing_check_out']);
+          .in('employee_id', batchIds)
+          .in('status', ['missing_check_in', 'missing_check_out']));
           
-        reportData = (data || []).map(r => {
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
           return base;
@@ -182,16 +192,16 @@ export const reportService = {
       }
       
       case 'employee_working_hours': {
-        const { data } = await client
+        const data = await queryBatched<any>(batchIds => client
           .from('attendance_records')
           .select('employee_id, attendance_date, worked_minutes')
           .eq('organization_id', organizationId)
           .gte('attendance_date', filters.fromDate)
           .lte('attendance_date', filters.toDate)
-          .in('employee_id', empIds)
-          .gt('worked_minutes', 0);
+          .in('employee_id', batchIds)
+          .gt('worked_minutes', 0));
           
-        reportData = (data || []).map(r => {
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
           return {
@@ -204,15 +214,15 @@ export const reportService = {
       }
       
       case 'overtime_report': {
-        const { data } = await client
+        const data = await queryBatched<any>(batchIds => client
           .from('overtime_records')
           .select('employee_id, work_date, requested_minutes, approved_minutes, status, reason')
           .eq('organization_id', organizationId)
           .gte('work_date', filters.fromDate)
           .lte('work_date', filters.toDate)
-          .in('employee_id', empIds);
+          .in('employee_id', batchIds));
           
-        reportData = (data || []).map(r => {
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
           return base;
@@ -221,15 +231,15 @@ export const reportService = {
       }
       
       case 'productivity_report': {
-        const { data } = await client
+        const data = await queryBatched<any>(batchIds => client
           .from('productivity_records')
           .select('employee_id, work_date, metric_code, target_units, actual_units, productivity_percent, productive_hours')
           .eq('organization_id', organizationId)
           .gte('work_date', filters.fromDate)
           .lte('work_date', filters.toDate)
-          .in('employee_id', empIds);
+          .in('employee_id', batchIds));
           
-        reportData = (data || []).map(r => {
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
           return base;
@@ -238,16 +248,16 @@ export const reportService = {
       }
       
       case 'geofence_exceptions': {
-        const { data } = await client
+        const data = await queryBatched<any>(batchIds => client
           .from('attendance_events')
           .select('employee_id, event_at, event_type, inside_geofence, distance_meters, source')
           .eq('organization_id', organizationId)
-          .gte('event_at', `${filters.fromDate}T00:00:00Z`)
-          .lte('event_at', `${filters.toDate}T23:59:59Z`)
-          .in('employee_id', empIds)
-          .eq('inside_geofence', false);
+          .gte('event_at', `${filters.fromDate}T00:00:00+03:00`)
+          .lte('event_at', `${filters.toDate}T23:59:59.999+03:00`)
+          .in('employee_id', batchIds)
+          .eq('inside_geofence', false));
           
-        reportData = ((data as any[]) || []).map(r => {
+        reportData = data.map(r => {
           const base = enrich(r);
           delete base.employee_id;
           return {

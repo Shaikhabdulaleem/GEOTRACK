@@ -372,8 +372,9 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
     if (!supabaseReady || !organizationId) return;
     const initLookups = async () => {
       const { dashboardService } = await import('../services/dashboard.service');
-      const [lookups, empData] = await Promise.all([
+      const [lookups, empLookups, empData] = await Promise.all([
         dashboardService.getLookups(organizationId),
+        employeeService.getLookups(organizationId).catch(() => null),
         employeeService.listAll({ organizationId })
       ]);
       setBranches(lookups.branches);
@@ -386,16 +387,16 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
         : allEmps;
       setEmployeeProfiles(emps);
       
-      // Extract unique managers
+      // Extract unique managers and resolve display names from organization users first, then employee profiles
       const mgrIds = [...new Set(emps.map(e => e.manager_user_id).filter(Boolean))] as string[];
-      // We can just use the employee records of those managers if they are also employees, or raw IDs
+      const mgrNameMap = new Map((empLookups?.managers ?? []).map(m => [m.id, m.display_name]));
       setManagers(mgrIds.map(id => {
         const e = emps.find(x => x.user_id === id);
-        return { id, name: e ? e.full_name : `Manager ${id.substring(0,6)}` };
+        return { id, name: mgrNameMap.get(id) || e?.full_name || `Manager ${id.substring(0,6)}` };
       }));
     };
     initLookups();
-  }, [supabaseReady, organizationId]);
+  }, [supabaseReady, organizationId, isManager, assignedDepartmentIds]);
 
   // Real per-employee live attendance (status, check-in time, shift, geofence).
   const filteredEmps = supabaseReady ? liveAttendance.map(e => {
@@ -496,7 +497,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [supabaseReady, organizationId, filterDate, filterBranchId, filterDeptId, filterShiftId, filterManagerId, filterEmployeeId]);
+  }, [supabaseReady, organizationId, isManager, assignedDepartmentIds, filterDate, filterBranchId, filterDeptId, filterShiftId, filterManagerId, filterEmployeeId]);
 
   useEffect(() => {
     void loadData();
@@ -591,8 +592,6 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
   const pendingCorrections = metrics ? (metrics.pendingCorrectionsCount ?? 0) : 0;
   const otPending = metrics ? (metrics.otPendingCount ?? pendingApprovals) : 0;
 
-  const avgProd = supabaseReady && prodMetrics ? prodMetrics.averageProductivity : 0;
-
   const realRanking = (supabaseReady && prodMetrics) ? Object.entries(prodMetrics.byEmployee)
     .filter(([empId]) => !metrics || metrics.validEmpIds.includes(empId)) // Filter productivity by dashboard filters
     .map(([empId, data]: [string, any]) => {
@@ -604,7 +603,9 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
     };
   }).sort((a, b) => b.productivity - a.productivity).map((r, i) => ({ ...r, rank: i + 1 })) : [];
 
-  const realPhoneUsage = supabaseReady ? phoneUsage.map((u: any) => {
+  const realPhoneUsage = supabaseReady ? phoneUsage
+    .filter((u: any) => !metrics || metrics.validEmpIds.includes(u.employee_id))
+    .map((u: any) => {
     const e = employeeProfiles.find(x => x.id === u.employee_id);
     return {
       id: u.employee_id,
@@ -734,8 +735,8 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
 
       {/* KPI Row 2 */}
       <div className="grid grid-cols-5 gap-3">
-        <KpiCard title="Day Shift" value={dayShift} sub="Checked-in today" icon={Activity} color="#2563eb" />
-        <KpiCard title="Night Shift" value={nightShift} sub="Checked-in today" icon={Activity} color="#6366f1" />
+        <KpiCard title="Day Shift" value={dayShift} sub="Scheduled today" icon={Activity} color="#2563eb" />
+        <KpiCard title="Night Shift" value={nightShift} sub="Scheduled today" icon={Activity} color="#6366f1" />
         <KpiCard title="Total Worked Hours" value={`${totalWorkingHours}h`} sub="Productive hours tracked" icon={Clock} color="#3b82f6" />
         <KpiCard title="Pending Approvals" value={pendingApprovals} sub="Manager review needed" icon={CheckCircle} color="#f59e0b" />
         <KpiCard title="Active Alerts" value={missing + geofenceViolations} sub={`${geofenceViolations} geofence, ${missing} missing`} icon={AlertCircle} color="#ef4444" />
@@ -927,7 +928,7 @@ export default function Dashboard({ onNav }: { onNav: (id: string) => void }) {
             { label: `${alertCounts.missing} Missing Check-Ins`, color: '#ef4444', bg: 'rgba(239,68,68,0.1)', nav: 'live' },
             { label: `${alertCounts.missingOut} Missing Check-Outs`, color: '#f97316', bg: 'rgba(249,115,22,0.1)', nav: 'attendance' },
             { label: `${alertCounts.otApproval} OT Approvals Pending`, color: '#8b5cf6', bg: 'rgba(139,92,246,0.1)', nav: 'overtime' },
-            { label: `${alertCounts.correction} Attendance Correction`, color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', nav: 'attendance' },
+            { label: `${alertCounts.correction} Attendance Correction`, color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', nav: 'corrections' },
             { label: `${alertCounts.geofence} Geofence Violations`, color: '#ef4444', bg: 'rgba(239,68,68,0.1)', nav: 'geofences' },
           ].map((a, i) => (
             <button

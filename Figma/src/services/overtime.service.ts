@@ -254,8 +254,13 @@ async function buildFallbackSummaries(input: OvertimeReviewFilters, page: number
     const empOvertime = overtime.filter(row => row.employee_id === profile.id);
     const deviceValues = device.filter(row => row.employee_id === profile.id && row.usage_percentage != null).map(row => row.usage_percentage!);
     const productivityValues = productivity.filter(row => row.employee_id === profile.id && row.productivity_percent != null).map(row => row.productivity_percent!);
-    const incomplete = empAttendance.filter(row => !row.check_in_at || !row.check_out_at || Date.parse(row.check_out_at) <= Date.parse(row.check_in_at) || (row.worked_minutes === 0 && row.missing_minutes > 0) || ['absent', 'missing_check_in', 'missing_check_out', 'invalid'].includes(row.status)).length;
-    const missingScheduled = (schedules.get(profile.id) ?? []).filter(schedule => schedule.state === 'working' && !empAttendance.some(row => row.attendance_date === schedule.work_date)).length;
+    const empSchedules = schedules.get(profile.id) ?? [];
+    const incomplete = empAttendance.filter(row => {
+      const daySchedule = empSchedules.find(s => s.work_date === row.attendance_date);
+      if (daySchedule?.state !== 'working') return false;
+      return !row.check_in_at || !row.check_out_at || Date.parse(row.check_out_at) <= Date.parse(row.check_in_at) || (row.worked_minutes === 0 && row.missing_minutes > 0) || ['absent', 'missing_check_in', 'missing_check_out', 'invalid'].includes(row.status);
+    }).length;
+    const missingScheduled = empSchedules.filter(schedule => schedule.state === 'working' && !empAttendance.some(row => row.attendance_date === schedule.work_date)).length;
     const issues = incomplete + missingScheduled;
     const pending = empOvertime.filter(row => row.status === 'pending');
     const summary: OvertimeEmployeeSummary = {

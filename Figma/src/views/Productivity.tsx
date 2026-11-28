@@ -26,12 +26,12 @@ function riyadhToday(): string {
 
 function monthEnd(month: string): string {
   const [year, value] = month.split('-').map(Number);
-  const date = new Date(year, value, 0);
-  return `${year}-${String(value).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const date = new Date(Date.UTC(year, value, 0));
+  return `${year}-${String(value).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
 }
 
 function shortDay(value: string): string {
-  return new Date(`${value}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  return new Date(`${value}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
 
 function number(value: number, digits = 0): string {

@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { attendanceService, type AttendanceActionInput } from '../services/attendance.service';
 import { correctionService } from '../services/correction.service';
 import { getErrorMessage } from '../lib/errors';
+import { todayInTimezone } from '../lib/dates';
 import type { AttendanceRecordRow, ManualAttendanceRequestRow } from '../types/database';
 import { employeeDashboardService, type EmployeeDashboardMetrics } from '../services/employeeDashboard.service';
 
@@ -39,8 +40,7 @@ export default function EmployeeSelfService() {
   const [myCorrections, setMyCorrections] = useState<ManualAttendanceRequestRow[]>([]);
   const [showCorrectionModal, setShowCorrectionModal] = useState(false);
   const [corrType, setCorrType] = useState<'check_in' | 'check_out'>('check_in');
-  const [corrDate, setCorrDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [corrTime, setCorrTime] = useState(() => `${new Date().toISOString().slice(0, 10)}T09:00`);
+  const [corrTime, setCorrTime] = useState(() => `${todayInTimezone('Asia/Riyadh')}T09:00`);
   const [corrReason, setCorrReason] = useState('');
   const [corrSaving, setCorrSaving] = useState(false);
   const [corrError, setCorrError] = useState('');
@@ -178,9 +178,7 @@ export default function EmployeeSelfService() {
     );
   }
 
-  const now = new Date();
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const todayStr = todayInTimezone('Asia/Riyadh');
   const today = records.find(record => record.attendance_date === todayStr) ?? null;
   const initials = employeeProfile.full_name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase();
 
@@ -256,9 +254,11 @@ export default function EmployeeSelfService() {
                 <button
                   key={item.label}
                   type="button"
+                  disabled={!item.onClick}
+                  title={item.onClick ? item.label : `${item.label} (view on dashboard)`}
                   onClick={item.onClick}
                   className={`rounded-xl p-3 flex flex-col items-center gap-1 text-xs transition ${
-                    item.onClick ? 'hover:bg-[#1a324d] cursor-pointer' : 'cursor-default'
+                    item.onClick ? 'hover:bg-[#1a324d] cursor-pointer' : 'opacity-60 cursor-not-allowed'
                   }`}
                   style={{ background: '#0d1b2e', border: '1px solid #1e3a5a', color: item.onClick ? '#e2e8f0' : '#4b6a8a' }}
                 >

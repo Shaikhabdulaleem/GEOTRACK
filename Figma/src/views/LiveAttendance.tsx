@@ -11,7 +11,8 @@ import { isEmployeeActiveOnDate } from '../services/employee.service';
 const filters = ['All', 'Present', 'Late', 'Employee week Off', 'Absent', 'Missing', 'Inside Geofence', 'Outside Geofence'];
 
 export default function LiveAttendance() {
-  const { activeMembership } = useAuth();
+  const { activeMembership, roles, assignedDepartmentIds } = useAuth();
+  const isManager = roles.includes('manager') && !roles.includes('administrator');
   const [filter, setFilter] = useState('All');
   const [search, setSearch] = useState('');
   
@@ -42,7 +43,7 @@ export default function LiveAttendance() {
           const hours = Math.floor(totalMins / 60);
           const mins = totalMins % 60;
           const checkinTime = row.checkin
-            ? new Date(row.checkin).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            ? new Date(row.checkin).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Riyadh' })
             : null;
 
           return {
@@ -123,6 +124,9 @@ export default function LiveAttendance() {
 
     const mapped = (profiles || [])
       .filter(p => {
+        if (isManager && (!p.department_id || !assignedDepartmentIds.includes(p.department_id))) {
+          return false;
+        }
         const rec = recordMap[p.id];
         return isEmployeeActiveOnDate(p, today) || !!rec;
       })
@@ -161,15 +165,18 @@ export default function LiveAttendance() {
       }
 
       const shiftObj = Array.isArray(assign?.shift) ? assign?.shift[0] : assign?.shift;
+      const workedMins = Number(rec?.worked_minutes) || 0;
+      const workedHrs = Math.floor(workedMins / 60);
+      const workedRem = workedMins % 60;
 
       return {
         id: p.id,
         name: p.full_name,
         shift: isOff ? 'Week Off' : (shiftObj?.name ?? 'Day'),
         shiftStart: '09:00',
-        checkin: rec ? (rec.check_in_at ? new Date(rec.check_in_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : null) : null,
+        checkin: rec ? (rec.check_in_at ? new Date(rec.check_in_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Riyadh' }) : null) : null,
         status,
-        worked: '0h 00m',
+        worked: `${workedHrs}h ${String(workedRem).padStart(2, '0')}m`,
         inside: insideMap[p.id] ?? false, // no location signal today → not Inside
         productivity: 0,
         phone: 0,
@@ -183,7 +190,7 @@ export default function LiveAttendance() {
       setEmployees(mapped);
       setLastUpdated(new Date());
     }
-  }, [activeMembership]);
+  }, [activeMembership, isManager, assignedDepartmentIds]);
 
   useEffect(() => {
     if (!activeMembership) return;
@@ -248,7 +255,7 @@ export default function LiveAttendance() {
     return true;
   });
 
-  const timeStr = (lastUpdated ?? new Date()).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  const timeStr = (lastUpdated ?? new Date()).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Riyadh' });
 
   if (loading) return <div className="p-4 text-white">Loading...</div>;
   if (error) return <div className="p-4 text-red-500">{error}</div>;

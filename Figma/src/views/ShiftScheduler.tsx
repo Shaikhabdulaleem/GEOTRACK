@@ -24,6 +24,7 @@ import {
   ZapOff,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
+import { todayInTimezone } from '../lib/dates';
 import { isSupabaseConfigured } from '../lib/supabase';
 import {
   shiftService,
@@ -92,11 +93,11 @@ function formatWeekLabel(monday: Date): string {
 }
 
 function formatDateHeader(iso: string): { day: string; num: string; isToday: boolean } {
-  const d = new Date(iso + 'T00:00:00');
-  const today = toISODate(new Date());
+  const d = new Date(iso + 'T12:00:00Z');
+  const today = todayInTimezone('Asia/Riyadh');
   return {
-    day: WEEKDAY_LABELS[d.getDay() === 0 ? 6 : d.getDay() - 1],
-    num: String(d.getDate()),
+    day: WEEKDAY_LABELS[d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1],
+    num: String(d.getUTCDate()),
     isToday: iso === today,
   };
 }

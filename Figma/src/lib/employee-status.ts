@@ -1,4 +1,11 @@
-import type { EmployeeProfileRow, AttendanceRecordRow, OvertimeRecordRow } from '../types/database.ts';
+import type {
+  EmployeeProfileRow,
+  AttendanceRecordRow,
+  OvertimeRecordRow,
+  ResolvedScheduleRow,
+  ShiftAssignmentRow,
+  ShiftRow,
+} from '../types/database.ts';
 
 export function isEmployeeActiveOnDate(employee: EmployeeProfileRow, date: string): boolean {
   const joiningDate = employee.joining_date || employee.created_at?.slice(0, 10);
@@ -189,4 +196,123 @@ export function getOffDayOvertimeHours(
 
   if (!match || match.compensation_type !== 'overtime') return 0;
   return workedAttendanceHours > 0 ? workedAttendanceHours : scheduledShiftHours;
+}
+
+/**
+ * Determines whether a given work date is an employee's scheduled off-day,
+ * checking resolved schedule first, then dated shift assignment, then recurring/weekly off weekdays.
+ */
+export function isScheduleOffDay(
+  workDate: string,
+  resolvedSchedule?: Pick<ResolvedScheduleRow, 'state'> | null,
+  assignment?: Pick<ShiftAssignmentRow, 'status'> | null,
+  offWeekdays?: number[] | null,
+): boolean {
+  if (resolvedSchedule) {
+    return resolvedSchedule.state === 'off';
+  }
+  if (assignment?.status === 'off') {
+    return true;
+  }
+  if (assignment?.status === 'scheduled') {
+    return false;
+  }
+  if (offWeekdays && offWeekdays.length > 0) {
+    const weekday = new Date(`${workDate}T00:00:00Z`).getUTCDay();
+    return offWeekdays.includes(weekday);
+  }
+  return false;
+}
+
+export type CorrectionDayStatus =
+  | 'present'
+  | 'late'
+  | 'missing_in'
+  | 'missing_out'
+  | 'missed'
+  | 'corrected'
+  | 'off';
+
+export interface ResolvedCorrectionDay {
+  status: CorrectionDayStatus;
+  statusLabel: string;
+  shiftName: string;
+  shiftStart: string | null;
+  shiftEnd: string | null;
+}
+
+/**
+ * Resolves the daily status and shift display for the Attendance Correction module.
+ * Off-days (including recurring weekly offs such as Sunday) resolve to 'off' instead of 'missed',
+ * unless the employee actually worked on that day.
+ */
+export function resolveCorrectionDayStatus(input: {
+  workDate: string;
+  rec: AttendanceRecordRow | null;
+  resolvedSchedule?: ResolvedScheduleRow | null;
+  assignment?: (ShiftAssignmentRow & { shift: ShiftRow | null }) | null;
+  offWeekdays?: number[] | null;
+}): ResolvedCorrectionDay {
+  const { workDate, rec, resolvedSchedule, assignment, offWeekdays } = input;
+  const isOff = isScheduleOffDay(workDate, resolvedSchedule, assignment, offWeekdays);
+
+  const shift = assignment?.shift ?? null;
+  const shiftName =
+    shift?.name ??
+    resolvedSchedule?.shift_name ??
+    (isOff ? 'Employee Week Off' : 'Unassigned');
+  const shiftStart = shift?.start_time ?? resolvedSchedule?.start_time ?? null;
+  const shiftEnd = shift?.end_time ?? resolvedSchedule?.end_time ?? null;
+
+  let status: CorrectionDayStatus = isOff ? 'off' : 'missed';
+  let statusLabel = isOff ? 'Employee Week Off' : 'Missed / Absent';
+
+  if (rec) {
+    if (rec.source === 'manual_manager') {
+      status = 'corrected';
+      statusLabel = 'Manager Corrected';
+    } else if (rec.status === 'present') {
+      status = 'present';
+      statusLabel = 'Correctly Marked';
+    } else if (rec.status === 'late') {
+      status = 'late';
+      statusLabel = 'Late';
+    } else if (isOff) {
+      status = 'off';
+      statusLabel = 'Employee Week Off';
+    } else if (rec.status === 'missing_check_in') {
+      status = 'missing_in';
+      statusLabel = 'Missing Check-In';
+    } else if (rec.status === 'missing_check_out') {
+      status = 'missing_out';
+      statusLabel = 'Missing Check-Out';
+    } else if (rec.status === 'absent') {
+      status = 'missed';
+      statusLabel = 'Missed / Absent';
+    }
+  }
+
+  return { status, statusLabel, shiftName, shiftStart, shiftEnd };
+}
+
+/**
+ * Formats raw schedule_state values into human-readable labels for Dashboard views.
+ */
+export function formatScheduleStateLabel(state: string | null | undefined): string {
+  switch (state) {
+    case 'off':
+      return 'Employee Week Off';
+    case 'leave':
+      return 'On Leave';
+    case 'holiday':
+      return 'Holiday';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'unassigned':
+      return 'Unassigned';
+    case 'working':
+      return 'Scheduled';
+    default:
+      return state || 'Unassigned';
+  }
 }

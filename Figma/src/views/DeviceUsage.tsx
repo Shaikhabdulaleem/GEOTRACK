@@ -7,9 +7,10 @@ import { getSupabaseClient } from '../lib/supabase';
 import { toAppError } from '../lib/errors';
 import Avatar from '../components/Avatar';
 import { deviceService } from '../services/device.service';
-import { employeeService } from '../services/employee.service';
+import { employeeService, isEmployeeActiveOnDate } from '../services/employee.service';
 import { organizationService } from '../services/organization.service';
 import { shiftService } from '../services/shift.service';
+import { todayInTimezone } from '../lib/dates';
 import type { DepartmentRow, ShiftRow } from '../types/database';
 
 const POLICY_LIMIT = 30; // minutes
@@ -61,11 +62,7 @@ interface DeviceUsageEmployee {
 export default function DeviceUsage() {
   const navigate = useNavigate();
   const { activeMembership } = useAuth();
-  const todayStr = useMemo(() => {
-    return new Intl.DateTimeFormat('en-CA', {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(new Date());
-  }, []);
+  const todayStr = useMemo(() => todayInTimezone('Asia/Riyadh'), []);
   const [selectedDate, setSelectedDate] = useState(todayStr);
   const [employees, setEmployees] = useState<DeviceUsageEmployee[]>([]);
   const [departments, setDepartments] = useState<DepartmentRow[]>([]);
@@ -102,10 +99,14 @@ export default function DeviceUsage() {
       const profilesResult = departmentId
         ? allProfiles.filter(profile => profile.department_id === departmentId)
         : allProfiles;
+      const usageByEmployee = new Map(usage.map(row => [row.employee_id, row]));
+      const activeProfiles = profilesResult.filter(
+        p => isEmployeeActiveOnDate(p, selectedDate) || usageByEmployee.has(p.id),
+      );
       const weekly = await deviceService.getWeeklyAverages(
         activeMembership.organization_id,
         selectedDate,
-        departmentId ? profilesResult.map(profile => profile.id) : undefined,
+        departmentId ? activeProfiles.map(profile => profile.id) : undefined,
       );
 
       const devicesByEmployee = new Map<string, typeof devices>();
@@ -116,9 +117,8 @@ export default function DeviceUsage() {
       }
 
       const assignmentByEmployee = new Map(assignments.map(a => [a.employee_id, a]));
-      const usageByEmployee = new Map(usage.map(row => [row.employee_id, row]));
 
-      const mapped = profilesResult.map(p => {
+      const mapped = activeProfiles.map(p => {
         const row = usageByEmployee.get(p.id);
         const empDevices = devicesByEmployee.get(p.id) ?? [];
         const approvedDevice = empDevices.find(d => d.integrity_status === 'valid' && !d.revoked_at);

@@ -105,9 +105,12 @@ export default function Employees() {
   useEffect(() => { void load(); }, [load]); useEffect(() => { setPage(1); }, [search, status, branchId, departmentId]);
   const branchName = useMemo(() => new Map(lookups.branches.map(item => [item.id, item.name])), [lookups.branches]); const departmentName = useMemo(() => new Map(lookups.departments.map(item => [item.id, item.name])), [lookups.departments]); const totalPages = Math.max(1, Math.ceil(count / pageSize));
   const [statusTarget, setStatusTarget] = useState<{ employee: EmployeeProfileRow; nextStatus: EmploymentStatus; effectiveDate: string } | null>(null);
+  const [statusError, setStatusError] = useState('');
+  const [statusSaving, setStatusSaving] = useState(false);
   const saved = (employee: EmployeeProfileRow) => { setEditing(undefined); setSelected(employee); void load(); };
   const startStatusChange = (employee: EmployeeProfileRow, targetStatus?: EmploymentStatus) => {
     const nextStatus: EmploymentStatus = targetStatus || (employee.employment_status === 'active' ? 'inactive' : 'active');
+    setStatusError('');
     setStatusTarget({
       employee,
       nextStatus,
@@ -116,13 +119,17 @@ export default function Employees() {
   };
   const confirmStatusChange = async () => {
     if (!statusTarget) return;
+    setStatusSaving(true);
+    setStatusError('');
     try {
       const updated = await employeeService.setStatus(statusTarget.employee.id, statusTarget.nextStatus, statusTarget.effectiveDate);
       setSelected(updated);
       setStatusTarget(null);
       void load();
     } catch (caught) {
-      setError(getErrorMessage(caught));
+      setStatusError(getErrorMessage(caught));
+    } finally {
+      setStatusSaving(false);
     }
   };
   const provisionLogin = async (employee: EmployeeProfileRow) => { setProvisioning(true); setError(''); try { const result = await authService.provisionEmployeeAccount(employee.id); setCredentials(result); setSelected(null); void load(); } catch (caught) { setError(getErrorMessage(caught)); } finally { setProvisioning(false); } };
@@ -173,17 +180,25 @@ export default function Employees() {
                   : 'From this date onwards, this employee will no longer be counted as active labor in Mailroom productivity.'}
               </div>
             </div>
+            {statusError && (
+              <div className="rounded-xl p-3 flex gap-2 text-xs" style={{ background: 'rgba(239,68,68,0.1)', color: '#fca5a5' }} role="alert">
+                <AlertCircle size={15} />
+                <span>{statusError}</span>
+              </div>
+            )}
           </div>
           <div className="flex justify-end gap-3 mt-6">
-            <button onClick={() => setStatusTarget(null)} className="px-4 py-2 rounded-lg text-xs" style={{ background: '#122338', color: '#94a3b8' }}>Cancel</button>
+            <button onClick={() => setStatusTarget(null)} disabled={statusSaving} className="px-4 py-2 rounded-lg text-xs" style={{ background: '#122338', color: '#94a3b8' }}>Cancel</button>
             <button
               onClick={() => void confirmStatusChange()}
-              className="px-5 py-2 rounded-lg text-xs font-semibold"
+              disabled={statusSaving}
+              className="px-5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 disabled:opacity-60"
               style={{
                 background: statusTarget.nextStatus === 'active' ? '#059669' : '#dc2626',
                 color: '#fff',
               }}
             >
+              {statusSaving && <Loader2 size={13} className="animate-spin" />}
               Confirm status change
             </button>
           </div>

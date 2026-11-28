@@ -29,6 +29,7 @@ import {
 import { attendanceService } from '../services/attendance.service';
 import { shiftService } from '../services/shift.service';
 import { employeeService, isEmployeeActiveOnDate, type EmployeeLookups } from '../services/employee.service';
+import { resolveCorrectionDayStatus, type CorrectionDayStatus } from '../lib/employee-status';
 import { organizationService } from '../services/organization.service';
 import { todayInTimezone } from '../lib/dates';
 import { getErrorMessage } from '../lib/errors';
@@ -96,7 +97,7 @@ export interface TimesheetCorrectionRow {
   shiftStart: string | null;
   shiftEnd: string | null;
   rec: AttendanceRecordRow | null;
-  status: 'present' | 'late' | 'missing_in' | 'missing_out' | 'missed' | 'corrected';
+  status: CorrectionDayStatus;
   statusLabel: string;
   checkInAt: string | null;
   checkOutAt: string | null;
@@ -119,6 +120,8 @@ export default function AttendanceCorrections() {
   const [shiftAssignments, setShiftAssignments] = useState<
     (ShiftAssignmentRow & { shift: ShiftRow | null; employee: EmployeeProfileRow | null })[]
   >([]);
+  const [resolvedScheduleMap, setResolvedScheduleMap] = useState<Record<string, ResolvedScheduleRow>>({});
+  const [offDaysMap, setOffDaysMap] = useState<Record<string, number[]>>({});
   const [employees, setEmployees] = useState<EmployeeProfileRow[]>([]);
   const [departments, setDepartments] = useState<DepartmentRow[]>([]);
   const [lookups, setLookups] = useState<EmployeeLookups>({
@@ -135,7 +138,7 @@ export default function AttendanceCorrections() {
   // Filters
   const [search, setSearch] = useState('');
   const [attendanceFilter, setAttendanceFilter] = useState<
-    'all' | 'present' | 'missed' | 'late' | 'missing' | 'corrected'
+    'all' | 'present' | 'missed' | 'late' | 'missing' | 'corrected' | 'off'
   >('all');
   const [statusFilter, setStatusFilter] = useState<ApprovalStatus | 'all'>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -204,7 +207,7 @@ export default function AttendanceCorrections() {
       const start = fromDate || today;
       const end = toDate || start;
 
-      const [reqList, directList, empList, deptList, lookupData, attRecords, assignments] =
+      const [reqList, directList, empList, deptList, lookupData, attRecords, assignments, offDays] =
         await Promise.all([
           correctionService.list({
             organizationId,
@@ -230,6 +233,7 @@ export default function AttendanceCorrections() {
             from_date: start,
             to_date: end,
           }),
+          shiftService.listAllEmployeeOffDays(organizationId),
         ]);
 
       setRequests(reqList);
@@ -243,12 +247,26 @@ export default function AttendanceCorrections() {
       setLookups(filteredLookups);
       setAttendanceRecords(attRecords);
       setShiftAssignments(assignments);
+      setOffDaysMap(offDays);
+
+      // Resolve effective schedules (including recurring weekly patterns and weekly_offs)
+      const resolvedEntries = await Promise.all(
+        filteredEmps.map(async emp => {
+          try {
+            const rows = await shiftService.resolveSchedule(emp.id, start, end);
+            return rows.map(r => [`${emp.id}_${r.work_date}`, r] as const);
+          } catch {
+            return [] as (readonly [string, ResolvedScheduleRow])[];
+          }
+        }),
+      );
+      setResolvedScheduleMap(Object.fromEntries(resolvedEntries.flat()));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [organizationId, statusFilter, fromDate, toDate]);
+  }, [organizationId, statusFilter, fromDate, toDate, isManager, assignedDepartmentIds]);
 
   useEffect(() => {
     void loadData();
@@ -305,40 +323,15 @@ export default function AttendanceCorrections() {
         const assignment = shiftAssignments.find(
           a => a.employee_id === emp.id && a.work_date === workDate,
         );
+        const resolvedSchedule = resolvedScheduleMap[`${emp.id}_${workDate}`] ?? null;
 
-        const shift = assignment?.shift || null;
-        const shiftName = shift?.name || 'Unassigned';
-        const shiftStart = shift?.start_time || null;
-        const shiftEnd = shift?.end_time || null;
-
-        const isOff = assignment?.status === 'off';
-        let status: TimesheetCorrectionRow['status'] = isOff ? ('off' as any) : 'missed';
-        let statusLabel = isOff ? 'Employee week Off' : 'Missed / Absent';
-
-        if (rec) {
-          if (rec.source === 'manual_manager') {
-            status = 'corrected';
-            statusLabel = 'Manager Corrected';
-          } else if (rec.status === 'present') {
-            status = 'present';
-            statusLabel = 'Correctly Marked';
-          } else if (rec.status === 'late') {
-            status = 'late';
-            statusLabel = 'Late';
-          } else if (isOff) {
-            status = 'off' as any;
-            statusLabel = 'Employee week Off';
-          } else if (rec.status === 'missing_check_in') {
-            status = 'missing_in';
-            statusLabel = 'Missing Check-In';
-          } else if (rec.status === 'missing_check_out') {
-            status = 'missing_out';
-            statusLabel = 'Missing Check-Out';
-          } else if (rec.status === 'absent') {
-            status = 'missed';
-            statusLabel = 'Missed / Absent';
-          }
-        }
+        const { status, statusLabel, shiftName, shiftStart, shiftEnd } = resolveCorrectionDayStatus({
+          workDate,
+          rec,
+          resolvedSchedule,
+          assignment,
+          offWeekdays: offDaysMap[emp.id],
+        });
 
         let source = '—';
         if (rec?.source === 'automatic_geofence') source = 'Auto Geofence';
@@ -368,7 +361,7 @@ export default function AttendanceCorrections() {
     }
 
     return rows;
-  }, [fromDate, toDate, employees, attendanceRecords, shiftAssignments, deptMap, employmentStatus]);
+  }, [fromDate, toDate, employees, attendanceRecords, shiftAssignments, resolvedScheduleMap, offDaysMap, deptMap, employmentStatus]);
 
   // Filter daily timesheet records
   const filteredTimesheetRows = useMemo(() => {
@@ -386,6 +379,7 @@ export default function AttendanceCorrections() {
         )
           return false;
         if (attendanceFilter === 'corrected' && row.status !== 'corrected') return false;
+        if (attendanceFilter === 'off' && row.status !== 'off') return false;
       }
       if (search.trim()) {
         const query = search.trim().toLowerCase();
@@ -847,7 +841,7 @@ export default function AttendanceCorrections() {
               value={attendanceFilter}
               onChange={e =>
                 setAttendanceFilter(
-                  e.target.value as 'all' | 'present' | 'missed' | 'late' | 'missing' | 'corrected',
+                  e.target.value as 'all' | 'present' | 'missed' | 'late' | 'missing' | 'corrected' | 'off',
                 )
               }
               className="w-full px-3 py-2 rounded-lg outline-none"
@@ -859,6 +853,7 @@ export default function AttendanceCorrections() {
               <option value="late">Late Check-In</option>
               <option value="missing">Missing Punches (In/Out)</option>
               <option value="corrected">Manager Corrected</option>
+              <option value="off">Employee Week Off</option>
             </select>
           </div>
         )}
@@ -1124,7 +1119,9 @@ export default function AttendanceCorrections() {
                           <div className="text-[11px] font-mono" style={{ color: '#64748b' }}>
                             {row.shiftStart
                               ? `${row.shiftStart.slice(0, 5)} – ${(row.shiftEnd || '').slice(0, 5)}`
-                              : 'Off / Unassigned'}
+                              : row.status === 'off'
+                                ? 'Scheduled Off'
+                                : 'Off / Unassigned'}
                           </div>
                         </td>
 
@@ -1136,7 +1133,7 @@ export default function AttendanceCorrections() {
                             </span>
                           ) : (
                             <span className="text-amber-400/80 text-[11px]">
-                              {row.status === 'missed' ? '—' : 'Missing In'}
+                              {row.status === 'missed' || row.status === 'off' ? '—' : 'Missing In'}
                             </span>
                           )}
                         </td>
@@ -1149,7 +1146,7 @@ export default function AttendanceCorrections() {
                             </span>
                           ) : (
                             <span className="text-amber-400/80 text-[11px]">
-                              {row.status === 'missed' ? '—' : 'Missing Out'}
+                              {row.status === 'missed' || row.status === 'off' ? '—' : 'Missing Out'}
                             </span>
                           )}
                         </td>
@@ -1204,6 +1201,11 @@ export default function AttendanceCorrections() {
                                 <XCircle size={10} /> Missed / Absent
                               </span>
                             )}
+                            {row.status === 'off' && (
+                              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-500/15 text-slate-300 border border-slate-500/30 flex items-center gap-1">
+                                <Calendar size={10} /> Employee Week Off
+                              </span>
+                            )}
                           </div>
                         </td>
 
@@ -1227,19 +1229,25 @@ export default function AttendanceCorrections() {
                                   ? 'rgba(239,68,68,0.15)'
                                   : row.status === 'corrected'
                                     ? 'rgba(56,189,248,0.15)'
-                                    : 'rgba(59,130,246,0.15)',
+                                    : row.status === 'off'
+                                      ? 'rgba(148,163,184,0.12)'
+                                      : 'rgba(59,130,246,0.15)',
                               color:
                                 row.status === 'missed'
                                   ? '#fca5a5'
                                   : row.status === 'corrected'
                                     ? '#38bdf8'
-                                    : '#93c5fd',
+                                    : row.status === 'off'
+                                      ? '#94a3b8'
+                                      : '#93c5fd',
                               border:
                                 row.status === 'missed'
                                   ? '1px solid rgba(239,68,68,0.3)'
                                   : row.status === 'corrected'
                                     ? '1px solid rgba(56,189,248,0.3)'
-                                    : '1px solid rgba(59,130,246,0.3)',
+                                    : row.status === 'off'
+                                      ? '1px solid rgba(148,163,184,0.25)'
+                                      : '1px solid rgba(59,130,246,0.3)',
                             }}
                             title="Edit or correct this employee attendance"
                           >

@@ -136,7 +136,7 @@ export default function Attendance() {
   useEffect(() => {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabaseReady, organizationId]);
+  }, [supabaseReady, organizationId, isManager, assignedDepartmentIds]);
 
   // Combine data for display
   const departmentNames = useMemo(() => new Map(departments.map(department => [department.id, department.name])), [departments]);
@@ -220,17 +220,23 @@ export default function Attendance() {
     });
   }, [supabaseReady, emps, records, assignments, departmentNames]);
 
+  const toLocalDateTimeInput = (iso: string) => {
+    const parsed = new Date(iso);
+    const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
+    return local.toISOString().slice(0, 16);
+  };
+
   const openCorrection = (emp: (typeof displayData)[number]) => {
     const today = todayInTimezone('Asia/Riyadh');
     const inVal = emp.rawCheckIn
-      ? emp.rawCheckIn.slice(0, 16)
+      ? toLocalDateTimeInput(emp.rawCheckIn)
       : `${today}T${(emp.shiftStart || '09:00').slice(0, 5)}`;
     const isCross = emp.shiftStart && emp.shiftEnd && emp.shiftEnd <= emp.shiftStart;
     const nextDay = new Date(`${today}T00:00:00Z`);
     nextDay.setUTCDate(nextDay.getUTCDate() + 1);
     const outDate = isCross ? nextDay.toISOString().slice(0, 10) : today;
     const outVal = emp.rawCheckOut
-      ? emp.rawCheckOut.slice(0, 16)
+      ? toLocalDateTimeInput(emp.rawCheckOut)
       : `${outDate}T${(emp.shiftEnd || '17:00').slice(0, 5)}`;
 
     setCorrectingIn(inVal);
@@ -314,7 +320,7 @@ export default function Attendance() {
   );
   const pendingCorrectionCount = filteredCorrections.filter(r => r.status === 'pending').length;
 
-  const todayStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const todayStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Riyadh' });
 
   return (
     <div className="space-y-4">
@@ -450,7 +456,7 @@ export default function Attendance() {
                 ))}
                 {filtered.length === 0 && !loading && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-sm" style={{ color: '#4b6a8a' }}>
+                    <td colSpan={9} className="px-4 py-8 text-center text-sm" style={{ color: '#4b6a8a' }}>
                       No attendance records found.
                     </td>
                   </tr>

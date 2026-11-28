@@ -552,8 +552,8 @@ export const dashboardService = {
         .eq('organization_id', organizationId)
         .in('employee_id', ids)
         .not('location_point', 'is', null)
-        .gte('event_at', `${filters.date}T00:00:00`)
-        .lte('event_at', `${filters.date}T23:59:59.999`)
+        .gte('event_at', `${filters.date}T00:00:00+03:00`)
+        .lte('event_at', `${filters.date}T23:59:59.999+03:00`)
         .order('event_at', { ascending: false });
       for (const ev of (events || []) as Array<{ employee_id: string; location_point: { coordinates: [number, number] } | null; inside_geofence: boolean | null; geofence_id: string | null }>) {
         if (latestEventByEmp.has(ev.employee_id)) continue; // desc order → first seen is latest

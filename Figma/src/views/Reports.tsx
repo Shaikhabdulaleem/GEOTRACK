@@ -57,10 +57,11 @@ export default function Reports() {
     const initLookups = async () => {
       const { getSupabaseClient } = await import('../lib/supabase');
       const client = getSupabaseClient();
-      const [br, dep, sh, empData] = await Promise.all([
+      const [br, dep, sh, empLookups, empData] = await Promise.all([
         client.from('branches').select('id, name').eq('organization_id', organizationId),
         client.from('departments').select('id, name').eq('organization_id', organizationId),
         client.from('shifts').select('id, name').eq('organization_id', organizationId),
+        employeeService.getLookups(organizationId).catch(() => null),
         employeeService.listAll({ organizationId })
       ]);
       setBranches(br.data || []);
@@ -72,13 +73,14 @@ export default function Reports() {
       setEmployeeProfiles(emps);
       
       const mgrIds = [...new Set(emps.map(e => e.manager_user_id).filter(Boolean))] as string[];
+      const mgrNameMap = new Map((empLookups?.managers ?? []).map(m => [m.id, m.display_name]));
       setManagers(mgrIds.map(id => {
         const e = emps.find(x => x.user_id === id);
-        return { id, name: e ? e.full_name : `Manager ${id.substring(0,6)}` };
+        return { id, name: mgrNameMap.get(id) || e?.full_name || `Manager ${id.substring(0,6)}` };
       }));
     };
     initLookups();
-  }, [supabaseReady, organizationId]);
+  }, [supabaseReady, organizationId, isManager, assignedDepartmentIds]);
 
   const categories = ['All', ...Array.from(new Set(reports.map(r => r.category)))];
   const filtered = reports.filter(r => catFilter === 'All' || r.category === catFilter);
@@ -187,7 +189,7 @@ export default function Reports() {
         {filtered.map((rep, i) => {
           const catColor = CATEGORY_COLORS[rep.category] ?? '#4b6a8a';
           const excelKey = `${rep.id}|Excel`;
-          const pdfKey = `${rep.id}|PDF`;
+          const csvKey = `${rep.id}|CSV`;
           return (
             <div key={i} className="rounded-xl p-4 transition-all hover:border-blue-800 card-glow" style={{ background: '#0d1b2e', border: '1px solid #1e3a5a' }}>
               <div className="flex items-start justify-between">
@@ -215,13 +217,13 @@ export default function Reports() {
                     {downloading === excelKey ? 'Done' : 'Excel'}
                   </button>
                   <button
-                    onClick={() => handleDownload(rep.id, 'PDF')}
+                    onClick={() => handleDownload(rep.id, 'CSV')}
                     disabled={downloading !== null}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium transition-all hover:opacity-80"
-                    style={{ background: downloading === pdfKey ? 'rgba(239,68,68,0.3)' : 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}
+                    style={{ background: downloading === csvKey ? 'rgba(59,130,246,0.3)' : 'rgba(59,130,246,0.1)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)' }}
                   >
-                    {downloading === pdfKey ? <CheckCircle size={11} /> : downloading !== null ? <Loader2 size={11} className="animate-spin" /> : <FileType size={11} />}
-                    {downloading === pdfKey ? 'Done' : 'PDF'}
+                    {downloading === csvKey ? <CheckCircle size={11} /> : downloading !== null ? <Loader2 size={11} className="animate-spin" /> : <FileType size={11} />}
+                    {downloading === csvKey ? 'Done' : 'CSV'}
                   </button>
                 </div>
               </div>

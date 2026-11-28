@@ -363,6 +363,21 @@ export default function ManagerManagement() {
                               <PlayCircle size={13} />
                             </button>
                           )}
+                          {m.status !== 'removed' && (
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Deactivate manager ${m.full_name} (${m.manager_code})? They will lose access to all departments.`)) {
+                                  void handleStatusChange(m, 'removed');
+                                }
+                              }}
+                              disabled={isBusy}
+                              className="p-1.5 rounded-lg text-xs"
+                              style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}
+                              title="Deactivate manager"
+                            >
+                              <ShieldAlert size={13} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
