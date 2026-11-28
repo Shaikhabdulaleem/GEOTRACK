@@ -96,7 +96,8 @@ jobs:
                    supabase/tests/overtime_review.sql \
                    supabase/tests/mailroom_productivity.sql \
                    supabase/tests/fc_productivity.sql \
-                   supabase/tests/employee_transfers.sql; do
+                   supabase/tests/employee_transfers.sql \
+                   supabase/tests/payroll_operations.sql; do
             echo "::group::$t"
             psql "$DB_URL" -v ON_ERROR_STOP=1 -f "$t"
             echo "::endgroup::"

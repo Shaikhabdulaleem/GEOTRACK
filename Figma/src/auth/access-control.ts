@@ -24,6 +24,10 @@ export type Permission =
   | 'geofences:read:scope'
   | 'leave:manage:scope'
   | 'overtime:manage:scope'
+  | 'payroll:read:scope'
+  | 'payroll:review:scope'
+  | 'payroll:manage'
+  | 'payroll:export'
   | 'organization:manage'
   | 'audit:read';
 
@@ -57,6 +61,8 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly Permission[]>> 
     'geofences:read:scope',
     'leave:manage:scope',
     'overtime:manage:scope',
+    'payroll:read:scope',
+    'payroll:review:scope',
   ],
   administrator: [
     'profile:read:self',
@@ -76,6 +82,10 @@ export const ROLE_PERMISSIONS: Readonly<Record<AppRole, readonly Permission[]>> 
     'geofences:read:scope',
     'leave:manage:scope',
     'overtime:manage:scope',
+    'payroll:read:scope',
+    'payroll:review:scope',
+    'payroll:manage',
+    'payroll:export',
     'organization:manage',
     'audit:read',
   ],

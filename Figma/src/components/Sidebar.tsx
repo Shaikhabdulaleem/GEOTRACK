@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { LayoutDashboard, Users, ArrowLeftRight, UserCheck, CalendarDays, Clock, RotateCcw, TrendingUp, Timer, Smartphone, MapPin, FileText, Bell, Settings, Radio, LogOut, Shield, ShieldCheck, Plane, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Users, ArrowLeftRight, UserCheck, CalendarDays, Clock, RotateCcw, TrendingUp, Timer, Wallet, Smartphone, MapPin, FileText, Bell, Settings, Radio, LogOut, Shield, ShieldCheck, Plane, Menu, X } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import type { ViewId } from '../auth/view-access';
 import type { AppRole } from '../types/database';
@@ -17,6 +17,7 @@ const nav: ReadonlyArray<{ id: ViewId; label: string; icon: typeof LayoutDashboa
   { id: 'leave',     label: 'Leave Requests',  icon: Plane },
   { id: 'productivity',label:'Productivity',   icon: TrendingUp },
   { id: 'overtime',  label: 'Overtime',        icon: Timer },
+  { id: 'payroll',   label: 'Payroll',         icon: Wallet },
   { id: 'device',    label: 'Device Usage',    icon: Smartphone },
   { id: 'device-approvals', label: 'Device Approvals', icon: ShieldCheck },
   { id: 'geofences', label: 'Geofences',       icon: MapPin },

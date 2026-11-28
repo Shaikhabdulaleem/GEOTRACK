@@ -53,6 +53,20 @@ export type MailroomActivityVolumeSource = 'client_mapping' | 'dsp_allocated' | 
 export type MailroomLaborClass = 'dlp' | 'non_dlp';
 export type MailroomEmploymentSource = 'own' | '3pl';
 export type MailroomDailyEntryStatus = 'draft' | 'finalized';
+export type PayrollRunStatus = 'draft' | 'under_review' | 'finalized';
+export type PayrollReviewStatus = 'pending' | 'reviewed';
+export type PayrollComponentKind = 'allowance' | 'deduction';
+export type PayrollLineCategory =
+  | 'base_salary'
+  | 'allowance'
+  | 'overtime'
+  | 'absence_deduction'
+  | 'unpaid_leave_deduction'
+  | 'recurring_deduction'
+  | 'manual_allowance'
+  | 'manual_deduction';
+export type PayrollExceptionType = 'late' | 'early_departure' | 'incomplete_attendance';
+export type PayrollExceptionStatus = 'open' | 'corrected' | 'waived';
 
 export interface GeoJsonPoint {
   type: 'Point';
@@ -887,12 +901,196 @@ export interface AuditLogRow {
   created_at: string;
 }
 
+export interface PayrollSettingsRow {
+  organization_id: string;
+  currency_code: string;
+  month_basis_days: number;
+  daily_hours: number;
+  overtime_multiplier: number;
+  updated_by?: string | null;
+  created_at?: string;
+  updated_at: string | null;
+}
+
+export interface EmployeeCompensationRow {
+  id: string;
+  organization_id: string;
+  employee_id: string;
+  monthly_base_salary: number;
+  currency_code: string;
+  effective_from: string;
+  effective_to: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EmployeePayrollComponentRow {
+  id: string;
+  organization_id: string;
+  employee_id: string;
+  component_kind: PayrollComponentKind;
+  code: string;
+  name: string;
+  amount: number;
+  effective_from: string;
+  effective_to: string | null;
+  is_active: boolean;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PayrollRunRow {
+  id: string;
+  organization_id: string;
+  payroll_month: string;
+  status: PayrollRunStatus;
+  currency_code: string;
+  month_basis_days: number;
+  daily_hours: number;
+  overtime_multiplier: number;
+  organization_timezone: string;
+  employee_count: number;
+  total_gross_pay: number;
+  total_deductions: number;
+  total_net_pay: number;
+  generated_at: string | null;
+  generated_by: string | null;
+  finalized_at: string | null;
+  finalized_by: string | null;
+  reopened_at: string | null;
+  reopened_by: string | null;
+  reopen_reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PayrollEntryRow {
+  id: string;
+  payroll_run_id: string;
+  organization_id: string;
+  employee_id: string;
+  employee_code: string;
+  employee_name: string;
+  branch_id: string | null;
+  branch_name: string;
+  department_id: string | null;
+  department_name: string;
+  job_title: string | null;
+  active_days: number;
+  payable_days: number;
+  scheduled_working_days: number;
+  worked_days: number;
+  absent_days: number;
+  unpaid_leave_days: number;
+  approved_overtime_minutes: number;
+  pending_overtime_minutes: number;
+  pending_overtime_count: number;
+  unresolved_exception_count: number;
+  base_pay: number;
+  allowances_pay: number;
+  overtime_pay: number;
+  manual_additions: number;
+  absence_deduction: number;
+  unpaid_leave_deduction: number;
+  recurring_deductions: number;
+  manual_deductions: number;
+  gross_pay: number;
+  total_deductions: number;
+  net_pay: number;
+  currency_code: string;
+  review_status: PayrollReviewStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  source_fingerprint: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PayrollLineItemRow {
+  id: string;
+  payroll_run_id: string;
+  payroll_entry_id: string;
+  organization_id: string;
+  employee_id: string;
+  category: PayrollLineCategory;
+  direction: 'earning' | 'deduction';
+  code: string;
+  label: string;
+  is_manual: boolean;
+  quantity: number | null;
+  unit: string | null;
+  rate: number | null;
+  amount: number;
+  metadata: Json;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PayrollExceptionRow {
+  id: string;
+  payroll_run_id: string;
+  payroll_entry_id: string;
+  organization_id: string;
+  employee_id: string;
+  work_date: string;
+  exception_type: PayrollExceptionType;
+  minutes: number;
+  attendance_record_id: string | null;
+  status: PayrollExceptionStatus;
+  waive_reason: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  details: Json;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PayrollEntryDetail {
+  entry: PayrollEntryRow;
+  line_items: PayrollLineItemRow[];
+  exceptions: PayrollExceptionRow[];
+}
+
+export interface PayrollExportCsvRow {
+  employee_code: string;
+  employee_name: string;
+  branch_name: string;
+  department_name: string;
+  job_title: string | null;
+  base_pay: number;
+  allowances_pay: number;
+  overtime_hours: number;
+  overtime_pay: number;
+  absence_deduction: number;
+  unpaid_leave_deduction: number;
+  other_adjustments: number;
+  gross_pay: number;
+  total_deductions: number;
+  net_pay: number;
+  currency_code: string;
+  review_status: PayrollReviewStatus;
+}
+
 export interface Database {
   public: {
     Tables: {
       users: TableDefinition<UserRow, 'id' | 'display_name'>;
       organizations: TableDefinition<OrganizationRow, 'name' | 'slug'>;
       roles: TableDefinition<RoleRow, 'code' | 'name'>;
+      payroll_settings: TableDefinition<PayrollSettingsRow, 'organization_id'>;
+      employee_compensations: TableDefinition<EmployeeCompensationRow, 'organization_id' | 'employee_id' | 'monthly_base_salary' | 'effective_from'>;
+      employee_payroll_components: TableDefinition<EmployeePayrollComponentRow, 'organization_id' | 'employee_id' | 'component_kind' | 'code' | 'name' | 'amount' | 'effective_from'>;
+      payroll_runs: TableDefinition<PayrollRunRow, 'organization_id' | 'payroll_month'>;
+      payroll_entries: TableDefinition<PayrollEntryRow, 'payroll_run_id' | 'organization_id' | 'employee_id' | 'employee_code' | 'employee_name' | 'branch_name' | 'department_name'>;
+      payroll_line_items: TableDefinition<PayrollLineItemRow, 'payroll_run_id' | 'payroll_entry_id' | 'organization_id' | 'employee_id' | 'category' | 'direction' | 'code' | 'label' | 'amount'>;
+      payroll_exceptions: TableDefinition<PayrollExceptionRow, 'payroll_run_id' | 'payroll_entry_id' | 'organization_id' | 'employee_id' | 'work_date' | 'exception_type'>;
       organization_memberships: TableDefinition<OrganizationMembershipRow, 'organization_id' | 'user_id' | 'role_code'>;
       manager_scopes: TableDefinition<ManagerScopeRow, 'organization_id' | 'manager_user_id'>;
       manager_profiles: TableDefinition<ManagerProfileRow, 'organization_id' | 'manager_code' | 'full_name'>;
@@ -1486,6 +1684,133 @@ export interface Database {
         };
         Returns: EmployeeTransferRow;
       };
+      get_payroll_settings: {
+        Args: { p_organization_id: string };
+        Returns: PayrollSettingsRow[];
+      };
+      upsert_payroll_settings: {
+        Args: {
+          p_organization_id: string;
+          p_currency_code: string;
+          p_month_basis_days: number;
+          p_daily_hours: number;
+          p_overtime_multiplier: number;
+        };
+        Returns: PayrollSettingsRow;
+      };
+      list_employee_compensations: {
+        Args: { p_organization_id: string; p_employee_id?: string | null };
+        Returns: EmployeeCompensationRow[];
+      };
+      upsert_employee_compensation: {
+        Args: {
+          p_organization_id: string;
+          p_employee_id: string;
+          p_monthly_base_salary: number;
+          p_currency_code: string;
+          p_effective_from: string;
+          p_effective_to?: string | null;
+          p_notes?: string | null;
+          p_id?: string | null;
+        };
+        Returns: EmployeeCompensationRow;
+      };
+      delete_employee_compensation: {
+        Args: { p_organization_id: string; p_id: string };
+        Returns: void;
+      };
+      list_employee_payroll_components: {
+        Args: { p_organization_id: string; p_employee_id?: string | null };
+        Returns: EmployeePayrollComponentRow[];
+      };
+      upsert_employee_payroll_component: {
+        Args: {
+          p_organization_id: string;
+          p_employee_id: string;
+          p_component_kind: PayrollComponentKind;
+          p_code: string;
+          p_name: string;
+          p_amount: number;
+          p_effective_from: string;
+          p_effective_to?: string | null;
+          p_is_active?: boolean;
+          p_notes?: string | null;
+          p_id?: string | null;
+        };
+        Returns: EmployeePayrollComponentRow;
+      };
+      delete_employee_payroll_component: {
+        Args: { p_organization_id: string; p_id: string };
+        Returns: void;
+      };
+      generate_payroll_run: {
+        Args: { p_organization_id: string; p_payroll_month: string };
+        Returns: PayrollRunRow;
+      };
+      list_payroll_runs: {
+        Args: { p_organization_id: string };
+        Returns: PayrollRunRow[];
+      };
+      list_payroll_entries: {
+        Args: {
+          p_organization_id: string;
+          p_payroll_run_id: string;
+          p_search?: string | null;
+          p_branch_id?: string | null;
+          p_department_id?: string | null;
+          p_review_status?: PayrollReviewStatus | null;
+        };
+        Returns: PayrollEntryRow[];
+      };
+      get_payroll_entry_detail: {
+        Args: { p_organization_id: string; p_payroll_entry_id: string };
+        Returns: PayrollEntryDetail;
+      };
+      add_payroll_manual_adjustment: {
+        Args: {
+          p_organization_id: string;
+          p_payroll_entry_id: string;
+          p_direction: 'earning' | 'deduction';
+          p_code: string;
+          p_label: string;
+          p_amount: number;
+          p_notes?: string | null;
+        };
+        Returns: PayrollLineItemRow;
+      };
+      delete_payroll_manual_adjustment: {
+        Args: { p_organization_id: string; p_line_item_id: string };
+        Returns: void;
+      };
+      waive_payroll_exception: {
+        Args: { p_organization_id: string; p_exception_id: string; p_reason: string };
+        Returns: PayrollExceptionRow;
+      };
+      review_payroll_entry: {
+        Args: {
+          p_organization_id: string;
+          p_payroll_entry_id: string;
+          p_review_status: PayrollReviewStatus;
+          p_review_note?: string | null;
+        };
+        Returns: PayrollEntryRow;
+      };
+      submit_payroll_run_for_review: {
+        Args: { p_organization_id: string; p_payroll_run_id: string };
+        Returns: PayrollRunRow;
+      };
+      finalize_payroll_run: {
+        Args: { p_organization_id: string; p_payroll_run_id: string };
+        Returns: PayrollRunRow;
+      };
+      reopen_payroll_run: {
+        Args: { p_organization_id: string; p_payroll_run_id: string; p_reason: string };
+        Returns: PayrollRunRow;
+      };
+      export_payroll_run_rows: {
+        Args: { p_organization_id: string; p_payroll_run_id: string };
+        Returns: PayrollExportCsvRow[];
+      };
     };
     Enums: {
       app_role: AppRole;
@@ -1508,6 +1833,12 @@ export interface Database {
       notification_severity: NotificationSeverity;
       device_platform: DevicePlatform;
       device_integrity_status: DeviceIntegrityStatus;
+      payroll_run_status: PayrollRunStatus;
+      payroll_review_status: PayrollReviewStatus;
+      payroll_component_kind: PayrollComponentKind;
+      payroll_line_category: PayrollLineCategory;
+      payroll_exception_type: PayrollExceptionType;
+      payroll_exception_status: PayrollExceptionStatus;
     };
     CompositeTypes: Record<string, never>;
   };
