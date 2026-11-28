@@ -12,7 +12,7 @@ begin
   foreach v_sig in array array[
     'public.create_employee_with_compensation(uuid,text,text,text,text,uuid,uuid,text,uuid,date,public.employment_status,date,numeric)'::regprocedure,
     'public.get_payroll_settings(uuid)'::regprocedure,
-    'public.upsert_payroll_settings(uuid,text,integer,numeric,numeric)'::regprocedure,
+    'public.upsert_payroll_settings(uuid,text,integer,numeric,numeric,text,numeric)'::regprocedure,
     'public.list_employee_compensations(uuid,uuid)'::regprocedure,
     'public.upsert_employee_compensation(uuid,uuid,numeric,text,date,date,text,uuid)'::regprocedure,
     'public.delete_employee_compensation(uuid,uuid)'::regprocedure,
@@ -59,6 +59,7 @@ declare
   v_emp_hr uuid := 'eeeeeeee-0000-0000-0000-000000000002';
   v_emp_b uuid := 'eeeeeeee-0000-0000-0000-000000000003';
   v_created_employee public.employee_profiles;
+  v_settings record;
   v_run public.payroll_runs;
   v_entry_ops_id uuid;
   v_entry_hr_id uuid;
@@ -114,6 +115,13 @@ begin
   perform set_config('request.jwt.claim.sub', v_admin_uid::text, true);
   set local role authenticated;
 
+  -- Fixed hourly overtime settings must round-trip and snapshot into generated runs.
+  perform public.upsert_payroll_settings(v_org_a, 'SAR', 30, 8, 1.5, 'fixed_hourly', 12);
+  select * into v_settings from public.get_payroll_settings(v_org_a);
+  if v_settings.overtime_rate_mode <> 'fixed_hourly' or v_settings.overtime_hourly_rate <> 12 then
+    raise exception 'Expected fixed hourly overtime settings to round-trip at 12 SAR/hr';
+  end if;
+
   -- Employee onboarding must create exactly one salary record linked to Payroll.
   v_created_employee := public.create_employee_with_compensation(
     v_org_a, 'EMP-NEW-1', '2000000004', 'New Employee', null,
@@ -151,6 +159,9 @@ begin
 
   -- Generate run for Oct 2026
   v_run := public.generate_payroll_run(v_org_a, '2026-10-01');
+  if v_run.overtime_rate_mode <> 'fixed_hourly' or v_run.overtime_hourly_rate <> 12 then
+    raise exception 'Payroll run must snapshot fixed overtime at 12 SAR/hr';
+  end if;
   if v_run.employee_count <> 2 then
     raise exception 'Expected 2 employees in Org A run, got %', v_run.employee_count;
   end if;

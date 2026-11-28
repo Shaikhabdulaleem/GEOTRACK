@@ -56,6 +56,7 @@ begin
 end;
 $$;
 
+revoke all on function public.get_payroll_settings(uuid) from public, anon;
 grant execute on function public.get_payroll_settings(uuid) to authenticated;
 
 drop function if exists public.upsert_payroll_settings(uuid, text, integer, numeric, numeric);
@@ -112,6 +113,7 @@ begin
 end;
 $$;
 
+revoke all on function public.upsert_payroll_settings(uuid, text, integer, numeric, numeric, text, numeric) from public, anon;
 grant execute on function public.upsert_payroll_settings(uuid, text, integer, numeric, numeric, text, numeric) to authenticated;
 
 create or replace function public.generate_payroll_run(
