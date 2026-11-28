@@ -9,7 +9,8 @@ import type { EmployeeProfileRow, EmploymentStatus } from '../types/database';
 
 const inputStyle = { background: '#0d1b2e', border: '1px solid #1e3a5a', color: '#f0f6ff', borderRadius: 8, padding: '8px 12px', width: '100%', fontSize: 13, outline: 'none' } as const;
 const statuses: Array<EmploymentStatus | ''> = ['', 'active', 'inactive', 'on_leave', 'terminated'];
-const emptyForm: EmployeeCreateInput = { organization_id: '', employee_code: '', iqama_number: '', full_name: '', mobile_number: '', branch_id: '', department_id: '', job_title: '', manager_user_id: null, joining_date: '', employment_status: 'active', status_effective_date: '' };
+const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Riyadh' });
+const emptyForm: EmployeeCreateInput = { organization_id: '', employee_code: '', iqama_number: '', full_name: '', mobile_number: '', branch_id: '', department_id: '', job_title: '', manager_user_id: null, joining_date: today, employment_status: 'active', status_effective_date: today };
 const WEEKDAYS = [
   { value: 1, label: 'Monday' }, { value: 2, label: 'Tuesday' }, { value: 3, label: 'Wednesday' },
   { value: 4, label: 'Thursday' }, { value: 5, label: 'Friday' }, { value: 6, label: 'Saturday' },
@@ -22,9 +23,9 @@ function Select({ value, onChange, children }: { value: string; onChange: (value
 function Status({ status }: { status: EmploymentStatus }) { const color = status === 'active' ? '#10b981' : status === 'on_leave' ? '#f59e0b' : '#94a3b8'; return <span className="text-xs px-2 py-1 rounded-lg capitalize" style={{ color, background: `${color}18` }}>{status.replace(/_/g, ' ')}</span>; }
 
 function EmployeeModal({ employee, lookups, organizationId, onClose, onSaved }: { employee: EmployeeProfileRow | null; lookups: EmployeeLookups; organizationId: string; onClose: () => void; onSaved: (employee: EmployeeProfileRow) => void }) {
-  const [form, setForm] = useState<EmployeeCreateInput>(() => employee ? { organization_id: employee.organization_id, employee_code: employee.employee_code, iqama_number: employee.iqama_number, full_name: employee.full_name, mobile_number: employee.mobile_number, branch_id: employee.branch_id, department_id: employee.department_id, job_title: employee.job_title, manager_user_id: employee.manager_user_id, joining_date: employee.joining_date, employment_status: employee.employment_status, status_effective_date: employee.status_effective_date || employee.joining_date || '' } : { ...emptyForm, organization_id: organizationId, status_effective_date: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState<EmployeeCreateInput>(() => employee ? { organization_id: employee.organization_id, employee_code: employee.employee_code, iqama_number: employee.iqama_number, full_name: employee.full_name, mobile_number: employee.mobile_number, branch_id: employee.branch_id, department_id: employee.department_id, job_title: employee.job_title, manager_user_id: employee.manager_user_id, joining_date: employee.joining_date, employment_status: employee.employment_status, status_effective_date: employee.status_effective_date || employee.joining_date || '' } : { ...emptyForm, organization_id: organizationId });
   const [schedule, setSchedule] = useState<Record<number, string>>(() => Object.fromEntries(WEEKDAYS.map(day => [day.value, 'OFF'])));
-  const [effectiveFrom, setEffectiveFrom] = useState(employee?.joining_date || new Date().toISOString().slice(0, 10));
+  const [effectiveFrom, setEffectiveFrom] = useState(employee?.joining_date || today);
   const [effectiveTo, setEffectiveTo] = useState('');
   const [saving, setSaving] = useState(false); const [error, setError] = useState('');
   useEffect(() => {
@@ -36,9 +37,10 @@ function EmployeeModal({ employee, lookups, organizationId, onClose, onSaved }: 
       setSchedule(Object.fromEntries(current.rules.map(rule => [rule.weekday, rule.is_off ? 'OFF' : rule.shift_id ?? 'OFF'])));
     }).catch(caught => setError(getErrorMessage(caught)));
   }, [employee]);
-  const update = (key: keyof EmployeeCreateInput, value: string | null) => setForm(current => ({ ...current, [key]: value }));
+  const update = (key: keyof EmployeeCreateInput, value: string | number | null) => setForm(current => ({ ...current, [key]: value }));
   const save = async () => {
-    if (!form.full_name.trim() || !form.employee_code.trim() || !form.iqama_number.trim() || !form.branch_id || !form.department_id) { setError('Name, employee ID, Iqama, site, and department are required.'); return; }
+    if (!form.full_name.trim() || !form.employee_code.trim() || !form.iqama_number.trim() || !form.branch_id || !form.department_id || !form.joining_date) { setError('Name, employee ID, Iqama, site, department, and joining date are required.'); return; }
+    if (!employee && (!Number.isFinite(form.monthly_base_salary) || Number(form.monthly_base_salary) <= 0)) { setError('Enter a monthly base salary greater than zero.'); return; }
     if (!/^\d{10}$/.test(form.iqama_number)) { setError('Iqama number must contain 10 digits.'); return; }
     setSaving(true); setError('');
     try {
@@ -60,6 +62,7 @@ function EmployeeModal({ employee, lookups, organizationId, onClose, onSaved }: 
       {field('Manager', <Select value={form.manager_user_id ?? ''} onChange={value => update('manager_user_id', value || null)}><option value="">No manager</option>{lookups.managers.map(item => <option key={item.id} value={item.id}>{item.display_name}</option>)}</Select>)}
       {field('Job title', <input style={inputStyle} value={form.job_title ?? ''} onChange={event => update('job_title', event.target.value)} />)}
       {field('Joining date', <input type="date" style={inputStyle} value={form.joining_date ?? ''} onChange={event => update('joining_date', event.target.value)} />)}
+      {!employee && field('Monthly base salary (SAR)', <div><input type="number" min="0.01" step="0.01" style={inputStyle} value={form.monthly_base_salary ?? ''} onChange={event => update('monthly_base_salary', event.target.value === '' ? null : Number(event.target.value))} /><div className="mt-1" style={{ color: '#4b6a8a' }}>Saved to Payroll from the joining date. Future salary changes remain effective-dated in Payroll.</div></div>)}
       {field('Employment status', <Select value={form.employment_status ?? 'active'} onChange={value => update('employment_status', value)}>{statuses.filter(Boolean).map(item => <option key={item} value={item}>{item.replace(/_/g, ' ')}</option>)}</Select>)}
       <div className="col-span-2">
         {field('Status effective from (active / inactive date)', <input type="date" style={inputStyle} value={form.status_effective_date ?? ''} onChange={event => update('status_effective_date', event.target.value)} />)}

@@ -1201,6 +1201,24 @@ export interface Database {
     };
     Views: Record<string, never>;
     Functions: {
+      create_employee_with_compensation: {
+        Args: {
+          p_organization_id: string;
+          p_employee_code: string;
+          p_iqama_number: string;
+          p_full_name: string;
+          p_mobile_number: string | null;
+          p_branch_id: string;
+          p_department_id: string;
+          p_job_title: string | null;
+          p_manager_user_id: string | null;
+          p_joining_date: string;
+          p_employment_status: EmploymentStatus;
+          p_status_effective_date: string;
+          p_monthly_base_salary: number;
+        };
+        Returns: EmployeeProfileRow;
+      };
       request_employee_invitation: {
         Args: { p_employee_id: string; p_email: string };
         Returns: { id: string; organization_id: string; employee_id: string; invited_by: string; invited_at: string; requested_email: string | null; auth_user_id: string | null; status: string; accepted_at: string | null; revoked_at: string | null };

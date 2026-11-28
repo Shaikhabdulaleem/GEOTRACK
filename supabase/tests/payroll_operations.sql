@@ -10,6 +10,7 @@ declare
   v_sig regprocedure;
 begin
   foreach v_sig in array array[
+    'public.create_employee_with_compensation(uuid,text,text,text,text,uuid,uuid,text,uuid,date,public.employment_status,date,numeric)'::regprocedure,
     'public.get_payroll_settings(uuid)'::regprocedure,
     'public.upsert_payroll_settings(uuid,text,integer,numeric,numeric)'::regprocedure,
     'public.list_employee_compensations(uuid,uuid)'::regprocedure,
@@ -57,6 +58,7 @@ declare
   v_emp_ops uuid := 'eeeeeeee-0000-0000-0000-000000000001';
   v_emp_hr uuid := 'eeeeeeee-0000-0000-0000-000000000002';
   v_emp_b uuid := 'eeeeeeee-0000-0000-0000-000000000003';
+  v_created_employee public.employee_profiles;
   v_run public.payroll_runs;
   v_entry_ops_id uuid;
   v_entry_hr_id uuid;
@@ -111,6 +113,23 @@ begin
   -- Act as Administrator of Org A
   perform set_config('request.jwt.claim.sub', v_admin_uid::text, true);
   set local role authenticated;
+
+  -- Employee onboarding must create exactly one salary record linked to Payroll.
+  v_created_employee := public.create_employee_with_compensation(
+    v_org_a, 'EMP-NEW-1', '2000000004', 'New Employee', null,
+    v_branch_a, v_dept_ops, 'Coordinator', v_mgr_uid, '2026-11-01',
+    'active', '2026-11-01', 7200
+  );
+  select count(*) into v_count
+  from public.employee_compensations
+  where organization_id = v_org_a
+    and employee_id = v_created_employee.id
+    and monthly_base_salary = 7200
+    and currency_code = 'SAR'
+    and effective_from = '2026-11-01';
+  if v_count <> 1 then
+    raise exception 'Employee onboarding must create one linked initial salary, got %', v_count;
+  end if;
 
   -- Overlapping compensation rejection
   perform public.upsert_employee_compensation(v_org_a, v_emp_ops, 6000, 'SAR', '2026-10-01', '2026-10-15', 'Initial', null);

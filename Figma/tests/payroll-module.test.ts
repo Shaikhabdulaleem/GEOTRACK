@@ -298,10 +298,22 @@ test('Migration, SQL tests, and UI integration wire payroll security and feature
   assert.match(migration, /payroll_run_reopened/);
   assert.match(migration, /revoke all on function .* from public, anon/);
 
+  const onboardingMigration = readFileSync('../supabase/migrations/20261128125547_create_employee_with_compensation.sql', 'utf8');
+  assert.match(onboardingMigration, /create_employee_with_compensation/);
+  assert.match(onboardingMigration, /insert into public\.employee_profiles/);
+  assert.match(onboardingMigration, /insert into public\.employee_compensations/);
+  assert.match(onboardingMigration, /grant execute on function public\.create_employee_with_compensation/);
+
   const sqlTests = readFileSync('../supabase/tests/payroll_operations.sql', 'utf8');
   assert.match(sqlTests, /Overlapping compensation period/);
   assert.match(sqlTests, /Cross-organization payroll generation/);
   assert.match(sqlTests, /Finalized payroll entry must be immutable/);
+  assert.match(sqlTests, /Employee onboarding must create one linked initial salary/);
+
+  const employeeService = readFileSync('src/services/employee.service.ts', 'utf8');
+  assert.match(employeeService, /rpc\('create_employee_with_compensation'/);
+  const employeesView = readFileSync('src/views/Employees.tsx', 'utf8');
+  assert.match(employeesView, /Monthly base salary \(SAR\)/);
 
   const sidebar = readFileSync('src/components/Sidebar.tsx', 'utf8');
   assert.match(sidebar, /id:\s*'payroll'/);

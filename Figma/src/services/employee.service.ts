@@ -34,6 +34,7 @@ export interface EmployeeCreateInput {
   joining_date?: string | null;
   employment_status?: EmploymentStatus;
   status_effective_date?: string | null;
+  monthly_base_salary?: number;
 }
 
 export const employeeService = {
@@ -104,34 +105,29 @@ export const employeeService = {
 
   async create(input: EmployeeCreateInput): Promise<EmployeeProfileRow> {
     const normalized = validateEmployeeInput(input);
-    const client = getSupabaseClient();
-    try {
-      const row = await executeQuery<EmployeeProfileRow>(
-        client.from('employee_profiles').insert(normalized as TablesInsert<'employee_profiles'>).select('*').single(),
-        'Unable to create the employee.',
-      );
-      if (typeof window !== 'undefined' && normalized.status_effective_date) {
-        localStorage.setItem(`emp_status_date_${row.id}`, normalized.status_effective_date);
-        row.status_effective_date = normalized.status_effective_date;
-      }
-      return row;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('status_effective_date') || msg.includes('schema cache')) {
-        const stripped = { ...normalized };
-        delete (stripped as any).status_effective_date;
-        const row = await executeQuery<EmployeeProfileRow>(
-          client.from('employee_profiles').insert(stripped as TablesInsert<'employee_profiles'>).select('*').single(),
-          'Unable to create the employee.',
-        );
-        if (typeof window !== 'undefined' && normalized.status_effective_date) {
-          localStorage.setItem(`emp_status_date_${row.id}`, normalized.status_effective_date);
-          row.status_effective_date = normalized.status_effective_date;
-        }
-        return row;
-      }
-      throw err;
+    const row = await executeQuery<EmployeeProfileRow>(
+      getSupabaseClient().rpc('create_employee_with_compensation', {
+        p_organization_id: normalized.organization_id,
+        p_employee_code: normalized.employee_code,
+        p_iqama_number: normalized.iqama_number,
+        p_full_name: normalized.full_name,
+        p_mobile_number: normalized.mobile_number ?? null,
+        p_branch_id: normalized.branch_id,
+        p_department_id: normalized.department_id,
+        p_job_title: normalized.job_title ?? null,
+        p_manager_user_id: normalized.manager_user_id ?? null,
+        p_joining_date: normalized.joining_date!,
+        p_employment_status: normalized.employment_status ?? 'active',
+        p_status_effective_date: normalized.status_effective_date ?? normalized.joining_date!,
+        p_monthly_base_salary: normalized.monthly_base_salary!,
+      }),
+      'Unable to create the employee and initial salary.',
+    );
+    if (typeof window !== 'undefined' && normalized.status_effective_date) {
+      localStorage.setItem(`emp_status_date_${row.id}`, normalized.status_effective_date);
+      row.status_effective_date = normalized.status_effective_date;
     }
+    return row;
   },
 
   async update(employeeId: string, input: TablesUpdate<'employee_profiles'>): Promise<EmployeeProfileRow> {
@@ -227,6 +223,12 @@ function validateEmployeeInput(input: EmployeeCreateInput): EmployeeCreateInput 
   }
   if (!input.branch_id || !input.department_id) {
     throw new AppError('VALIDATION_ERROR', 'Site and department are required.');
+  }
+  if (!input.joining_date) {
+    throw new AppError('VALIDATION_ERROR', 'Joining date is required so Payroll can apply the salary correctly.');
+  }
+  if (!Number.isFinite(input.monthly_base_salary) || Number(input.monthly_base_salary) <= 0) {
+    throw new AppError('VALIDATION_ERROR', 'Monthly base salary must be greater than zero.');
   }
   if (mobile && !/^\+?[0-9 ()-]{7,20}$/.test(mobile)) {
     throw new AppError('VALIDATION_ERROR', 'Enter a valid mobile number.');
