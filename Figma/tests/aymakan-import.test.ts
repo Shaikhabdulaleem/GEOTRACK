@@ -306,3 +306,41 @@ test('detects Day and Night shift handovers including overnight Night shifts', (
     ],
   );
 });
+
+test('attributes overtime handovers in inter-shift gaps (e.g. 6-7 AM) to the preceding shift', () => {
+  const windows = buildShiftTimeWindows([
+    { name: 'Day Shift', start_time: '08:00', end_time: '17:00', crosses_midnight: false, status: 'active' },
+    { name: 'Night Shift', start_time: '21:00', end_time: '05:00', crosses_midnight: true, status: 'active' },
+  ]);
+
+  assert.deepEqual(
+    detectShipmentShift(Date.UTC(2026, 10, 25, 6, 15, 0), windows),
+    { shiftType: 'night', shiftWorkDate: '2026-11-24' },
+  );
+  assert.deepEqual(
+    detectShipmentShift(Date.UTC(2026, 10, 25, 7, 45, 0), windows),
+    { shiftType: 'night', shiftWorkDate: '2026-11-24' },
+  );
+  assert.deepEqual(
+    detectShipmentShift(Date.UTC(2026, 10, 24, 18, 30, 0), windows),
+    { shiftType: 'day', shiftWorkDate: '2026-11-24' },
+  );
+
+  const csv = [
+    'Tracking,Customer,Receiving Date,Validation Date,LMD Handed Over At,Destination WH,Status,3PL Provider',
+    'OT-1,Barq,2026-11-24 22:00:00,,2026-11-25 06:30:00,RUH,Delivered,',
+    'OT-2,Elm - Express,2026-11-24 23:00:00,,2026-11-25 07:15:00,JED,Delivered,',
+    'OT-3,Barq,2026-11-24 10:00:00,,2026-11-24 18:45:00,DMM,Delivered,',
+  ].join('\n');
+  const snapshot = parseAymakanCsv(csv);
+  const metrics = aggregateAymakanTurnaroundMetrics(snapshot, clients, '2026-11-24', windows);
+
+  assert.deepEqual(
+    metrics.map(row => [row.client_id, row.warehouse_code, row.shift_type, row.shipment_count]),
+    [
+      ['barq', 'RUH', 'night', 1],
+      ['elm', 'JED', 'night', 1],
+      ['barq', 'DMM', 'day', 1],
+    ],
+  );
+});

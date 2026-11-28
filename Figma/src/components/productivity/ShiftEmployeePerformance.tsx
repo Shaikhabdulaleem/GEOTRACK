@@ -215,7 +215,10 @@ export default function ShiftEmployeePerformance({ workspace, fromDate, toDate }
     });
 
     const destinationRows = [...destMap.values()];
-    const hasLegacyOnly = totalShipments > 0 && day.shipments === 0 && night.shipments === 0;
+    const hasLegacyOnly = periodMetrics.some(r => r.shift_type === 'all') && day.shipments === 0 && night.shipments === 0;
+    const unassignedShipments = periodMetrics
+      .filter(r => r.shift_type === 'unassigned')
+      .reduce((sum, r) => sum + Number(r.shipment_count), 0);
 
     return {
       day,
@@ -227,6 +230,7 @@ export default function ShiftEmployeePerformance({ workspace, fromDate, toDate }
       overallAvgMinutes,
       destinationRows,
       hasLegacyOnly,
+      unassignedShipments,
     };
   }, [periodMetrics, shiftFilter, warehouseFilter, shiftCapacity]);
 
@@ -377,6 +381,12 @@ export default function ShiftEmployeePerformance({ workspace, fromDate, toDate }
       {shiftStats.hasLegacyOnly && (
         <div className="rounded-xl p-3 text-xs" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)', color: '#fcd34d' }}>
           Existing turnaround records for this period were imported before Day/Night shift & Makanex bucketing was enabled. Re-import the Aymakan CSV in Daily Entry to populate the updated shift & destination splits.
+        </div>
+      )}
+
+      {!shiftStats.hasLegacyOnly && shiftStats.unassignedShipments > 0 && (
+        <div className="rounded-xl p-3 text-xs" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)', color: '#fcd34d' }}>
+          {formatNumber(shiftStats.unassignedShipments)} turnaround shipments in this period were saved without a Day/Night shift assignment (for example, overtime handovers outside scheduled shift hours). Re-import the Aymakan CSV in Daily Entry to attribute them to Day or Night shift.
         </div>
       )}
 

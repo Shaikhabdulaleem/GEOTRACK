@@ -490,6 +490,25 @@ export function detectShipmentShift(
     }
   }
 
+  // Handover outside scheduled shift hours (e.g. Night shift overtime at 6–7 AM
+  // before Day shift starts, or Day shift overtime before Night shift starts):
+  // attribute to the most recently ended shift.
+  let bestWindow: ShiftTimeWindow | null = null;
+  let smallestElapsedAfterEnd = Infinity;
+  for (const w of activeWindows) {
+    const elapsed = (minutesOfDay - w.endMinutes + 1440) % 1440;
+    if (elapsed < smallestElapsedAfterEnd) {
+      smallestElapsedAfterEnd = elapsed;
+      bestWindow = w;
+    }
+  }
+  if (bestWindow) {
+    const shiftWorkDate = bestWindow.crossesMidnight && minutesOfDay < bestWindow.startMinutes
+      ? new Date(timestampMs - 86_400_000).toISOString().slice(0, 10)
+      : calendarDate;
+    return { shiftType: bestWindow.shiftType, shiftWorkDate };
+  }
+
   return { shiftType: 'unassigned', shiftWorkDate: calendarDate };
 }
 
