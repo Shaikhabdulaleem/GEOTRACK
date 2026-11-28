@@ -299,18 +299,15 @@ export const geofenceService = {
       .update({ status: 'archived' } as TablesUpdate<'geofences'>)
       .eq('id', geofenceId);
     if (error) throw error;
-    // End any active assignments so clients stop resolving/monitoring an
-    // archived geofence. Dated yesterday so same-day lookups (effective_to >=
-    // today) exclude it immediately, not just from tomorrow.
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const endedOn = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    // Remove the geofence's assignments so clients stop resolving/monitoring it.
+    // Soft-expiring can't end a same-day assignment: effective_to must be >=
+    // effective_from (check constraint), so a past date is rejected and today's
+    // date still resolves (effective_to >= today). Deleting the link is clean —
+    // the archived geofence row and its history are untouched.
     const { error: assignError } = await client
       .from('geofence_assignments')
-      .update({ effective_to: endedOn } as TablesUpdate<'geofence_assignments'>)
-      .eq('geofence_id', geofenceId)
-      .is('effective_to', null);
+      .delete()
+      .eq('geofence_id', geofenceId);
     if (assignError) throw assignError;
   },
 
