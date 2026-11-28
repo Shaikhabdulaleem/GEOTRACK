@@ -304,7 +304,7 @@ test('Migration, SQL tests, and UI integration wire payroll security and feature
   assert.match(onboardingMigration, /insert into public\.employee_compensations/);
   assert.match(onboardingMigration, /grant execute on function public\.create_employee_with_compensation/);
 
-  const fixedOtMigration = readFileSync('../supabase/migrations/20261128133554_payroll_fixed_ot_rate.sql', 'utf8');
+  const fixedOtMigration = readFileSync('../supabase/migrations/20261128143500_payroll_fixed_ot_rate.sql', 'utf8');
   assert.match(fixedOtMigration, /overtime_rate_mode/);
   assert.match(fixedOtMigration, /fixed_hourly/);
   assert.match(fixedOtMigration, /revoke all on function public\.get_payroll_settings\(uuid\) from public, anon/);
