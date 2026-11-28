@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowRight,
   CheckCircle2,
+  Clock,
   Download,
   FileSpreadsheet,
+  LayoutDashboard,
   Loader2,
   Lock,
   Plus,
@@ -12,11 +15,22 @@ import {
   Search,
   Settings2,
   ShieldAlert,
+  Timer,
   Trash2,
   Users,
   Wallet,
   X,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { useAuth } from '../auth/AuthContext';
 import { getErrorMessage } from '../lib/errors';
 import {
@@ -44,7 +58,7 @@ import type {
   PayrollSettingsRow,
 } from '../types/database';
 
-type Tab = 'register' | 'compensation' | 'settings';
+type Tab = 'dashboard' | 'register' | 'blockers' | 'compensation' | 'settings';
 
 const inputStyle = {
   width: '100%',
@@ -67,14 +81,14 @@ function currentMonthValue(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export default function Payroll() {
+export default function Payroll({ onNav }: { onNav?: (id: string) => void } = {}) {
   const { activeMembership, hasPermission } = useAuth();
   const orgId = activeMembership?.organization_id;
   const canManage = hasPermission('payroll:manage');
   const canExport = hasPermission('payroll:export');
   const canReview = hasPermission('payroll:review:scope');
 
-  const [tab, setTab] = useState<Tab>('register');
+  const [tab, setTab] = useState<Tab>('dashboard');
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthValue);
   const [runs, setRuns] = useState<PayrollRunRow[]>([]);
   const [entries, setEntries] = useState<PayrollEntryRow[]>([]);
@@ -280,12 +294,35 @@ export default function Payroll() {
   };
 
   const scopedSummary = useMemo(() => {
+    const base = entries.reduce((s, e) => s + Number(e.base_pay), 0);
+    const allowances = entries.reduce((s, e) => s + Number(e.allowances_pay) + Number(e.manual_additions), 0);
+    const salaryPaid = base + allowances;
+    const otPaid = entries.reduce((s, e) => s + Number(e.overtime_pay), 0);
+    const otMinutes = entries.reduce((s, e) => s + Number(e.approved_overtime_minutes ?? 0), 0);
+    const pendingOtMinutes = entries.reduce((s, e) => s + Number(e.pending_overtime_minutes ?? 0), 0);
     const gross = entries.reduce((s, e) => s + Number(e.gross_pay), 0);
     const ded = entries.reduce((s, e) => s + Number(e.total_deductions), 0);
     const net = entries.reduce((s, e) => s + Number(e.net_pay), 0);
     const pendingReviews = entries.filter(e => e.review_status !== 'reviewed').length;
-    const blockers = entries.reduce((s, e) => s + e.unresolved_exception_count + e.pending_overtime_count, 0);
-    return { count: entries.length, gross, ded, net, pendingReviews, blockers };
+    const unresolvedExceptions = entries.reduce((s, e) => s + e.unresolved_exception_count, 0);
+    const pendingOvertime = entries.reduce((s, e) => s + e.pending_overtime_count, 0);
+    const blockers = unresolvedExceptions + pendingOvertime;
+    return {
+      count: entries.length,
+      base,
+      allowances,
+      salaryPaid,
+      otPaid,
+      otHours: otMinutes / 60,
+      pendingOtHours: pendingOtMinutes / 60,
+      gross,
+      ded,
+      net,
+      pendingReviews,
+      unresolvedExceptions,
+      pendingOvertime,
+      blockers,
+    };
   }, [entries]);
 
   const finalizeCheck = useMemo(() => canFinalizePayrollRun(entries), [entries]);
@@ -404,10 +441,14 @@ export default function Payroll() {
             )}
           </div>
           {activeRun.status !== 'finalized' && !finalizeCheck.allowed && finalizeCheck.reason && (
-            <span className="text-amber-300 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setTab('blockers')}
+              className="text-amber-300 flex items-center gap-1 hover:underline text-left"
+            >
               <ShieldAlert size={13} />
               {finalizeCheck.reason}
-            </span>
+            </button>
           )}
         </div>
       )}
@@ -422,13 +463,17 @@ export default function Payroll() {
           value={`${scopedSummary.pendingReviews} / ${scopedSummary.blockers}`}
           icon={<ShieldAlert size={15} />}
           accent={scopedSummary.pendingReviews + scopedSummary.blockers > 0 ? '#fbbf24' : '#34d399'}
+          onClick={() => setTab('blockers')}
+          hint="View blockers"
         />
       </div>
 
       <div className="flex flex-wrap gap-2">
         {(
           [
+            ['dashboard', 'Dashboard', LayoutDashboard],
             ['register', 'Employee Register', FileSpreadsheet],
+            ['blockers', `Pending / Blockers (${scopedSummary.pendingReviews + scopedSummary.blockers})`, ShieldAlert],
             ['compensation', 'Compensation & Components', Wallet],
             ...(canManage ? [['settings', 'Payroll Settings', Settings2] as const] : []),
           ] as const
@@ -454,6 +499,33 @@ export default function Payroll() {
         <div className="p-16 text-center">
           <Loader2 className="mx-auto animate-spin" style={{ color: '#3b82f6' }} />
         </div>
+      ) : tab === 'dashboard' ? (
+        <PayrollDashboardPanel
+          activeRun={activeRun}
+          selectedMonth={selectedMonth}
+          entries={entries}
+          summary={scopedSummary}
+          currency={currency}
+          branches={branches}
+          departments={departments}
+          branchFilter={branchFilter}
+          deptFilter={deptFilter}
+          onBranchChange={setBranchFilter}
+          onDeptChange={setDeptFilter}
+          canManage={canManage}
+          onOpenBlockers={() => setTab('blockers')}
+          onOpenRegister={() => setTab('register')}
+          onOpenEntry={id => void openEntryDetail(id)}
+        />
+      ) : tab === 'blockers' ? (
+        <PendingBlockersPanel
+          activeRun={activeRun}
+          selectedMonth={selectedMonth}
+          entries={entries}
+          summary={scopedSummary}
+          onOpenEntry={id => void openEntryDetail(id)}
+          onNav={onNav}
+        />
       ) : tab === 'register' ? (
         <div className="rounded-xl overflow-hidden" style={cardStyle}>
           <div className="p-4 flex flex-wrap items-center gap-3 border-b" style={{ borderColor: '#1e3a5a' }}>
@@ -640,7 +712,45 @@ export default function Payroll() {
   );
 }
 
-function SummaryCard({ label, value, icon, accent }: { label: string; value: string; icon: React.ReactNode; accent?: string }) {
+function SummaryCard({
+  label,
+  value,
+  icon,
+  accent,
+  onClick,
+  hint,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+  accent?: string;
+  onClick?: () => void;
+  hint?: string;
+}) {
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="rounded-xl p-4 text-left transition-colors hover:border-amber-400/50 hover:bg-[#122338] cursor-pointer group"
+        style={cardStyle}
+      >
+        <div className="flex items-center justify-between text-xs" style={{ color: '#4b6a8a' }}>
+          <span>{label}</span>
+          {icon}
+        </div>
+        <div className="flex items-baseline justify-between gap-2 mt-1.5">
+          <div className="text-lg font-bold" style={{ color: accent ?? '#f0f6ff' }}>{value}</div>
+          {hint && (
+            <span className="text-[11px] flex items-center gap-1 text-amber-300/80 group-hover:text-amber-300">
+              {hint}
+              <ArrowRight size={11} />
+            </span>
+          )}
+        </div>
+      </button>
+    );
+  }
   return (
     <div className="rounded-xl p-4" style={cardStyle}>
       <div className="flex items-center justify-between text-xs" style={{ color: '#4b6a8a' }}>
@@ -648,6 +758,528 @@ function SummaryCard({ label, value, icon, accent }: { label: string; value: str
         {icon}
       </div>
       <div className="text-lg font-bold mt-1.5" style={{ color: accent ?? '#f0f6ff' }}>{value}</div>
+    </div>
+  );
+}
+
+interface ScopedPayrollSummary {
+  count: number;
+  base: number;
+  allowances: number;
+  salaryPaid: number;
+  otPaid: number;
+  otHours: number;
+  pendingOtHours: number;
+  gross: number;
+  ded: number;
+  net: number;
+  pendingReviews: number;
+  unresolvedExceptions: number;
+  pendingOvertime: number;
+  blockers: number;
+}
+
+function PayrollDashboardPanel({
+  activeRun,
+  selectedMonth,
+  entries,
+  summary,
+  currency,
+  branches,
+  departments,
+  branchFilter,
+  deptFilter,
+  onBranchChange,
+  onDeptChange,
+  canManage,
+  onOpenBlockers,
+  onOpenRegister,
+  onOpenEntry,
+}: {
+  activeRun: PayrollRunRow | null;
+  selectedMonth: string;
+  entries: PayrollEntryRow[];
+  summary: ScopedPayrollSummary;
+  currency: string;
+  branches: BranchRow[];
+  departments: DepartmentRow[];
+  branchFilter: string;
+  deptFilter: string;
+  onBranchChange: (value: string) => void;
+  onDeptChange: (value: string) => void;
+  canManage: boolean;
+  onOpenBlockers: () => void;
+  onOpenRegister: () => void;
+  onOpenEntry: (entryId: string) => void;
+}) {
+  const departmentBreakdown = useMemo(() => {
+    const map = new Map<string, { name: string; count: number; salaryPaid: number; otPaid: number; otHours: number; deductions: number; netPay: number }>();
+    for (const entry of entries) {
+      const key = entry.department_name || 'Unassigned';
+      const cur = map.get(key) ?? { name: key, count: 0, salaryPaid: 0, otPaid: 0, otHours: 0, deductions: 0, netPay: 0 };
+      cur.count += 1;
+      cur.salaryPaid += Number(entry.base_pay) + Number(entry.allowances_pay) + Number(entry.manual_additions);
+      cur.otPaid += Number(entry.overtime_pay);
+      cur.otHours += Number(entry.approved_overtime_minutes ?? 0) / 60;
+      cur.deductions += Number(entry.total_deductions);
+      cur.netPay += Number(entry.net_pay);
+      map.set(key, cur);
+    }
+    return Array.from(map.values()).sort((a, b) => b.netPay - a.netPay);
+  }, [entries]);
+
+  const chartData = useMemo(() => {
+    if (departmentBreakdown.length > 1) {
+      return departmentBreakdown.map(d => ({
+        name: d.name,
+        'Salary Paid': Number(d.salaryPaid.toFixed(2)),
+        'OT Paid': Number(d.otPaid.toFixed(2)),
+        'Net Pay': Number(d.netPay.toFixed(2)),
+      }));
+    }
+    return entries.slice(0, 12).map(e => ({
+      name: e.employee_name.split(' ').slice(0, 2).join(' '),
+      'Salary Paid': Number((Number(e.base_pay) + Number(e.allowances_pay) + Number(e.manual_additions)).toFixed(2)),
+      'OT Paid': Number(Number(e.overtime_pay).toFixed(2)),
+      'Net Pay': Number(Number(e.net_pay).toFixed(2)),
+    }));
+  }, [departmentBreakdown, entries]);
+
+  if (!activeRun) {
+    return (
+      <div className="rounded-xl p-12 text-center text-sm" style={{ ...cardStyle, color: '#4b6a8a' }}>
+        No payroll run generated for {selectedMonth} yet.{canManage ? ' Click "Generate Run" to calculate.' : ''}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl p-4 flex flex-wrap items-center justify-between gap-3" style={cardStyle}>
+        <div>
+          <h2 className="text-sm font-semibold text-white">Payroll Dashboard — {selectedMonth}</h2>
+          <p className="text-xs mt-0.5" style={{ color: '#4b6a8a' }}>
+            Total salary paid, overtime payout, approved overtime hours, and net payroll distribution.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={branchFilter} onChange={e => onBranchChange(e.target.value)} style={{ ...inputStyle, width: 170 }}>
+            <option value="">All Sites</option>
+            {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          <select value={deptFilter} onChange={e => onDeptChange(e.target.value)} style={{ ...inputStyle, width: 180 }}>
+            <option value="">All Departments</option>
+            {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="rounded-xl p-4" style={cardStyle}>
+          <div className="flex items-center justify-between text-xs" style={{ color: '#94a3b8' }}>
+            <span>Total Salary Paid</span>
+            <Wallet size={15} style={{ color: '#3b82f6' }} />
+          </div>
+          <div className="text-2xl font-bold mt-2 text-white">{formatMoney(summary.salaryPaid, currency)}</div>
+          <div className="text-[11px] mt-1.5" style={{ color: '#4b6a8a' }}>
+            Base: {formatMoney(summary.base, currency)} · Allowances: {formatMoney(summary.allowances, currency)}
+          </div>
+        </div>
+
+        <div className="rounded-xl p-4" style={cardStyle}>
+          <div className="flex items-center justify-between text-xs" style={{ color: '#94a3b8' }}>
+            <span>Total OT Paid</span>
+            <Timer size={15} style={{ color: '#a78bfa' }} />
+          </div>
+          <div className="text-2xl font-bold mt-2" style={{ color: '#c4b5fd' }}>{formatMoney(summary.otPaid, currency)}</div>
+          <div className="text-[11px] mt-1.5" style={{ color: '#4b6a8a' }}>
+            Across {entries.filter(e => Number(e.overtime_pay) > 0).length} employee(s) with approved OT
+          </div>
+        </div>
+
+        <div className="rounded-xl p-4" style={cardStyle}>
+          <div className="flex items-center justify-between text-xs" style={{ color: '#94a3b8' }}>
+            <span>Total OT Hours</span>
+            <Clock size={15} style={{ color: '#38bdf8' }} />
+          </div>
+          <div className="text-2xl font-bold mt-2" style={{ color: '#7dd3fc' }}>{summary.otHours.toFixed(2)} hrs</div>
+          <div className="text-[11px] mt-1.5" style={{ color: '#4b6a8a' }}>
+            {summary.pendingOtHours > 0 ? `${summary.pendingOtHours.toFixed(2)} hrs pending approval` : 'All overtime hours finalized'}
+          </div>
+        </div>
+
+        <div className="rounded-xl p-4" style={cardStyle}>
+          <div className="flex items-center justify-between text-xs" style={{ color: '#94a3b8' }}>
+            <span>Net Pay</span>
+            <CheckCircle2 size={15} style={{ color: '#34d399' }} />
+          </div>
+          <div className="text-2xl font-bold mt-2" style={{ color: '#34d399' }}>{formatMoney(summary.net, currency)}</div>
+          <div className="text-[11px] mt-1.5" style={{ color: '#4b6a8a' }}>
+            Gross: {formatMoney(summary.gross, currency)} · Deductions: {formatMoney(summary.ded, currency)}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="xl:col-span-2 rounded-xl p-4" style={cardStyle}>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-sm font-semibold text-white">
+                {departmentBreakdown.length > 1 ? 'Payroll Breakdown by Department' : 'Employee Payroll Breakdown'}
+              </h3>
+              <p className="text-xs" style={{ color: '#4b6a8a' }}>
+                Comparison of Salary Paid, OT Paid, and Net Pay ({currency})
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenRegister}
+              className="text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 text-blue-300"
+              style={{ background: '#122338', border: '1px solid #1e3a5a' }}
+            >
+              Employee Register
+              <ArrowRight size={12} />
+            </button>
+          </div>
+          {chartData.length === 0 ? (
+            <div className="h-64 flex items-center justify-center text-xs" style={{ color: '#4b6a8a' }}>
+              No scoped payroll entries match the current filters.
+            </div>
+          ) : (
+            <div className="h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} margin={{ top: 10, right: 12, left: 0, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5a" />
+                  <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                  <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{ background: '#122338', border: '1px solid #1e3a5a', borderRadius: 8, color: '#f0f6ff', fontSize: 12 }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8' }} />
+                  <Bar dataKey="Salary Paid" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="OT Paid" fill="#a78bfa" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Net Pay" fill="#10b981" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl p-4 flex flex-col justify-between space-y-4" style={cardStyle}>
+          <div>
+            <h3 className="text-sm font-semibold text-white">Run Readiness & Blockers</h3>
+            <p className="text-xs mt-0.5" style={{ color: '#4b6a8a' }}>
+              Resolve exceptions and pending overtime before finalizing.
+            </p>
+            <div className="mt-4 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between p-2.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+                <span style={{ color: '#94a3b8' }}>Pending Employee Reviews</span>
+                <span className="font-semibold text-white">{summary.pendingReviews} / {summary.count}</span>
+              </div>
+              <div className="flex items-center justify-between p-2.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+                <span style={{ color: '#94a3b8' }}>Unresolved Exceptions</span>
+                <span className="font-semibold text-amber-300">{summary.unresolvedExceptions}</span>
+              </div>
+              <div className="flex items-center justify-between p-2.5 rounded-lg" style={{ background: '#122338', border: '1px solid #1e3a5a' }}>
+                <span style={{ color: '#94a3b8' }}>Pending Overtime Items</span>
+                <span className="font-semibold text-purple-300">{summary.pendingOvertime}</span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onOpenBlockers}
+            className="w-full py-2.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2"
+            style={{
+              background: summary.pendingReviews + summary.blockers > 0 ? 'rgba(245,158,11,0.18)' : 'rgba(16,185,129,0.18)',
+              color: summary.pendingReviews + summary.blockers > 0 ? '#fbbf24' : '#6ee7b7',
+              border: `1px solid ${summary.pendingReviews + summary.blockers > 0 ? 'rgba(245,158,11,0.35)' : 'rgba(16,185,129,0.35)'}`,
+            }}
+          >
+            <ShieldAlert size={14} />
+            {summary.pendingReviews + summary.blockers > 0 ? 'Resolve Pending / Blockers' : 'All Blockers Cleared'}
+            <ArrowRight size={13} />
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-xl overflow-hidden" style={cardStyle}>
+        <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: '#1e3a5a' }}>
+          <h3 className="text-sm font-semibold text-white">Department Summary</h3>
+          <span className="text-xs" style={{ color: '#4b6a8a' }}>{departmentBreakdown.length} department(s)</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead style={{ background: '#08111f', color: '#94a3b8' }}>
+              <tr>
+                <th className="p-3">Department</th>
+                <th className="p-3 text-right">Employees</th>
+                <th className="p-3 text-right">Total Salary Paid</th>
+                <th className="p-3 text-right">Total OT Hours</th>
+                <th className="p-3 text-right">Total OT Paid</th>
+                <th className="p-3 text-right">Deductions</th>
+                <th className="p-3 text-right">Net Pay</th>
+              </tr>
+            </thead>
+            <tbody>
+              {departmentBreakdown.map(row => (
+                <tr key={row.name} className="border-t" style={{ borderColor: '#1e3a5a', color: '#e2e8f0' }}>
+                  <td className="p-3 font-semibold text-white">{row.name}</td>
+                  <td className="p-3 text-right">{row.count}</td>
+                  <td className="p-3 text-right">{formatMoney(row.salaryPaid, currency)}</td>
+                  <td className="p-3 text-right text-sky-300">{row.otHours.toFixed(2)} hrs</td>
+                  <td className="p-3 text-right text-purple-300">{formatMoney(row.otPaid, currency)}</td>
+                  <td className="p-3 text-right text-red-300">{formatMoney(row.deductions, currency)}</td>
+                  <td className="p-3 text-right font-semibold text-emerald-300">{formatMoney(row.netPay, currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {entries.length > 0 && (
+        <div className="rounded-xl overflow-hidden" style={cardStyle}>
+          <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: '#1e3a5a' }}>
+            <h3 className="text-sm font-semibold text-white">Employee Salary & OT Overview</h3>
+            <button type="button" onClick={onOpenRegister} className="text-xs text-blue-300 hover:underline">
+              View Full Register →
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead style={{ background: '#08111f', color: '#94a3b8' }}>
+                <tr>
+                  <th className="p-3">Employee</th>
+                  <th className="p-3 text-right">Salary Paid</th>
+                  <th className="p-3 text-right">OT Hours</th>
+                  <th className="p-3 text-right">OT Paid</th>
+                  <th className="p-3 text-right">Net Pay</th>
+                  <th className="p-3 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.slice(0, 8).map(entry => (
+                  <tr key={entry.id} className="border-t hover:bg-white/[0.02]" style={{ borderColor: '#1e3a5a', color: '#e2e8f0' }}>
+                    <td className="p-3">
+                      <div className="font-semibold text-white">{entry.employee_name}</div>
+                      <div style={{ color: '#4b6a8a' }}>{entry.employee_code} · {entry.department_name}</div>
+                    </td>
+                    <td className="p-3 text-right">{formatMoney(Number(entry.base_pay) + Number(entry.allowances_pay) + Number(entry.manual_additions), entry.currency_code)}</td>
+                    <td className="p-3 text-right text-sky-300">{(Number(entry.approved_overtime_minutes ?? 0) / 60).toFixed(2)} hrs</td>
+                    <td className="p-3 text-right text-purple-300">{formatMoney(Number(entry.overtime_pay), entry.currency_code)}</td>
+                    <td className="p-3 text-right font-semibold text-emerald-300">{formatMoney(Number(entry.net_pay), entry.currency_code)}</td>
+                    <td className="p-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => onOpenEntry(entry.id)}
+                        className="px-2.5 py-1 rounded text-xs font-medium text-blue-300"
+                        style={{ background: '#122338', border: '1px solid #1e3a5a' }}
+                      >
+                        Breakdown
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PendingBlockersPanel({
+  activeRun,
+  selectedMonth,
+  entries,
+  summary,
+  onOpenEntry,
+  onNav,
+}: {
+  activeRun: PayrollRunRow | null;
+  selectedMonth: string;
+  entries: PayrollEntryRow[];
+  summary: ScopedPayrollSummary;
+  onOpenEntry: (entryId: string) => void;
+  onNav?: (id: string) => void;
+}) {
+  const blockedEntries = useMemo(
+    () => entries.filter(e => e.review_status !== 'reviewed' || e.unresolved_exception_count > 0 || e.pending_overtime_count > 0),
+    [entries],
+  );
+
+  if (!activeRun) {
+    return (
+      <div className="rounded-xl p-12 text-center text-sm" style={{ ...cardStyle, color: '#4b6a8a' }}>
+        No payroll run generated for {selectedMonth} yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="rounded-xl p-4 flex flex-col justify-between gap-3" style={cardStyle}>
+          <div>
+            <div className="text-xs" style={{ color: '#94a3b8' }}>Unresolved Attendance Exceptions</div>
+            <div className="text-2xl font-bold mt-1 text-amber-300">{summary.unresolvedExceptions}</div>
+            <div className="text-[11px] mt-1" style={{ color: '#4b6a8a' }}>
+              Correct in Attendance Correction or waive inside employee Breakdown.
+            </div>
+          </div>
+          {onNav && (
+            <button
+              type="button"
+              onClick={() => onNav('corrections')}
+              className="px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between text-amber-200"
+              style={{ background: '#122338', border: '1px solid #1e3a5a' }}
+            >
+              <span>Open Attendance Correction</span>
+              <ArrowRight size={13} />
+            </button>
+          )}
+        </div>
+
+        <div className="rounded-xl p-4 flex flex-col justify-between gap-3" style={cardStyle}>
+          <div>
+            <div className="text-xs" style={{ color: '#94a3b8' }}>Pending Overtime Approvals</div>
+            <div className="text-2xl font-bold mt-1 text-purple-300">{summary.pendingOvertime}</div>
+            <div className="text-[11px] mt-1" style={{ color: '#4b6a8a' }}>
+              {summary.pendingOtHours.toFixed(2)} hrs awaiting approval or rejection.
+            </div>
+          </div>
+          {onNav && (
+            <button
+              type="button"
+              onClick={() => onNav('overtime')}
+              className="px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between text-purple-200"
+              style={{ background: '#122338', border: '1px solid #1e3a5a' }}
+            >
+              <span>Open Overtime Management</span>
+              <ArrowRight size={13} />
+            </button>
+          )}
+        </div>
+
+        <div className="rounded-xl p-4 flex flex-col justify-between gap-3" style={cardStyle}>
+          <div>
+            <div className="text-xs" style={{ color: '#94a3b8' }}>Pending Employee Reviews</div>
+            <div className="text-2xl font-bold mt-1 text-white">{summary.pendingReviews}</div>
+            <div className="text-[11px] mt-1" style={{ color: '#4b6a8a' }}>
+              Mark each employee as Reviewed once all blockers are cleared.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl overflow-hidden" style={cardStyle}>
+        <div className="p-4 border-b flex items-center justify-between" style={{ borderColor: '#1e3a5a' }}>
+          <div>
+            <h3 className="text-sm font-semibold text-white">Employees with Pending Reviews or Blockers</h3>
+            <p className="text-xs" style={{ color: '#4b6a8a' }}>
+              {blockedEntries.length} employee(s) require attention before finalizing {selectedMonth}.
+            </p>
+          </div>
+        </div>
+        {blockedEntries.length === 0 ? (
+          <div className="p-10 text-center text-sm text-emerald-300">
+            All scoped employees are reviewed and have zero blockers.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead style={{ background: '#08111f', color: '#94a3b8' }}>
+                <tr>
+                  <th className="p-3">Employee</th>
+                  <th className="p-3">Department</th>
+                  <th className="p-3">Exceptions</th>
+                  <th className="p-3">Pending OT</th>
+                  <th className="p-3">Review Status</th>
+                  <th className="p-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {blockedEntries.map(entry => (
+                  <tr key={entry.id} className="border-t hover:bg-white/[0.02]" style={{ borderColor: '#1e3a5a', color: '#e2e8f0' }}>
+                    <td className="p-3">
+                      <div className="font-semibold text-white">{entry.employee_name}</div>
+                      <div style={{ color: '#4b6a8a' }}>{entry.employee_code}</div>
+                    </td>
+                    <td className="p-3">
+                      <div>{entry.department_name}</div>
+                      <div style={{ color: '#4b6a8a' }}>{entry.branch_name}</div>
+                    </td>
+                    <td className="p-3">
+                      {entry.unresolved_exception_count > 0 ? (
+                        <span className="px-2 py-0.5 rounded text-[11px] bg-amber-500/20 text-amber-300">
+                          {entry.unresolved_exception_count} unresolved
+                        </span>
+                      ) : (
+                        <span style={{ color: '#4b6a8a' }}>0</span>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      {entry.pending_overtime_count > 0 ? (
+                        <span className="px-2 py-0.5 rounded text-[11px] bg-purple-500/20 text-purple-300">
+                          {entry.pending_overtime_count} ({(Number(entry.pending_overtime_minutes ?? 0) / 60).toFixed(2)}h)
+                        </span>
+                      ) : (
+                        <span style={{ color: '#4b6a8a' }}>0</span>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      <span
+                        className="px-2 py-0.5 rounded text-[11px] capitalize"
+                        style={{
+                          background: entry.review_status === 'reviewed' ? 'rgba(16,185,129,0.18)' : 'rgba(148,163,184,0.15)',
+                          color: entry.review_status === 'reviewed' ? '#6ee7b7' : '#cbd5e1',
+                        }}
+                      >
+                        {entry.review_status}
+                      </span>
+                    </td>
+                    <td className="p-3 text-right">
+                      <div className="inline-flex items-center gap-2">
+                        {onNav && entry.unresolved_exception_count > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => onNav('corrections')}
+                            className="px-2.5 py-1 rounded text-xs font-medium text-amber-300"
+                            style={{ background: '#122338', border: '1px solid #1e3a5a' }}
+                          >
+                            Corrections
+                          </button>
+                        )}
+                        {onNav && entry.pending_overtime_count > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => onNav('overtime')}
+                            className="px-2.5 py-1 rounded text-xs font-medium text-purple-300"
+                            style={{ background: '#122338', border: '1px solid #1e3a5a' }}
+                          >
+                            Overtime
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onOpenEntry(entry.id)}
+                          className="px-2.5 py-1 rounded text-xs font-medium text-blue-300"
+                          style={{ background: '#122338', border: '1px solid #1e3a5a' }}
+                        >
+                          Breakdown
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
